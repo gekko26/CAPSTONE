@@ -4,7 +4,7 @@ import Prac from "../assets/try";
 function Camera(){
     return (
         <div>
-            <Prac/>
+            Hello wolrd
         </div>
     )
 }

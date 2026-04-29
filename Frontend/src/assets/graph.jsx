@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+//graph.jsx
 
+import { useEffect, useRef, useState } from "react";
+import { useBAC } from "../context/BAC_CONTEXT";
 import {
   LineChart,
   Line,
@@ -12,7 +14,7 @@ import {
 } from "recharts";
 
 const LIMIT = 0.08;
-const MAX_POINTS = 20;
+const MAX_POINTS = 200;
 let idCounter = 4800;
 
 function genBAC() {
@@ -42,8 +44,9 @@ const CustomDot = (props) => {
   );
 };
 
+
 export default function MockBACChart() {
-  const [readings, setReadings] = useState([]);
+  const {readings, setReadings} = useBAC();
   const [recent, setRecent] = useState([]);
   const [running, setRunning] = useState(true);
   const intervalRef = useRef(null);

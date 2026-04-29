@@ -1,50 +1,111 @@
 @import "tailwindcss";
 
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* ── Light mode tokens ── */
+  --bg-page:        #F0F7F4;
+  --bg-sidebar:     #E8F4F0;
+  --bg-card:        #FFFFFF;
+  --bg-card-alt:    #F7FBFA;
+  --bg-active:      #D4F5E9;
+  --bg-hero:        #0B2D20;
+
+  --border:         #C2DDD5;
+  --border-subtle:  #DFF0EB;
+
+  --text-primary:   #0B3D2E;
+  --text-secondary: #2E6B55;
+  --text-muted:     #5A9B84;
+  --text-on-dark:   #EEFAF6;
+
+  --accent:         #1A9B70;
+  --accent-hover:   #147A58;
+
+  --pass:           #0A6645;
+  --pass-bg:        #D4F5E9;
+  --pass-text:      #0A6645;
+
+  --alert:          #E8900A;
+  --alert-bg:       #FFF0D6;
+  --alert-text:     #7A4500;
+
+  --danger:         #CC2B2B;
+  --danger-bg:      #FFDEDE;
+  --danger-text:    #7A1A1A;
+
+  --topbar-bg:      #FFFFFF;
+  --topbar-border:  #C2DDD5;
+
+  color-scheme: light;
+  color: var(--text-primary);
+  background-color: var(--bg-page);
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+/* Dark mode — toggled via .dark class on <html> or <body> */
+.dark {
+  --bg-page:        #0F2235;
+  --bg-sidebar:     #0D1B2A;
+  --bg-card:        #142236;
+  --bg-card-alt:    #0F1D30;
+  --bg-active:      #1A4D3C;
+  --bg-hero:        #0D1B2A;
+
+  --border:         #1E3A5F;
+  --border-subtle:  #162D4A;
+
+  --text-primary:   #EEFAF6;
+  --text-secondary: #B8D8D0;
+  --text-muted:     #8ABFB0;
+  --text-on-dark:   #EEFAF6;
+
+  --accent:         #1A9B70;
+  --accent-hover:   #22C48E;
+
+  --pass:           #4DFFC3;
+  --pass-bg:        #0D3D2B;
+  --pass-text:      #4DFFC3;
+
+  --alert:          #FFB74D;
+  --alert-bg:       #3D2400;
+  --alert-text:     #FFB74D;
+
+  --danger:         #FF5C5C;
+  --danger-bg:      #3D0A0A;
+  --danger-text:    #FF5C5C;
+
+  --topbar-bg:      #0D1B2A;
+  --topbar-border:  #1E3A5F;
+
+  color-scheme: dark;
+  color: var(--text-primary);
+  background-color: var(--bg-page);
 }
-a:hover {
-  color: #535bf2;
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+a {
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: inherit;
+}
+a:hover {
+  color: var(--accent-hover);
 }
 
-
-
-
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
-}
+h1 { font-size: 3.2em; line-height: 1.1; }

@@ -1,40 +1,34 @@
-import React, { useState, useEffect } from 'react';
-import { generateRecentDetections } from '../assets/mockdata';
-import MockBACChart from '../assets/graph';
+import React, { useState, useEffect } from "react";
+import MockBACChart from "../assets/graph";
 
 const Dashboard = () => {
-  
-  const [reading, setReading] = useState(generateRecentDetections());
+  const [now, setNow] = useState(Date.now());
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 60000);
 
+    return () => clearInterval(interval);
+  }, []);
 
-
-const [now, setNow] = useState(Date.now);
-
-
-  const getRelativeTime = (time)=>{
+  const getRelativeTime = (time) => {
     const diff = now - new Date(time).getTime();
 
-    const seconds = diff/1000;
-    const minute = diff/60000;
-    const hour = diff/3600000;
-    
-    if (seconds<60 && seconds==0) return `just now `;
-    if (minute<60) return `${minute} minutes ago`;
-    return `${hour} hour ago`;
-  }
+    const seconds = diff / 1000;
+    const minutes = diff / 60000;
+    const hours = diff / 3600000;
 
-  return(
-    <div className='flex flex-col justify-evenly'>
+    if (seconds < 60) return "just now";
+    if (minutes < 60) return `${Math.floor(minutes)} minutes ago`;
+    return `${Math.floor(hours)} hours ago`;
+  };
 
-        <div>
-           <MockBACChart/>
-        </div>
-
-     
+  return (
+    <div className="flex flex-col justify-evenly">
+      <MockBACChart />
     </div>
   );
 };
-
 
 export default Dashboard;
