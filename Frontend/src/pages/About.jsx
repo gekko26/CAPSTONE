@@ -29,7 +29,7 @@ function About(){
 
             <div className="flex h-[40%] w-full  gap-4">
                   
-                  <div  className={`flex flex-col border w-1/2 rounded-2xl text-black p-5 bg-white`}>
+                  <div  className={`flex flex-col border border-white w-1/2 rounded-2xl text-black p-5 bg-white`}>
                      <p className="text-xls">Development Team</p>
 
                      <div className="flex flex-col flex-1 p-4">
@@ -73,7 +73,7 @@ function About(){
                   </div>
 
 
-                  <div className="border w-1/2 bg-white rounded-2xl text-black p-5">
+                  <div className="border border-white w-1/2 bg-white rounded-2xl text-black p-5">
                   <p className="mb-4">Tech Stack</p>
                    <div className="p-6 flex  justify-evenly items-center h-60">
                        

@@ -42,8 +42,8 @@ function Sidebar() {
   );
 
   return (
-    <div className="flex flex-col gap-1 w-60 shrink-0 flex-1 rounded-md pb-4"
-         style={{ background: "var(--bg-sidebar)" }}>
+    <div className="flex flex-col gap-1 w-60 shrink-0 flex-1 rounded-md pb-4  "
+         style={{ background: "var(--bg-sidebar)"}}>
 
       {sectionLabel("Main")}
       {navItem("/", HomeIcon, "Home")}

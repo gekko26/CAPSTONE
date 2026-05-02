@@ -28,7 +28,7 @@ function App() {
         </div>
 
         <div
-          className={`flex flex-col h-full bg-[#0f1a2e] border border-slate-700 rounded-md transition-all duration-300 overflow-hidden ${
+          className={`flex flex-col h-full bg-[#0f1a2e] border border-slate-400 rounded-md transition-all duration-300 overflow-hidden ${
             open ? "w-60" : "w-0"
           }`}
         >
