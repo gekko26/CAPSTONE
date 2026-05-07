@@ -3,158 +3,602 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AlcoDetect — Cinematic System Animation</title>
+<title>AlcoDetect — Intelligent Alcohol Detection System</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
-*{margin:0;padding:0;box-sizing:border-box;}
-html,body{width:100%;height:100%;background:#020a05;overflow:hidden;font-family:'Syne',sans-serif;}
-canvas{display:block;position:absolute;top:0;left:0;}
-#hud{position:fixed;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:10;}
-.hud-corner{position:absolute;font-family:'Space Mono',monospace;font-size:10px;color:rgba(0,255,136,0.6);letter-spacing:.12em;text-transform:uppercase;line-height:1.8;}
-#hud-tl{top:20px;left:24px;}
-#hud-tr{top:20px;right:24px;text-align:right;}
-#hud-bl{bottom:20px;left:24px;}
-#hud-br{bottom:20px;right:24px;text-align:right;}
-.hud-accent{color:#00ff88;}
-.hud-red{color:#ff3355;}
-.hud-amber{color:#ffaa00;}
-.hud-blue{color:#00aaff;}
 
-#phase-bar{
-  position:fixed;bottom:0;left:0;right:0;height:4px;
-  background:rgba(0,255,136,0.08);z-index:20;
-}
-#phase-fill{height:100%;background:linear-gradient(90deg,#00ff88,#00aaff);width:0%;transition:width .3s;}
-
-#scenario-btns{
-  position:fixed;bottom:28px;left:50%;transform:translateX(-50%);
-  display:flex;gap:8px;z-index:20;pointer-events:all;
-}
-.sc-btn{
-  background:rgba(2,10,5,.88);border:1px solid rgba(0,255,136,0.2);
-  color:rgba(0,255,136,0.6);padding:7px 16px;
-  font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;
-  cursor:pointer;transition:all .2s;
-}
-.sc-btn:hover,.sc-btn.act{color:#00ff88;border-color:rgba(0,255,136,0.5);background:rgba(0,255,136,0.08);}
-
-#verdict-overlay{
-  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-  text-align:center;pointer-events:none;z-index:15;opacity:0;transition:opacity .5s;
-}
-#verdict-text{font-family:'Syne',sans-serif;font-size:clamp(48px,7vw,96px);font-weight:800;letter-spacing:-.04em;line-height:1;}
-#verdict-sub{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:.2em;margin-top:10px;opacity:.7;}
-
-#classification-bar{
-  position:fixed;top:0;left:0;right:0;height:3px;background:transparent;z-index:20;
-  transition:background .5s;
+:root {
+  --bg: #020a05;
+  --green: #00ff88;
+  --green2: #00cc6a;
+  --green3: #003a1a;
+  --amber: #ffaa00;
+  --red: #ff3355;
+  --blue: #00aaff;
+  --text: #e8f5ee;
+  --muted: #3a6a4a;
+  --card: rgba(0,255,136,0.03);
+  --border: rgba(0,255,136,0.1);
 }
 
-.scanline{position:fixed;left:0;right:0;height:2px;background:linear-gradient(transparent,rgba(0,255,136,0.06),transparent);pointer-events:none;z-index:1000;animation:scan 12s linear infinite;}
-@keyframes scan{0%{top:-2px}100%{top:100%}}
+* { margin:0; padding:0; box-sizing:border-box; }
+html { scroll-behavior:smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Syne', sans-serif;
+  overflow-x: hidden;
+  cursor: none;
+}
+
+#cursor { position:fixed; width:8px; height:8px; background:var(--green); border-radius:50%; pointer-events:none; z-index:9999; transform:translate(-50%,-50%); mix-blend-mode:screen; transition:width .15s,height .15s; }
+#cursor-ring { position:fixed; width:32px; height:32px; border:1px solid rgba(0,255,136,.35); border-radius:50%; pointer-events:none; z-index:9998; transform:translate(-50%,-50%); transition:all .1s ease; }
+
+.scanline { position:fixed; left:0; right:0; height:1px; background:linear-gradient(transparent,rgba(0,255,136,.04),transparent); pointer-events:none; z-index:1000; animation:scan 10s linear infinite; }
+@keyframes scan { 0%{top:-2px} 100%{top:100%} }
+
+nav {
+  position:fixed; top:0; left:0; right:0; z-index:500;
+  padding:18px 48px;
+  display:flex; align-items:center; justify-content:space-between;
+  background:linear-gradient(to bottom,rgba(2,10,5,.97),transparent);
+  backdrop-filter:blur(12px);
+}
+.nav-logo { display:flex; align-items:center; gap:10px; font-size:17px; font-weight:800; letter-spacing:-.02em; }
+.logo-pulse { width:8px; height:8px; background:var(--green); border-radius:50%; animation:pdot 2s infinite; }
+@keyframes pdot { 0%,100%{box-shadow:0 0 0 0 rgba(0,255,136,.5)} 50%{box-shadow:0 0 0 8px rgba(0,255,136,0)} }
+.nav-links { display:flex; gap:28px; list-style:none; font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; }
+.nav-links a { color:var(--muted); text-decoration:none; transition:color .2s; }
+.nav-links a:hover { color:var(--green); }
+.nav-cta { background:var(--green); color:var(--bg); border:none; padding:9px 22px; font-family:'Syne',sans-serif; font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; cursor:none; clip-path:polygon(8px 0%,100% 0%,calc(100% - 8px) 100%,0% 100%); transition:all .2s; }
+.nav-cta:hover { background:var(--green2); transform:translateY(-1px); }
+
+.hero {
+  height:100vh; display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  position:relative; overflow:hidden;
+}
+#three-canvas { position:absolute; inset:0; width:100%; height:100%; z-index:1; }
+.hero-content { position:relative; z-index:10; text-align:center; pointer-events:none; }
+.hero-eyebrow {
+  font-family:'Space Mono',monospace; font-size:10px; letter-spacing:.2em; text-transform:uppercase;
+  color:var(--green); margin-bottom:20px; display:flex; align-items:center; justify-content:center; gap:8px;
+}
+.hero-eyebrow::before,.hero-eyebrow::after { content:''; width:28px; height:1px; background:var(--green); opacity:.6; }
+.hero h1 {
+  font-size:clamp(56px,9vw,120px); font-weight:800; line-height:.88; letter-spacing:-.05em;
+  text-shadow:0 0 80px rgba(0,255,136,.15);
+}
+.hero h1 .accent { color:var(--green); display:block; }
+.hero-sub { font-size:15px; color:var(--muted); max-width:520px; margin:24px auto 40px; line-height:1.7; }
+.hero-btns { display:flex; gap:14px; justify-content:center; pointer-events:all; }
+.btn-p { background:var(--green); color:var(--bg); border:none; padding:13px 30px; font-family:'Syne',sans-serif; font-size:13px; font-weight:800; letter-spacing:.04em; cursor:none; clip-path:polygon(10px 0%,100% 0%,calc(100% - 10px) 100%,0% 100%); transition:all .2s; }
+.btn-p:hover { background:var(--green2); transform:translateY(-2px); }
+.btn-g { background:transparent; color:var(--text); border:1px solid var(--border); padding:13px 30px; font-family:'Syne',sans-serif; font-size:13px; font-weight:600; cursor:none; transition:all .2s; }
+.btn-g:hover { border-color:var(--green); color:var(--green); }
+
+.stats-ribbon {
+  position:absolute; bottom:0; left:0; right:0; z-index:10;
+  border-top:1px solid var(--border);
+  background:rgba(2,10,5,.85);
+  backdrop-filter:blur(16px);
+  display:flex; justify-content:center; gap:0;
+}
+.stat-item {
+  padding:20px 48px; text-align:center;
+  border-right:1px solid var(--border);
+  position:relative;
+}
+.stat-item:last-child { border-right:none; }
+.stat-n { font-family:'Space Mono',monospace; font-size:28px; font-weight:700; color:var(--green); }
+.stat-l { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.1em; margin-top:2px; }
+
+.sim-section { padding:100px 0 60px; position:relative; z-index:2; }
+.section-wrap { max-width:1400px; margin:0 auto; padding:0 48px; }
+.section-tag { font-family:'Space Mono',monospace; font-size:10px; letter-spacing:.2em; text-transform:uppercase; color:var(--green); margin-bottom:14px; display:flex; align-items:center; gap:8px; }
+.section-tag::before,.section-tag::after { content:''; width:20px; height:1px; background:var(--green); opacity:.5; }
+.section-title { font-size:clamp(32px,4.5vw,54px); font-weight:800; letter-spacing:-.03em; line-height:1.05; }
+.section-title .acc { color:var(--green); }
+.section-desc { font-size:14px; color:var(--muted); line-height:1.7; max-width:480px; margin-top:12px; }
+
+.viewport-shell {
+  margin-top:48px;
+  position:relative;
+  border:1px solid var(--border);
+  background:var(--bg);
+  overflow:hidden;
+}
+.viewport-shell::before {
+  content:'';
+  position:absolute; top:0; left:0; right:0; bottom:0;
+  background:
+    linear-gradient(rgba(0,255,136,.03) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(0,255,136,.03) 1px,transparent 1px);
+  background-size:50px 50px;
+  mask-image:radial-gradient(ellipse 80% 80% at 50% 50%,black 20%,transparent 100%);
+  pointer-events:none; z-index:0;
+}
+
+/* ── Cinematic canvas layers ── */
+#sim-bg, #sim3d {
+  display:block;
+  position:absolute; top:0; left:0;
+  width:100%; height:100%;
+}
+#sim-bg { z-index:1; }
+#sim3d  { z-index:2; cursor:none; }
+
+/* ── HUD corners ── */
+.cin-hud {
+  position:absolute; z-index:20; pointer-events:none;
+  font-family:'Space Mono',monospace; font-size:9px;
+  letter-spacing:.1em; text-transform:uppercase;
+  color:rgba(0,255,136,.55); line-height:1.9;
+}
+.cin-hud.tl { top:14px; left:14px; }
+.cin-hud.tr { top:14px; right:14px; text-align:right; }
+.cin-hud.bl { bottom:46px; left:14px; }
+.cin-hud.br { bottom:46px; right:14px; text-align:right; }
+.ch-acc { color:#00ff88; }
+.ch-red { color:#ff3355; }
+.ch-amb { color:#ffaa00; }
+
+/* ── centre badges ── */
+.cin-badges {
+  position:absolute; top:14px; left:50%; transform:translateX(-50%);
+  display:flex; gap:8px; z-index:20; pointer-events:none;
+}
+.cin-badge {
+  display:inline-flex; align-items:center; gap:5px;
+  font-family:'Space Mono',monospace; font-size:9px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--green); border:1px solid rgba(0,255,136,.22); padding:5px 10px;
+  background:rgba(2,10,5,.88); backdrop-filter:blur(8px);
+}
+.cin-badge::before { content:''; width:5px; height:5px; border-radius:50%; background:currentColor; animation:pdot 1.5s infinite; flex-shrink:0; }
+.cin-badge.red { color:var(--red); border-color:rgba(255,51,85,.22); }
+.cin-badge.amb { color:var(--amber); border-color:rgba(255,170,0,.22); }
+
+/* ── verdict overlay ── */
+#cin-verdict {
+  position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  text-align:center; pointer-events:none; z-index:25;
+  opacity:0; transition:opacity .4s;
+}
+#cin-verdict-text {
+  font-family:'Syne',sans-serif;
+  font-size:clamp(36px,5vw,72px);
+  font-weight:800; letter-spacing:-.04em; line-height:1;
+}
+#cin-verdict-sub {
+  font-family:'Space Mono',monospace; font-size:10px;
+  letter-spacing:.18em; margin-top:8px; opacity:.7;
+}
+
+/* ── classification bar ── */
+#cin-class-bar {
+  position:absolute; top:0; left:0; right:0; height:3px; z-index:30;
+  background:rgba(0,255,136,.18); transition:background .5s;
+}
+
+/* ── bottom controls — keep identical style to original ── */
+.hud-bottom {
+  position:absolute; bottom:0; left:0; right:0;
+  background:rgba(2,10,5,.9); border-top:1px solid var(--border);
+  display:flex; align-items:center; gap:32px;
+  padding:10px 20px; z-index:20; pointer-events:none;
+}
+.hud-metric { display:flex; align-items:center; gap:8px; }
+.hm-label { font-family:'Space Mono',monospace; font-size:8px; color:var(--muted); text-transform:uppercase; letter-spacing:.1em; }
+.hm-val { font-family:'Space Mono',monospace; font-size:13px; color:var(--green); font-weight:700; }
+.hm-val.red { color:var(--red); }
+.hm-val.amber { color:var(--amber); }
+.hud-sep { width:1px; height:24px; background:var(--border); }
+
+.sim-controls-bar {
+  position:absolute; bottom:50px; left:50%; transform:translateX(-50%);
+  display:flex; gap:8px; z-index:20;
+}
+.sc-btn {
+  background:rgba(2,10,5,.88); border:1px solid var(--border);
+  color:var(--muted); padding:7px 18px;
+  font-family:'Space Mono',monospace; font-size:9px; letter-spacing:.1em; text-transform:uppercase;
+  cursor:none; transition:all .2s;
+}
+.sc-btn:hover,.sc-btn.act { color:var(--green); border-color:rgba(0,255,136,.4); background:rgba(0,255,136,.07); }
+
+.flow-section { padding:80px 0; position:relative; z-index:2; }
+.flow-track {
+  display:flex; align-items:stretch; gap:0;
+  border:1px solid var(--border);
+  margin-top:48px; overflow:hidden;
+  position:relative;
+}
+.flow-track::after {
+  content:'';
+  position:absolute; top:0; left:0; right:0; bottom:0;
+  background:linear-gradient(90deg,rgba(0,255,136,.02),transparent 40%,rgba(0,255,136,.02));
+  pointer-events:none;
+}
+.flow-node {
+  flex:1; padding:32px 24px; border-right:1px solid var(--border);
+  background:rgba(0,255,136,.015); transition:all .3s; cursor:none;
+  position:relative; overflow:hidden;
+}
+.flow-node:last-child { border-right:none; }
+.flow-node::before {
+  content:''; position:absolute; bottom:0; left:0; right:0; height:2px;
+  background:var(--green); transform:scaleX(0); transform-origin:left; transition:transform .4s ease;
+}
+.flow-node.lit::before { transform:scaleX(1); }
+.flow-node.lit { background:rgba(0,255,136,.06); }
+.fn-num { font-family:'Space Mono',monospace; font-size:9px; letter-spacing:.15em; color:var(--green); opacity:.5; margin-bottom:16px; }
+.fn-icon { width:36px; height:36px; margin-bottom:16px; }
+.fn-icon svg { width:100%; height:100%; }
+.fn-title { font-size:14px; font-weight:700; margin-bottom:6px; letter-spacing:-.01em; }
+.fn-desc { font-size:11px; color:var(--muted); line-height:1.6; }
+.fn-ping {
+  position:absolute; right:16px; top:16px; width:6px; height:6px;
+  border-radius:50%; background:var(--green); opacity:0;
+  transition:opacity .3s; animation:pdot 1.5s infinite;
+}
+.flow-node.lit .fn-ping { opacity:1; }
+
+.monitor-section { padding:80px 0; }
+.monitor-layout { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:48px; }
+.mon-card {
+  border:1px solid var(--border); background:var(--card); padding:24px;
+  position:relative; overflow:hidden;
+}
+.mon-card::before { content:''; position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg,var(--green),transparent 60%); }
+.mc-title { font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin-bottom:18px; display:flex; align-items:center; gap:6px; }
+.mc-title::before { content:''; width:5px; height:5px; background:var(--green); border-radius:50%; }
+.verdict-card { grid-column:1/-1; display:flex; align-items:center; justify-content:space-between; }
+.v-label { font-family:'Space Mono',monospace; font-size:9px; letter-spacing:.15em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
+.v-result { font-size:48px; font-weight:800; letter-spacing:-.04em; transition:color .5s; }
+.v-conf { font-family:'Space Mono',monospace; font-size:11px; color:var(--muted); margin-top:4px; }
+.v-conf span { color:var(--green); }
+.v-icon { font-size:60px; line-height:1; }
+
+.sensor-bars { display:flex; flex-direction:column; gap:12px; }
+.sb-row { display:flex; align-items:center; gap:10px; }
+.sb-label { font-family:'Space Mono',monospace; font-size:10px; color:var(--muted); width:60px; flex-shrink:0; }
+.sb-track { flex:1; height:4px; background:rgba(0,255,136,.08); position:relative; overflow:hidden; }
+.sb-fill { height:100%; background:var(--green); transition:width .4s ease,background .3s; }
+.sb-val { font-family:'Space Mono',monospace; font-size:10px; color:var(--green); width:48px; text-align:right; flex-shrink:0; }
+
+#chart-canvas { width:100%; height:140px; display:block; }
+
+.event-log { max-height:180px; overflow-y:auto; }
+.event-log::-webkit-scrollbar { width:2px; }
+.event-log::-webkit-scrollbar-thumb { background:var(--green3); }
+.log-row {
+  display:flex; align-items:center; gap:10px; padding:6px 0;
+  border-bottom:1px solid rgba(0,255,136,.04);
+  font-family:'Space Mono',monospace; font-size:9px;
+  animation:logIn .3s ease;
+}
+@keyframes logIn { from{opacity:0;transform:translateX(-6px)} to{opacity:1;transform:translateX(0)} }
+.lr-time { color:var(--muted); flex-shrink:0; }
+.lr-msg { flex:1; color:var(--text); line-height:1.5; }
+.lr-badge { padding:2px 6px; font-size:8px; font-weight:700; letter-spacing:.08em; flex-shrink:0; }
+.bd-pass { background:rgba(0,255,136,.12); color:var(--green); }
+.bd-warn { background:rgba(255,170,0,.12); color:var(--amber); }
+.bd-fail { background:rgba(255,51,85,.12); color:var(--red); }
+
+.feat-section { padding:80px 0; }
+.feat-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:2px; margin-top:48px; background:var(--border); }
+.feat-card {
+  background:var(--bg); padding:36px 28px; position:relative; overflow:hidden; transition:background .3s; cursor:none;
+}
+.feat-card::after { content:''; position:absolute; inset:0; background:radial-gradient(circle at 0% 0%,rgba(0,255,136,.05),transparent 60%); opacity:0; transition:opacity .3s; }
+.feat-card:hover::after { opacity:1; }
+.feat-card:hover { background:rgba(0,255,136,.02); }
+.fc-num { font-family:'Space Mono',monospace; font-size:9px; letter-spacing:.15em; color:var(--green); opacity:.4; margin-bottom:18px; }
+.fc-title { font-size:18px; font-weight:700; letter-spacing:-.02em; margin-bottom:10px; }
+.fc-desc { font-size:12px; color:var(--muted); line-height:1.7; }
+.fc-tag { display:inline-block; margin-top:18px; padding:3px 10px; background:rgba(0,255,136,.07); border:1px solid rgba(0,255,136,.15); font-family:'Space Mono',monospace; font-size:8px; letter-spacing:.1em; color:var(--green); }
+
+footer { padding:40px 48px; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+.ft-copy { font-family:'Space Mono',monospace; font-size:10px; color:var(--muted); }
+.ft-copy span { color:var(--green); }
+.ft-group { font-family:'Space Mono',monospace; font-size:10px; color:var(--muted); text-align:right; line-height:1.7; }
+
+.reveal { opacity:0; transform:translateY(24px); transition:opacity .7s ease,transform .7s ease; }
+.reveal.vis { opacity:1; transform:translateY(0); }
 </style>
 </head>
 <body>
-<canvas id="bg"></canvas>
-<canvas id="main"></canvas>
+
+<div id="cursor"></div>
+<div id="cursor-ring"></div>
 <div class="scanline"></div>
 
-<div id="hud">
-  <div class="hud-corner" id="hud-tl">
-    <div>AlcoDetect <span class="hud-accent">v2.4.1</span></div>
-    <div>System: <span class="hud-accent" id="h-status">ACTIVE</span></div>
-    <div>Uptime: <span id="h-uptime">00:00:00</span></div>
-  </div>
-  <div class="hud-corner" id="hud-tr">
-    <div>Model: <span class="hud-accent">RF + XGBoost</span></div>
-    <div>Accuracy: <span class="hud-accent">97.2%</span></div>
-    <div>Latency: <span id="h-latency">342ms</span></div>
-  </div>
-  <div class="hud-corner" id="hud-bl">
-    <div>MQ3-1: <span id="h-s1" class="hud-accent">0.062</span></div>
-    <div>MQ3-2: <span id="h-s2" class="hud-accent">0.047</span></div>
-    <div>MQ3-3: <span id="h-s3" class="hud-accent">0.058</span></div>
-  </div>
-  <div class="hud-corner" id="hud-br">
-    <div>EAR: <span id="h-ear" class="hud-accent">0.281</span></div>
-    <div>Temp: <span id="h-temp" class="hud-accent">27.4°C</span></div>
-    <div>Class: <span id="h-class" class="hud-accent">0 — CLEAR</span></div>
-  </div>
-</div>
+<nav>
+  <div class="nav-logo"><div class="logo-pulse"></div>AlcoDetect</div>
+  <ul class="nav-links">
+    <li><a href="#simulation">3D Model</a></li>
+    <li><a href="#flow">Data Flow</a></li>
+    <li><a href="#monitor">Monitor</a></li>
+    <li><a href="#features">Features</a></li>
+  </ul>
+  <button class="nav-cta">View Dashboard</button>
+</nav>
 
-<div id="classification-bar"></div>
-<div id="phase-bar"><div id="phase-fill"></div></div>
+<section class="hero">
+  <canvas id="three-canvas"></canvas>
+  <div class="hero-content">
+    <div class="hero-eyebrow">Capstone Project · Group 12 · Computer Engineering</div>
+    <h1>Detect.<br><span class="accent">Protect.</span>Deploy.</h1>
+    <p class="hero-sub">Multimodal IoT alcohol detection using MQ-3 sensor arrays, computer vision, and machine learning — embedded on Raspberry Pi.</p>
+    <div class="hero-btns">
+      <button class="btn-p" onclick="document.getElementById('simulation').scrollIntoView({behavior:'smooth'})">Explore 3D System</button>
+      <button class="btn-g" onclick="document.getElementById('monitor').scrollIntoView({behavior:'smooth'})">Live Monitor</button>
+    </div>
+  </div>
+  <div class="stats-ribbon">
+    <div class="stat-item"><div class="stat-n">97.2%</div><div class="stat-l">Model Accuracy</div></div>
+    <div class="stat-item"><div class="stat-n">3</div><div class="stat-l">Event Classes</div></div>
+    <div class="stat-item"><div class="stat-n">14</div><div class="stat-l">Features</div></div>
+    <div class="stat-item"><div class="stat-n">&lt;1s</div><div class="stat-l">Response Time</div></div>
+    <div class="stat-item"><div class="stat-n">4B</div><div class="stat-l">Pi Model</div></div>
+  </div>
+</section>
 
-<div id="verdict-overlay">
-  <div id="verdict-text">CLEAR</div>
-  <div id="verdict-sub">CLASSIFICATION COMPLETE · 97.2% CONFIDENCE</div>
-</div>
+<section class="sim-section reveal" id="simulation">
+  <div class="section-wrap">
+    <div class="section-tag">Interactive 3D Hardware Simulation</div>
+    <h2 class="section-title">The system — <span class="acc">rendered in 3D</span></h2>
+    <p class="section-desc">Interact with a real-time 3D model of the AlcoDetect hardware. Watch alcohol vapor propagate from the subject to each MQ-3 sensor and flow through the ML pipeline.</p>
+  </div>
 
-<div id="scenario-btns">
-  <button class="sc-btn act" onclick="setScenario('normal')">SOBER</button>
-  <button class="sc-btn" onclick="setScenario('alcohol')">ALCOHOL</button>
-  <button class="sc-btn" onclick="setScenario('sanitizer')">SANITIZER</button>
-</div>
+  <div style="max-width:1400px;margin:48px auto 0;padding:0 48px;">
+    <div class="viewport-shell" style="height:600px;">
+
+      <!-- ═══ CINEMATIC CANVAS LAYERS ═══ -->
+      <canvas id="sim-bg"></canvas>
+      <canvas id="sim3d"></canvas>
+
+      <!-- Classification colour bar -->
+      <div id="cin-class-bar"></div>
+
+      <!-- HUD corners -->
+      <div class="cin-hud tl">
+        <div>AlcoDetect <span class="ch-acc">v2.4.1</span></div>
+        <div>System: <span class="ch-acc" id="h-status">ACTIVE</span></div>
+        <div>Uptime: <span id="h-uptime">00:00:00</span></div>
+      </div>
+      <div class="cin-hud tr">
+        <div>Model: <span class="ch-acc">RF + XGBoost</span></div>
+        <div>Accuracy: <span class="ch-acc">97.2%</span></div>
+        <div>Latency: <span id="h-latency">342ms</span></div>
+      </div>
+      <div class="cin-hud bl">
+        <div>MQ3-1: <span id="h-s1" class="ch-acc">0.062</span></div>
+        <div>MQ3-2: <span id="h-s2" class="ch-acc">0.047</span></div>
+        <div>MQ3-3: <span id="h-s3" class="ch-acc">0.058</span></div>
+      </div>
+      <div class="cin-hud br">
+        <div>EAR: <span id="h-ear" class="ch-acc">0.281</span></div>
+        <div>Temp: <span id="h-temp" class="ch-acc">27.4°C</span></div>
+        <div>Class: <span id="h-class" class="ch-acc">0 — CLEAR</span></div>
+      </div>
+
+      <!-- Centre badges -->
+      <div class="cin-badges">
+        <div class="cin-badge" id="hud-status">SYSTEM ACTIVE</div>
+        <div class="cin-badge" id="hud-class">CLASS: 0 — CLEAR</div>
+      </div>
+
+      <!-- Verdict flash -->
+      <div id="cin-verdict">
+        <div id="cin-verdict-text">CLEAR</div>
+        <div id="cin-verdict-sub">CLASSIFICATION COMPLETE · 97.2% CONFIDENCE</div>
+      </div>
+
+      <!-- Bottom telemetry bar (original style) -->
+      <div class="hud-bottom">
+        <div class="hud-metric"><span class="hm-label">Sensor Avg</span><span class="hm-val" id="hm-avg">0.056</span></div>
+        <div class="hud-sep"></div>
+        <div class="hud-metric"><span class="hm-label">Peak</span><span class="hm-val" id="hm-peak">0.062</span></div>
+        <div class="hud-sep"></div>
+        <div class="hud-metric"><span class="hm-label">Spatial Var</span><span class="hm-val" id="hm-var">0.003</span></div>
+        <div class="hud-sep"></div>
+        <div class="hud-metric"><span class="hm-label">Model</span><span class="hm-val">RF + XGB</span></div>
+        <div class="hud-sep"></div>
+        <div class="hud-metric"><span class="hm-label">Click scenario buttons above</span></div>
+      </div>
+
+      <!-- Scenario buttons (original style) -->
+      <div class="sim-controls-bar">
+        <button class="sc-btn act" id="sc-normal"    onclick="setScenario('normal')">SOBER</button>
+        <button class="sc-btn"     id="sc-alcohol"   onclick="setScenario('alcohol')">ALCOHOL EVENT</button>
+        <button class="sc-btn"     id="sc-sanitizer" onclick="setScenario('sanitizer')">SANITIZER</button>
+        <button class="sc-btn"     id="sc-pause"     onclick="togglePause()">⏸ PAUSE</button>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="flow-section reveal" id="flow">
+  <div class="section-wrap">
+    <div class="section-tag">System Architecture</div>
+    <h2 class="section-title">How data <span class="acc">flows</span></h2>
+    <p class="section-desc">From physical detection to database — every step of the pipeline, animated in real time.</p>
+    <div class="flow-track">
+      <div class="flow-node" id="fn0">
+        <div class="fn-num">01 / DETECT</div>
+        <div class="fn-ping"></div>
+        <div class="fn-icon"><svg viewBox="0 0 36 36" fill="none"><rect x="3" y="11" width="30" height="18" rx="1.5" stroke="#00ff88" stroke-width="1.2"/><circle cx="18" cy="20" r="4.5" stroke="#00ff88" stroke-width="1.2"/><path d="M6 11V9a3 3 0 013-3h18a3 3 0 013 3v2" stroke="#00ff88" stroke-width="1.2"/></svg></div>
+        <div class="fn-title">Camera Trigger</div>
+        <div class="fn-desc">Tapo C200 detects motion. MediaPipe activates face landmark tracking.</div>
+      </div>
+      <div class="flow-node" id="fn1">
+        <div class="fn-num">02 / SENSE</div>
+        <div class="fn-ping"></div>
+        <div class="fn-icon"><svg viewBox="0 0 36 36" fill="none"><circle cx="18" cy="18" r="7" stroke="#00ff88" stroke-width="1.2"/><circle cx="18" cy="18" r="13" stroke="#00ff88" stroke-width="0.8" stroke-dasharray="2 2" opacity=".4"/><circle cx="18" cy="18" r="3" fill="#00ff88"/><path d="M18 5v2M18 29v2M5 18h2M29 18h2" stroke="#00ff88" stroke-width="1.2" stroke-linecap="round"/></svg></div>
+        <div class="fn-title">MQ-3 Capture</div>
+        <div class="fn-desc">3-sensor array logs a 2–3 second vapor window. Spatial gradient computed.</div>
+      </div>
+      <div class="flow-node" id="fn2">
+        <div class="fn-num">03 / EXTRACT</div>
+        <div class="fn-ping"></div>
+        <div class="fn-icon"><svg viewBox="0 0 36 36" fill="none"><path d="M5 27L14 15l6 6 5-6 6 12" stroke="#00ff88" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="3" width="30" height="30" rx="1.5" stroke="#00ff88" stroke-width="1.2"/></svg></div>
+        <div class="fn-title">Feature Extraction</div>
+        <div class="fn-desc">Rise time, peak, decay slope, spatial variance — 14 statistical features total.</div>
+      </div>
+      <div class="flow-node" id="fn3">
+        <div class="fn-num">04 / CLASSIFY</div>
+        <div class="fn-ping"></div>
+        <div class="fn-icon"><svg viewBox="0 0 36 36" fill="none"><circle cx="12" cy="12" r="5" stroke="#00ff88" stroke-width="1.2"/><circle cx="24" cy="12" r="5" stroke="#00ff88" stroke-width="1.2"/><circle cx="18" cy="26" r="5" stroke="#00ff88" stroke-width="1.2"/><path d="M17 12h-1M20 12h-1M15 17l3 4M21 17l-3 4" stroke="#00ff88" stroke-width="1.2" stroke-linecap="round"/></svg></div>
+        <div class="fn-title">ML Inference</div>
+        <div class="fn-desc">Random Forest + XGBoost ensemble fuses sensor features with EAR. 3-class output.</div>
+      </div>
+      <div class="flow-node" id="fn4">
+        <div class="fn-num">05 / LOG</div>
+        <div class="fn-ping"></div>
+        <div class="fn-icon"><svg viewBox="0 0 36 36" fill="none"><rect x="6" y="3" width="24" height="30" rx="1.5" stroke="#00ff88" stroke-width="1.2"/><path d="M12 12h12M12 18h12M12 24h6" stroke="#00ff88" stroke-width="1.2" stroke-linecap="round"/><circle cx="27" cy="27" r="6" fill="#020a05" stroke="#00ff88" stroke-width="1.2"/><path d="M25 27l1.5 1.5L30 24" stroke="#00ff88" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="fn-title">Store & Alert</div>
+        <div class="fn-desc">Result written to MariaDB. Dashboard notified via FastAPI WebSocket. Alert if Class 1.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="monitor-section reveal" id="monitor">
+  <div class="section-wrap">
+    <div class="section-tag">Real-time Dashboard</div>
+    <h2 class="section-title">Live system <span class="acc">monitor</span></h2>
+    <div class="monitor-layout">
+      <div class="mon-card verdict-card">
+        <div class="v-left">
+          <div class="v-label">Current Verdict</div>
+          <div class="v-result" id="v-result">CLEAR</div>
+          <div class="v-conf">Confidence: <span id="v-conf">97.2%</span> · Model: Random Forest + XGBoost</div>
+        </div>
+        <div class="v-icon" id="v-icon">✅</div>
+      </div>
+      <div class="mon-card">
+        <div class="mc-title">MQ-3 Sensor Array</div>
+        <div class="sensor-bars">
+          <div class="sb-row"><span class="sb-label">MQ3-1</span><div class="sb-track"><div class="sb-fill" id="m-s1" style="width:6%"></div></div><span class="sb-val" id="m-v1">0.062</span></div>
+          <div class="sb-row"><span class="sb-label">MQ3-2</span><div class="sb-track"><div class="sb-fill" id="m-s2" style="width:5%"></div></div><span class="sb-val" id="m-v2">0.047</span></div>
+          <div class="sb-row"><span class="sb-label">MQ3-3</span><div class="sb-track"><div class="sb-fill" id="m-s3" style="width:6%"></div></div><span class="sb-val" id="m-v3">0.058</span></div>
+          <div class="sb-row" style="margin-top:8px;"><span class="sb-label" style="font-size:8px;width:60px;">EAR</span><div class="sb-track"><div class="sb-fill" id="m-sear" style="width:28%"></div></div><span class="sb-val" id="m-vear">0.281</span></div>
+          <div class="sb-row"><span class="sb-label" style="font-size:8px;width:60px;">Temp</span><div class="sb-track"><div class="sb-fill" id="m-stemp" style="width:55%"></div></div><span class="sb-val" id="m-vtemp">27.5°C</span></div>
+        </div>
+      </div>
+      <div class="mon-card">
+        <div class="mc-title">Sensor History</div>
+        <canvas id="chart-canvas"></canvas>
+      </div>
+      <div class="mon-card" style="grid-column:1/-1;">
+        <div class="mc-title">Event Log</div>
+        <div class="event-log" id="event-log"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="feat-section reveal" id="features">
+  <div class="section-wrap">
+    <div class="section-tag">System Capabilities</div>
+    <h2 class="section-title">Built for <span class="acc">real-world use</span></h2>
+    <div class="feat-grid">
+      <div class="feat-card"><div class="fc-num">01</div><div class="fc-title">3-Sensor Spatial Array</div><div class="fc-desc">Three MQ-3 sensors form a spatial grid, enabling vapor direction tracking and gradient analysis across the entrance zone.</div><span class="fc-tag">Hardware</span></div>
+      <div class="feat-card"><div class="fc-num">02</div><div class="fc-title">Computer Vision EAR</div><div class="fc-desc">MediaPipe Face Mesh tracks 468 landmarks in real time. Eye Aspect Ratio detects impairment over 30-frame rolling windows.</div><span class="fc-tag">CV / ML</span></div>
+      <div class="feat-card"><div class="fc-num">03</div><div class="fc-title">Fusion Classification</div><div class="fc-desc">Random Forest + XGBoost ensemble fuses 14 sensor features with EAR for robust 3-class event classification at 97.2% accuracy.</div><span class="fc-tag">Machine Learning</span></div>
+      <div class="feat-card"><div class="fc-num">04</div><div class="fc-title">False Positive Prevention</div><div class="fc-desc">Multi-frame EAR analysis, 5-reading rolling averages, and dual-source validation eliminate false alarms from sanitizer or perfume.</div><span class="fc-tag">Reliability</span></div>
+      <div class="feat-card"><div class="fc-num">05</div><div class="fc-title">Fully Embedded</div><div class="fc-desc">FastAPI + React + MariaDB all run on Raspberry Pi 4. Zero cloud dependency. Full offline operation in any environment.</div><span class="fc-tag">Embedded</span></div>
+      <div class="feat-card"><div class="fc-num">06</div><div class="fc-title">Face Recognition</div><div class="fc-desc">DeepFace + FaceNet identifies registered subjects and tracks detection history per person across sessions.</div><span class="fc-tag">Biometrics</span></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="ft-copy">© 2026 <span>AlcoDetect</span> — Computer Engineering Capstone</div>
+  <div class="ft-group">Group 12 · gekko26<br>Raspberry Pi 4 · ESP32 · MQ-3 · Tapo C200</div>
+</footer>
 
 <script>
-// ═══════════════════════════════════════════════
-// STATE
-// ═══════════════════════════════════════════════
+// ─── Cursor ───────────────────────────────────────────────────────────────────
+const cur = document.getElementById('cursor');
+const cring = document.getElementById('cursor-ring');
+let mx=0,my=0,rx=0,ry=0;
+document.addEventListener('mousemove',e=>{mx=e.clientX;my=e.clientY;cur.style.left=mx+'px';cur.style.top=my+'px';});
+(function animRing(){rx+=(mx-rx)*.13;ry+=(my-ry)*.13;cring.style.left=rx+'px';cring.style.top=ry+'px';requestAnimationFrame(animRing);})();
+
+// ─── Scroll reveal ────────────────────────────────────────────────────────────
+document.querySelectorAll('.reveal').forEach(el=>{
+  new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)e.target.classList.add('vis');}),{threshold:.08}).observe(el);
+});
+
+// ─── HERO background (original unchanged) ────────────────────────────────────
+(function(){
+  const canvas=document.getElementById('three-canvas');
+  const ctx=canvas.getContext('2d');
+  let W,H;
+  function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;}
+  resize(); window.addEventListener('resize',resize);
+  const N=600;
+  const pts=Array.from({length:N},()=>({x:(Math.random()-.5)*W,y:(Math.random()-.5)*H,z:Math.random()*80-40,vx:(Math.random()-.5)*.2,vy:(Math.random()-.5)*.2}));
+  const phi=(1+Math.sqrt(5))/2;
+  const icoRaw=[[-1,phi,0],[1,phi,0],[-1,-phi,0],[1,-phi,0],[0,-1,phi],[0,1,phi],[0,-1,-phi],[0,1,-phi],[phi,0,-1],[phi,0,1],[-phi,0,-1],[-phi,0,1]];
+  const icoEdges=[[0,1],[0,5],[0,7],[0,10],[0,11],[1,5],[1,7],[1,8],[1,9],[2,3],[2,4],[2,6],[2,10],[2,11],[3,4],[3,6],[3,8],[3,9],[4,5],[4,9],[4,11],[5,9],[5,11],[6,7],[6,8],[6,10],[7,8],[7,10],[8,9],[10,11]];
+  function project(x,y,z,rotY,rotX,cx,cy){const cosY=Math.cos(rotY),sinY=Math.sin(rotY);const x1=x*cosY-z*sinY,z1=x*sinY+z*cosY;const cosX=Math.cos(rotX),sinX=Math.sin(rotX);const y1=y*cosX-z1*sinX,z2=y*sinX+z1*cosX;const fov=300,scale=fov/(fov+z2+100);return{sx:cx+x1*scale*80,sy:cy+y1*scale*80,vis:scale>0};}
+  let t=0;
+  function frame(){requestAnimationFrame(frame);t+=.004;ctx.clearRect(0,0,W,H);const cx=W/2,cy=H/2;const rotY=t*.2,rotX=t*.1;
+    ctx.strokeStyle='rgba(0,255,136,0.03)';ctx.lineWidth=1;const gs=60,gc=20;const gOX=(t*5)%gs,gOY=(t*3)%gs;
+    for(let i=0;i<=gc;i++){const x=cx-gs*gc/2+i*gs-gOX;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();const y=cy-gs*gc/2+i*gs-gOY;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+    const icoScale=Math.min(W,H)*.18;const icoPts=icoRaw.map(([x,y,z])=>{const len=Math.sqrt(x*x+y*y+z*z);return project(x/len,y/len,z/len,rotY,rotX,cx,cy);});
+    ctx.strokeStyle='rgba(0,255,136,0.06)';ctx.lineWidth=1;
+    icoEdges.forEach(([a,b])=>{const pa=icoPts[a],pb=icoPts[b];if(pa.vis&&pb.vis){ctx.beginPath();ctx.moveTo(cx+(icoPts[a].sx-cx)*icoScale/80,cy+(icoPts[a].sy-cy)*icoScale/80);ctx.lineTo(cx+(icoPts[b].sx-cx)*icoScale/80,cy+(icoPts[b].sy-cy)*icoScale/80);ctx.stroke();}});
+    pts.forEach(p=>{p.x+=p.vx+Math.sin(t*.2)*.1;p.y+=p.vy+Math.cos(t*.15)*.1;if(p.x>W/2)p.x=-W/2;if(p.x<-W/2)p.x=W/2;if(p.y>H/2)p.y=-H/2;if(p.y<-H/2)p.y=H/2;ctx.beginPath();ctx.arc(cx+p.x,cy+p.y,1,0,Math.PI*2);ctx.fillStyle='rgba(0,255,136,0.45)';ctx.fill();});
+  }
+  frame();
+})();
+
+// ─── CINEMATIC SIMULATION (unchanged from alcodetect-cinematic.html) ──────────
+// Canvas references now point to the embedded #sim-bg / #sim3d elements.
 let scenario = 'normal';
 let W, H;
 let t = 0;
 let startTime = Date.now();
 let frame = 0;
 
-const bgCanvas = document.getElementById('bg');
+const bgCanvas = document.getElementById('sim-bg');
 const bgCtx = bgCanvas.getContext('2d');
-const canvas = document.getElementById('main');
+const canvas = document.getElementById('sim3d');
 const ctx = canvas.getContext('2d');
 
+const SH = 600;
 function resize() {
-  W = window.innerWidth; H = window.innerHeight;
+  W = canvas.parentElement.clientWidth;
   bgCanvas.width = canvas.width = W;
-  bgCanvas.height = canvas.height = H;
+  bgCanvas.height = bgCanvas.height = SH;
+  canvas.height = SH;
 }
 resize();
 window.addEventListener('resize', resize);
 
-// ═══════════════════════════════════════════════
-// LAYOUT — all positions relative to W,H
-// ═══════════════════════════════════════════════
 function L() {
-  const cx = W * 0.5, cy = H * 0.5;
+  const cx = W * 0.5, cy = SH * 0.5;
   return {
-    // Person walks from left to right
     personY: cy * 0.9,
     doorX: W * 0.38,
-
-    // CCTV above entrance
-    cctv: { x: W * 0.38, y: H * 0.12 },
-
-    // Sensor array
+    cctv: { x: W * 0.38, y: SH * 0.12 },
     s1: { x: W * 0.50, y: cy * 0.75 },
     s2: { x: W * 0.50, y: cy * 0.92 },
     s3: { x: W * 0.50, y: cy * 1.09 },
-
-    // ESP32
     esp: { x: W * 0.64, y: cy * 0.92 },
-
-    // Raspberry Pi
-    pi: { x: W * 0.80, y: cy * 0.82 },
-
-    // DB / Dashboard
-    db: { x: W * 0.80, y: cy * 1.06 },
-    dash: { x: W * 0.92, y: cy * 0.82 },
+    pi:  { x: W * 0.80, y: cy * 0.82 },
+    db:  { x: W * 0.80, y: cy * 1.06 },
+    dash:{ x: W * 0.92, y: cy * 0.82 },
   };
 }
 
-// ═══════════════════════════════════════════════
-// PARTICLES
-// ═══════════════════════════════════════════════
 const vaporPool = Array.from({length:200}, () => ({active:false,x:0,y:0,vx:0,vy:0,life:0,maxLife:1,r:2,alpha:0}));
 const dataPackets = [];
-const wifiArcs = [];
 const bgParticles = Array.from({length:400}, () => ({
   x: Math.random()*2000-1000, y: Math.random()*1200-600,
   vx:(Math.random()-.5)*.15, vy:(Math.random()-.5)*.15,
@@ -162,7 +606,6 @@ const bgParticles = Array.from({length:400}, () => ({
 const neuralNodes = [];
 const neuralEdges = [];
 
-// Build neural net overlay for Pi
 (function buildNN(){
   const layers = [3,5,4,3];
   let lid=0;
@@ -182,45 +625,27 @@ const neuralEdges = [];
   }
 })();
 
-// ═══════════════════════════════════════════════
-// PERSON STATE
-// ═══════════════════════════════════════════════
 let personX = -80;
 let personWalk = 0;
 let personDetected = false;
 let faceLockAnim = 0;
-
-// ═══════════════════════════════════════════════
-// SENSOR READINGS
-// ═══════════════════════════════════════════════
 let sReadings = [.06,.05,.06];
-let sActivation = [0,0,0]; // animated activation 0..1
+let sActivation = [0,0,0];
+let phaseProgress = 0;
 
-// ═══════════════════════════════════════════════
-// PHASE SYSTEM
-// ═══════════════════════════════════════════════
-// phases animate sequentially then hold, controlled by scenario
-let phaseProgress = 0; // 0..1 across all phases
-
-// ═══════════════════════════════════════════════
-// HELPERS
-// ═══════════════════════════════════════════════
 function lerpColor(a, b, t) {
   const ah = a.replace('#',''); const bh = b.replace('#','');
   const ar=parseInt(ah.slice(0,2),16), ag=parseInt(ah.slice(2,4),16), ab=parseInt(ah.slice(4,6),16);
   const br=parseInt(bh.slice(0,2),16), bg=parseInt(bh.slice(2,4),16), bb=parseInt(bh.slice(4,6),16);
   return `rgb(${Math.round(ar+(br-ar)*t)},${Math.round(ag+(bg-ag)*t)},${Math.round(ab+(bb-ab)*t)})`;
 }
-
 function ease(x){ return x<0.5?2*x*x:1-Math.pow(-2*x+2,2)/2; }
-
 function glow(x,y,r,col,alpha){
   const g=ctx.createRadialGradient(x,y,0,x,y,r);
-  g.addColorStop(0,col.replace('rgb','rgba').replace(')',`,${alpha})`).replace(/rgba\(rgba/,'rgba'));
+  g.addColorStop(0,col.replace(')',`,${alpha})`).replace('rgb','rgba').replace(/rgba\(rgba/,'rgba'));
   g.addColorStop(1,'rgba(0,0,0,0)');
   ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
 }
-
 function glowHex(x,y,r,hex,alpha){
   const c=hex.replace('#','');
   const cr=parseInt(c.slice(0,2),16), cg=parseInt(c.slice(2,4),16), cb=parseInt(c.slice(4,6),16);
@@ -229,7 +654,6 @@ function glowHex(x,y,r,hex,alpha){
   g.addColorStop(1,'rgba(0,0,0,0)');
   ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
 }
-
 function drawRoundRect(x,y,w,h,r,fill,stroke,sw){
   ctx.beginPath();
   ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y);
@@ -240,7 +664,6 @@ function drawRoundRect(x,y,w,h,r,fill,stroke,sw){
   if(fill){ctx.fillStyle=fill;ctx.fill();}
   if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=sw||1;ctx.stroke();}
 }
-
 function label(txt, x, y, col, size, align){
   ctx.fillStyle=col||'#00ff88';
   ctx.font=`${size||9}px 'Space Mono',monospace`;
@@ -248,51 +671,32 @@ function label(txt, x, y, col, size, align){
   ctx.fillText(txt,x,y);
 }
 
-// ═══════════════════════════════════════════════
-// BACKGROUND CANVAS (grid, particles)
-// ═══════════════════════════════════════════════
 function drawBackground() {
-  bgCtx.clearRect(0,0,W,H);
-  bgCtx.fillStyle='#020a05'; bgCtx.fillRect(0,0,W,H);
-
-  // Grid
+  bgCtx.clearRect(0,0,W,SH);
+  bgCtx.fillStyle='#020a05'; bgCtx.fillRect(0,0,W,SH);
   bgCtx.strokeStyle='rgba(0,255,136,0.025)'; bgCtx.lineWidth=0.5;
   const gs=50;
-  for(let x=0;x<W;x+=gs){bgCtx.beginPath();bgCtx.moveTo(x,0);bgCtx.lineTo(x,H);bgCtx.stroke();}
-  for(let y=0;y<H;y+=gs){bgCtx.beginPath();bgCtx.moveTo(0,y);bgCtx.lineTo(W,y);bgCtx.stroke();}
-
-  // Vignette
-  const vg=bgCtx.createRadialGradient(W/2,H/2,H*.1,W/2,H/2,H*.85);
+  for(let x=0;x<W;x+=gs){bgCtx.beginPath();bgCtx.moveTo(x,0);bgCtx.lineTo(x,SH);bgCtx.stroke();}
+  for(let y=0;y<SH;y+=gs){bgCtx.beginPath();bgCtx.moveTo(0,y);bgCtx.lineTo(W,y);bgCtx.stroke();}
+  const vg=bgCtx.createRadialGradient(W/2,SH/2,SH*.1,W/2,SH/2,SH*.85);
   vg.addColorStop(0,'rgba(0,0,0,0)');
   vg.addColorStop(1,'rgba(2,10,5,0.7)');
-  bgCtx.fillStyle=vg; bgCtx.fillRect(0,0,W,H);
-
-  // BG particles
+  bgCtx.fillStyle=vg; bgCtx.fillRect(0,0,W,SH);
   bgCtx.fillStyle='rgba(0,255,136,0.35)';
   bgParticles.forEach(p=>{
     p.x+=p.vx; p.y+=p.vy;
     if(p.x>W*.6)p.x=-W*.6; if(p.x<-W*.6)p.x=W*.6;
-    if(p.y>H*.7)p.y=-H*.7; if(p.y<-H*.7)p.y=H*.7;
-    bgCtx.beginPath(); bgCtx.arc(W/2+p.x,H/2+p.y,1,0,Math.PI*2); bgCtx.fill();
+    if(p.y>SH*.7)p.y=-SH*.7; if(p.y<-SH*.7)p.y=SH*.7;
+    bgCtx.beginPath(); bgCtx.arc(W/2+p.x,SH/2+p.y,1,0,Math.PI*2); bgCtx.fill();
   });
 }
 
-// ═══════════════════════════════════════════════
-// COMPONENT DRAWS
-// ═══════════════════════════════════════════════
-
-// ── CCTV Camera ──
 function drawCCTV(cx, cy, scanAngle) {
   const detected = personDetected;
-  const col = detected ? '#00aaff' : 'rgba(0,136,255,0.6)';
-
-  // Scanning cone
   const coneAngle = Math.PI/5;
   const baseAngle = Math.PI/2 + Math.sin(scanAngle * 0.5) * 0.4;
   ctx.save();
-  const grad = ctx.createConicalGradient ? null : null;
-  // Simple cone as filled triangle with gradient
-  const coneLen = H * 0.55;
+  const coneLen = SH * 0.55;
   ctx.beginPath();
   ctx.moveTo(cx,cy);
   ctx.lineTo(cx + Math.cos(baseAngle-coneAngle)*coneLen, cy + Math.sin(baseAngle-coneAngle)*coneLen);
@@ -303,119 +707,86 @@ function drawCCTV(cx, cy, scanAngle) {
   coneGrad.addColorStop(0.5,'rgba(0,136,255,0.06)');
   coneGrad.addColorStop(1,'rgba(0,136,255,0)');
   ctx.fillStyle=coneGrad; ctx.fill();
-
-  // Scan sweep line
   const sweepA = baseAngle + Math.sin(t*1.5)*coneAngle*.8;
   ctx.beginPath();
   ctx.moveTo(cx,cy);
   ctx.lineTo(cx+Math.cos(sweepA)*coneLen*0.8, cy+Math.sin(sweepA)*coneLen*0.8);
   ctx.strokeStyle='rgba(0,200,255,0.25)'; ctx.lineWidth=1; ctx.stroke();
   ctx.restore();
-
-  // Glow when detected
   if(detected){
     glowHex(cx,cy,60,'#0088ff',0.15*faceLockAnim);
-    // Tracking rings
     for(let r=1;r<=3;r++){
       ctx.beginPath(); ctx.arc(cx,cy,r*12,0,Math.PI*2);
       ctx.strokeStyle=`rgba(0,170,255,${0.15/r})`; ctx.lineWidth=1; ctx.stroke();
     }
   }
-
-  // Mount pole
   ctx.strokeStyle='rgba(80,80,80,0.8)'; ctx.lineWidth=3; ctx.lineCap='round';
   ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx,cy-30); ctx.stroke();
   ctx.strokeStyle='rgba(120,120,120,0.5)'; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(cx-15,cy-30); ctx.lineTo(cx+15,cy-30); ctx.stroke();
-
-  // Body
   ctx.save(); ctx.translate(cx,cy);
   ctx.rotate(Math.sin(scanAngle*.5)*0.2);
   drawRoundRect(-12,-8,24,16,4,'#111111','rgba(0,136,255,0.4)',0.8);
-  // Lens
   ctx.beginPath(); ctx.arc(10,0,5,0,Math.PI*2);
   ctx.fillStyle='#001133'; ctx.fill();
   ctx.beginPath(); ctx.arc(10,0,3,0,Math.PI*2);
   ctx.fillStyle='rgba(0,68,255,0.8)'; ctx.fill();
-  // Activity LED
   const ledA = detected ? 1 : 0.4+0.3*Math.sin(t*3);
   ctx.beginPath(); ctx.arc(-8,-4,2.5,0,Math.PI*2);
   ctx.fillStyle=`rgba(0,255,136,${ledA})`; ctx.fill();
   ctx.restore();
-
-  // Face lock reticle
   if(detected && faceLockAnim > 0.1) {
     const px = personX, py = L().personY - 36;
     const a = faceLockAnim;
     const rs = 24;
     ctx.strokeStyle=`rgba(0,255,136,${a*0.9})`; ctx.lineWidth=1.5;
-    // Corners
-    const corners=[[-1,-1],[1,-1],[1,1],[-1,1]];
-    corners.forEach(([sx,sy])=>{
+    [[-1,-1],[1,-1],[1,1],[-1,1]].forEach(([sx,sy])=>{
       ctx.beginPath();
       ctx.moveTo(px+sx*rs, py+sy*(rs-rs*.4));
       ctx.lineTo(px+sx*rs, py+sy*rs);
       ctx.lineTo(px+(sx-sx*.4)*rs, py+sy*rs);
       ctx.stroke();
     });
-    // Center crosshair
     ctx.strokeStyle=`rgba(0,255,136,${a*0.4})`; ctx.lineWidth=0.5;
     ctx.beginPath(); ctx.moveTo(px-rs*.3,py); ctx.lineTo(px+rs*.3,py); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(px,py-rs*.3); ctx.lineTo(px,py+rs*.3); ctx.stroke();
-    // HUD label
     label('LOCKED · EAR ACTIVE', px, py-rs-8, `rgba(0,255,136,${a*0.8})`, 8, 'center');
   }
-
   label('TAPO C200', cx, cy-38, 'rgba(0,136,255,0.5)', 7, 'center');
 }
 
-// ── MQ-3 Sensor ──
 function drawSensor(x, y, idx, reading, activation) {
   const col = reading > .45 ? '#ff3355' : reading > .25 ? '#ffaa00' : '#00ff88';
   const hexCol = reading > .45 ? 'ff3355' : reading > .25 ? 'ffaa00' : '00ff88';
   const cr=parseInt(hexCol.slice(0,2),16), cg=parseInt(hexCol.slice(2,4),16), cb=parseInt(hexCol.slice(4,6),16);
-
-  // Glow rings — reactive
   if(activation > 0.05) {
     for(let r=1;r<=4;r++){
       const rr = r*14*activation;
-      const pulse = 0.5+0.5*Math.sin(t*3-r*.8);
       ctx.beginPath(); ctx.arc(x,y,rr,0,Math.PI*2);
       ctx.strokeStyle=`rgba(${cr},${cg},${cb},${0.2*activation/r})`; ctx.lineWidth=1; ctx.stroke();
     }
-    // Radar sweep
     ctx.save(); ctx.translate(x,y);
     ctx.rotate(t*1.5*(1+activation));
-    const radarGrad=ctx.createConicalGradient?null:null;
     ctx.beginPath(); ctx.moveTo(0,0); ctx.arc(0,0,30*activation,0,Math.PI*.6);
     ctx.closePath();
     ctx.fillStyle=`rgba(${cr},${cg},${cb},${0.1*activation})`; ctx.fill();
     ctx.restore();
   }
-
-  // PCB board
   drawRoundRect(x-14,y-12,28,24,3,'#0a1f0a',col,0.5);
-  // Sensor dome
   ctx.beginPath(); ctx.arc(x,y,9,0,Math.PI*2);
   ctx.fillStyle=`rgba(${cr},${cg},${cb},${0.2+activation*.5})`; ctx.fill();
   ctx.beginPath(); ctx.arc(x,y,9,0,Math.PI*2);
   ctx.strokeStyle=col; ctx.lineWidth=0.8; ctx.stroke();
-  // Inner LED
   ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2);
   const pulse=0.6+0.4*Math.sin(t*4+idx);
   ctx.fillStyle=`rgba(${cr},${cg},${cb},${activation>0.1?pulse:0.3})`; ctx.fill();
-
-  // Connecting pins
   for(let p=0;p<3;p++){
     ctx.beginPath();
     ctx.moveTo(x-8+p*8, y+12); ctx.lineTo(x-8+p*8, y+18);
     ctx.strokeStyle='rgba(180,180,100,0.5)'; ctx.lineWidth=1.5; ctx.stroke();
   }
-
   label(`MQ3-${idx+1}`, x, y-18, col, 7);
   label(reading.toFixed(3), x, y+28, col, 7);
-
-  // Heat shimmer
   if(activation>.3){
     for(let i=0;i<3;i++){
       const sx=x+(Math.random()-.5)*10, sy=y-10-Math.random()*20;
@@ -425,31 +796,25 @@ function drawSensor(x, y, idx, reading, activation) {
   }
 }
 
-// ── ESP32 ──
 function drawESP32(x, y, activity) {
   const a = activity;
   glowHex(x,y,50,'#00ff88',0.06*a);
   drawRoundRect(x-26,y-18,52,36,4,'#0a2a1a','rgba(0,255,136,0.35)',0.8);
-  // Chip
   drawRoundRect(x-12,y-10,24,20,2,'#1a4a2a');
-  // GPIO pins
   for(let i=0;i<5;i++){
     ctx.fillStyle=`rgba(200,180,50,0.6)`;
     ctx.fillRect(x-26, y-14+i*6, 6, 3);
     ctx.fillRect(x+20, y-14+i*6, 6, 3);
   }
-  // Antenna
   ctx.strokeStyle='rgba(160,160,120,0.8)'; ctx.lineWidth=2; ctx.lineCap='round';
   ctx.beginPath(); ctx.moveTo(x+26,y-12); ctx.lineTo(x+36,y-12);
   ctx.lineTo(x+36,y+8); ctx.stroke();
-  // Activity LEDs
   for(let i=0;i<4;i++){
     const blink = a > 0.1 ? (Math.sin(t*8+i*1.5)>.2?1:0.2) : 0.2;
     ctx.beginPath(); ctx.arc(x-8+i*5,y-6,2,0,Math.PI*2);
     ctx.fillStyle=i%2===0?`rgba(0,255,136,${blink})`:`rgba(255,170,0,${blink*.7})`;
     ctx.fill();
   }
-  // Processing waveform
   if(a>.1){
     ctx.strokeStyle=`rgba(0,255,136,${a*.5})`; ctx.lineWidth=1;
     ctx.beginPath();
@@ -462,30 +827,22 @@ function drawESP32(x, y, activity) {
   label('ESP32', x, y+26, 'rgba(0,255,136,0.55)', 7);
 }
 
-// ── Raspberry Pi ──
 function drawRPi(x, y, activity) {
   const a = activity;
   if(a>.1) glowHex(x,y,70,'#00ff88',0.08*a);
   drawRoundRect(x-40,y-28,80,56,4,'#0d2010','rgba(0,255,136,0.4)',0.8);
-  // CPU
   drawRoundRect(x-12,y-12,24,24,2,'#1a3a1a','rgba(0,255,136,0.2)',0.5);
   label('BCM', x, y+3, 'rgba(0,255,136,0.5)', 6);
-  // GPIO header
   for(let i=0;i<10;i++){
-    const gx=x-36+i*8, gy=y-22;
-    ctx.fillStyle='rgba(200,180,50,0.5)'; ctx.fillRect(gx,gy,5,5);
+    ctx.fillStyle='rgba(200,180,50,0.5)'; ctx.fillRect(x-36+i*8,y-22,5,5);
   }
-  // USB ports
   drawRoundRect(x+40,y-14,10,8,1,'#222');
   drawRoundRect(x+40,y-2,10,8,1,'#222');
-  // Status LED
   const led=a>.1?0.8+0.2*Math.sin(t*8):0.4;
   ctx.beginPath(); ctx.arc(x+30,y-20,3.5,0,Math.PI*2);
   ctx.fillStyle=`rgba(0,255,0,${led})`; ctx.fill();
   ctx.beginPath(); ctx.arc(x+36,y-20,3.5,0,Math.PI*2);
   ctx.fillStyle=`rgba(0,100,255,${led*.7})`; ctx.fill();
-
-  // Neural net overlay (AI inference visual)
   if(a>.3){
     neuralEdges.forEach(({a:ai,b:bi,phase})=>{
       const na=neuralNodes[ai], nb=neuralNodes[bi];
@@ -501,23 +858,19 @@ function drawRPi(x, y, activity) {
       ctx.beginPath(); ctx.arc(nx,ny,3,0,Math.PI*2);
       ctx.fillStyle=`rgba(0,255,136,${0.4*a*pulse})`; ctx.fill();
     });
-    // Feature labels
     const features=['RISE TIME','PEAK','DECAY','EAR','TEMP'];
     features.forEach((f,i)=>{
       label(f, x-52+i*22, y+40, `rgba(0,255,136,${0.2*a})`, 6, 'left');
     });
   }
-
   label('RASPBERRY PI 4', x, y-36, 'rgba(0,255,136,0.55)', 7);
   label('AI INFERENCE', x, y+46, `rgba(0,255,136,${a*.6})`, 7);
 }
 
-// ── Database node ──
 function drawDB(x, y, activity) {
   const a = activity;
   if(a>.1) glowHex(x,y,40,'#00aaff',0.08*a);
-  // Cylinder (3 ellipses)
-  const dw=32, dh=8, dr=16, dbh=30;
+  const dw=32, dh=8, dbh=30;
   ctx.beginPath(); ctx.ellipse(x,y,dw/2,dh/2,0,0,Math.PI*2);
   ctx.fillStyle=`rgba(0,50,80,0.8)`; ctx.fill();
   ctx.strokeStyle='rgba(0,170,255,0.4)'; ctx.lineWidth=0.8; ctx.stroke();
@@ -529,10 +882,8 @@ function drawDB(x, y, activity) {
   ctx.beginPath(); ctx.ellipse(x,y+dbh,dw/2,dh/2,0,0,Math.PI*2);
   ctx.fillStyle='rgba(0,50,80,0.7)'; ctx.fill();
   ctx.strokeStyle='rgba(0,170,255,0.4)'; ctx.stroke();
-  // Mid line
   ctx.beginPath(); ctx.ellipse(x,y+dbh/2,dw/2,dh/2,0,0,Math.PI*2);
   ctx.strokeStyle='rgba(0,170,255,0.2)'; ctx.stroke();
-  // Activity
   if(a>.1){
     const flow=Math.sin(t*4)*0.5+0.5;
     ctx.fillStyle=`rgba(0,170,255,${0.15*a*flow})`;
@@ -541,18 +892,15 @@ function drawDB(x, y, activity) {
   label('MARIADB', x, y+dbh+16, 'rgba(0,170,255,0.5)', 7);
 }
 
-// ── Dashboard node ──
 function drawDash(x, y, activity) {
   const a = activity;
   if(a>.1) glowHex(x,y,40,'#00aaff',0.07*a);
   drawRoundRect(x-24,y-18,48,36,4,'rgba(0,20,40,0.8)','rgba(0,170,255,0.4)',0.8);
-  // Mini chart bars
   for(let i=0;i<5;i++){
     const bh = 6+Math.sin(t*2+i)*4+(sReadings[i%3]||.1)*14;
     ctx.fillStyle=a>.1?'rgba(0,170,255,0.5)':'rgba(0,170,255,0.2)';
     ctx.fillRect(x-18+i*9, y+10-bh, 7, bh);
   }
-  // Horizontal scan lines
   for(let i=0;i<3;i++){
     ctx.beginPath(); ctx.moveTo(x-20,y-10+i*8); ctx.lineTo(x+20,y-10+i*8);
     ctx.strokeStyle='rgba(0,170,255,0.15)'; ctx.lineWidth=0.5; ctx.stroke();
@@ -561,16 +909,10 @@ function drawDash(x, y, activity) {
   label('DASHBOARD', x, y+28, 'rgba(0,170,255,0.5)', 7);
 }
 
-// ══════════════════════════════════════════════
-// GLOWING WIRE with animated pulses
-// ══════════════════════════════════════════════
 function drawGlowWire(x1,y1,x2,y2,col,alpha,pulseOffset) {
-  // Main wire
   ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
-  ctx.strokeStyle=col.replace(')',`,${alpha*0.4})`).replace('rgb(','rgba('); 
+  ctx.strokeStyle=col.replace(')',`,${alpha*0.4})`).replace('rgb(','rgba(');
   ctx.lineWidth=1; ctx.stroke();
-
-  // Animated pulses
   const pCount = 3;
   for(let p=0;p<pCount;p++){
     const tp = ((t*.3 + p/pCount + (pulseOffset||0)) % 1);
@@ -579,7 +921,6 @@ function drawGlowWire(x1,y1,x2,y2,col,alpha,pulseOffset) {
     ctx.beginPath(); ctx.arc(px,py,2.5,0,Math.PI*2);
     ctx.fillStyle=col.replace(')',`,${a2})`).replace('rgb(','rgba(');
     ctx.fill();
-    // Trail
     const tp2=Math.max(0,tp-.05);
     const px2=x1+(x2-x1)*tp2, py2=y1+(y2-y1)*tp2;
     ctx.beginPath(); ctx.moveTo(px2,py2); ctx.lineTo(px,py);
@@ -588,14 +929,9 @@ function drawGlowWire(x1,y1,x2,y2,col,alpha,pulseOffset) {
   }
 }
 
-// ══════════════════════════════════════════════
-// WIFI ARCS (ESP → Pi)
-// ══════════════════════════════════════════════
 function drawWiFiArcs(x1,y1,x2,y2,intensity) {
   if(intensity<.05) return;
   const mid={x:(x1+x2)/2, y:Math.min(y1,y2)-40};
-
-  // Expanding rings from transmitter
   for(let r=1;r<=4;r++){
     const phase=(t*1.5-r*.3)%1;
     const rr=r*18*phase;
@@ -603,14 +939,10 @@ function drawWiFiArcs(x1,y1,x2,y2,intensity) {
     ctx.beginPath(); ctx.arc(x1,y1,rr,Math.PI*1.2,Math.PI*1.8);
     ctx.strokeStyle=`rgba(0,255,136,${a})`; ctx.lineWidth=1; ctx.stroke();
   }
-
-  // Signal beam
   ctx.beginPath(); ctx.moveTo(x1,y1);
   ctx.quadraticCurveTo(mid.x,mid.y,x2,y2);
   ctx.strokeStyle=`rgba(0,255,136,${intensity*0.2})`; ctx.lineWidth=1; ctx.setLineDash([4,4]); ctx.stroke();
   ctx.setLineDash([]);
-
-  // Floating packets on the arc
   const pCount=4;
   for(let p=0;p<pCount;p++){
     const tp=((t*.4+p/pCount)%1);
@@ -618,18 +950,12 @@ function drawWiFiArcs(x1,y1,x2,y2,intensity) {
     const by=Math.pow(1-tp,2)*y1+2*(1-tp)*tp*mid.y+tp*tp*y2;
     ctx.beginPath(); ctx.arc(bx,by,3,0,Math.PI*2);
     ctx.fillStyle=`rgba(0,255,136,${intensity*0.7*(0.5+0.5*Math.sin(t*4+p))})`; ctx.fill();
-    // Glow
     glowHex(bx,by,8,'#00ff88',intensity*.2);
   }
-
-  // Receiving glow on Pi
   glowHex(x2,y2,30,'#00ff88',intensity*0.1*Math.sin(t*3));
   label('WiFi TX', (x1+x2)/2, mid.y-14, `rgba(0,255,136,${intensity*.4})`, 7);
 }
 
-// ══════════════════════════════════════════════
-// VAPOR PARTICLES
-// ══════════════════════════════════════════════
 function spawnVapor(x, y) {
   for(let p of vaporPool){
     if(!p.active){
@@ -646,7 +972,6 @@ function spawnVapor(x, y) {
     }
   }
 }
-
 function updateVapor(dt) {
   vaporPool.forEach(p=>{
     if(!p.active) return;
@@ -657,7 +982,6 @@ function updateVapor(dt) {
     if(p.life>p.maxLife) p.active=false;
   });
 }
-
 function drawVapor() {
   vaporPool.forEach(p=>{
     if(!p.active||p.alpha<.01) return;
@@ -669,74 +993,52 @@ function drawVapor() {
   });
 }
 
-// ══════════════════════════════════════════════
-// PERSON (holographic)
-// ══════════════════════════════════════════════
 function drawPerson(px, py) {
   const walkA = personWalk;
   const col = scenario==='alcohol'?'rgba(255,80,60,0.75)':
               scenario==='sanitizer'?'rgba(60,180,255,0.75)':'rgba(0,255,136,0.7)';
   const wireCol = col.replace('0.7','0.15').replace('0.75','0.15');
-
-  // Shadow
   ctx.beginPath(); ctx.ellipse(px,py+36,18,5,0,0,Math.PI*2);
   ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fill();
-
-  // Holographic scanlines
   for(let i=-40;i<40;i+=4){
     ctx.beginPath(); ctx.moveTo(px-20,py+i); ctx.lineTo(px+20,py+i);
     ctx.strokeStyle=col.replace('0.7','0.04').replace('0.75','0.04');
     ctx.lineWidth=0.5; ctx.stroke();
   }
-
   const lw=Math.sin(walkA)*10;
   ctx.strokeStyle=col; ctx.lineCap='round';
-
-  // Legs
   ctx.lineWidth=6;
   ctx.beginPath(); ctx.moveTo(px-5,py+14); ctx.lineTo(px-5+lw,py+36); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(px+5,py+14); ctx.lineTo(px+5-lw,py+36); ctx.stroke();
-  // Arms
   ctx.lineWidth=5;
   ctx.beginPath(); ctx.moveTo(px-10,py-6); ctx.lineTo(px-16-lw*.6,py+10); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(px+10,py-6); ctx.lineTo(px+16+lw*.6,py+10); ctx.stroke();
-  // Body
   drawRoundRect(px-11,py-16,22,30,4,col,wireCol,0.6);
-  // Head
   ctx.beginPath(); ctx.arc(px,py-28,12,0,Math.PI*2);
   ctx.fillStyle=col; ctx.fill();
   ctx.strokeStyle=wireCol; ctx.lineWidth=0.8; ctx.stroke();
-  // Eyes
   ctx.beginPath(); ctx.ellipse(px-5,py-30,2.5,2,0,0,Math.PI*2);
   ctx.beginPath(); ctx.ellipse(px+5,py-30,2.5,2,0,0,Math.PI*2);
   ctx.fillStyle='rgba(0,0,0,0.8)'; ctx.fill();
-
-  // Breath vapor emission
   if(scenario!=='normal' || Math.random()<.02){
     const rate = scenario==='alcohol'?.18:scenario==='sanitizer'?.08:.01;
     if(Math.random()<rate) spawnVapor(px, py-38);
   }
 }
 
-// ══════════════════════════════════════════════
-// DATA PACKETS (generic)
-// ══════════════════════════════════════════════
 function spawnPacket(x1,y1,x2,y2,col) {
   dataPackets.push({x:x1,y:y1,tx:x1,ty:y1,dx:x2,dy:y2,t:0,color:col,active:true});
 }
-
 function updatePackets(dt) {
   for(let i=dataPackets.length-1;i>=0;i--){
     const p=dataPackets[i];
     p.t+=dt*1.2;
-    const tp=Math.min(1,p.t);
     p.tx=p.x; p.ty=p.y;
     p.x=p.x+(p.dx-p.x)*dt*2;
     p.y=p.y+(p.dy-p.y)*dt*2;
     if(p.t>1.5) dataPackets.splice(i,1);
   }
 }
-
 function drawPackets() {
   dataPackets.forEach(p=>{
     const a=Math.max(0,1-p.t/1.5);
@@ -749,37 +1051,41 @@ function drawPackets() {
   });
 }
 
-// ══════════════════════════════════════════════
-// VERDICT DISPLAY
-// ══════════════════════════════════════════════
 let verdictAnim = 0;
 let lastVerdict = '';
 function showVerdict() {
-  const vEl = document.getElementById('verdict-overlay');
-  const vt = document.getElementById('verdict-text');
-  const vs = document.getElementById('verdict-sub');
-  const cb = document.getElementById('classification-bar');
+  const vEl = document.getElementById('cin-verdict');
+  const vt = document.getElementById('cin-verdict-text');
+  const vs = document.getElementById('cin-verdict-sub');
+  const cb = document.getElementById('cin-class-bar');
   const hs = document.getElementById('h-status');
   const hc = document.getElementById('h-class');
-
+  const hudS = document.getElementById('hud-status');
+  const hudC = document.getElementById('hud-class');
   if(scenario==='alcohol'){
     vt.textContent='DETECTED'; vt.style.color='#ff3355';
     vs.textContent='ALCOHOL EVENT · CLASS 1 · 94.1% CONFIDENCE';
     cb.style.background='rgba(255,51,85,0.4)';
-    hs.textContent='ALERT'; hs.style.color='#ff3355';
-    hc.textContent='1 — ALCOHOL'; hc.style.color='#ff3355';
+    hs.textContent='ALERT'; hs.className='ch-red';
+    hc.textContent='1 — ALCOHOL'; hc.className='ch-red';
+    hudS.className='cin-badge red'; hudS.textContent='⚠ ALCOHOL DETECTED';
+    hudC.className='cin-badge red'; hudC.textContent='CLASS: 1 — DETECTED';
   } else if(scenario==='sanitizer'){
     vt.textContent='SANITIZER'; vt.style.color='#ffaa00';
     vs.textContent='NON-ALCOHOL VAPOR · CLASS 2 · 91.8% CONFIDENCE';
     cb.style.background='rgba(255,170,0,0.3)';
-    hs.textContent='NOTICE'; hs.style.color='#ffaa00';
-    hc.textContent='2 — SANITIZER'; hc.style.color='#ffaa00';
+    hs.textContent='NOTICE'; hs.className='ch-amb';
+    hc.textContent='2 — SANITIZER'; hc.className='ch-amb';
+    hudS.className='cin-badge amb'; hudS.textContent='SANITIZER DETECTED';
+    hudC.className='cin-badge amb'; hudC.textContent='CLASS: 2 — SANITIZER';
   } else {
     vt.textContent='CLEAR'; vt.style.color='#00ff88';
     vs.textContent='ENVIRONMENT CLEAR · CLASS 0 · 97.2% CONFIDENCE';
     cb.style.background='rgba(0,255,136,0.15)';
-    hs.textContent='ACTIVE'; hs.style.color='#00ff88';
-    hc.textContent='0 — CLEAR'; hc.style.color='#00ff88';
+    hs.textContent='ACTIVE'; hs.className='ch-acc';
+    hc.textContent='0 — CLEAR'; hc.className='ch-acc';
+    hudS.className='cin-badge'; hudS.textContent='SYSTEM ACTIVE';
+    hudC.className='cin-badge'; hudC.textContent='CLASS: 0 — CLEAR';
   }
   vEl.style.opacity='1';
   verdictAnim=1;
@@ -789,18 +1095,16 @@ function showVerdict() {
   }
 }
 
-// ══════════════════════════════════════════════
-// MAIN LOOP
-// ══════════════════════════════════════════════
 let lastT = performance.now();
 let activityLevels = {cctv:0, sensors:0, esp:0, wifi:0, pi:0, db:0};
+let simPaused = false;
 
 function mainLoop(now) {
   requestAnimationFrame(mainLoop);
+  if(simPaused) return;
   const dt = Math.min((now-lastT)*.001, .05);
   lastT=now; t+=dt; frame++;
 
-  // Update uptime
   if(frame%60===0){
     const el=Math.floor((Date.now()-startTime)/1000);
     const hh=String(Math.floor(el/3600)).padStart(2,'0');
@@ -812,7 +1116,6 @@ function mainLoop(now) {
 
   const l = L();
 
-  // Person movement
   personX += 1.4;
   if(personX > W+60) personX=-60;
   personWalk += dt*4;
@@ -820,7 +1123,6 @@ function mainLoop(now) {
   faceLockAnim += (personDetected ? 1 : -1) * dt * 3;
   faceLockAnim = Math.max(0,Math.min(1,faceLockAnim));
 
-  // Sensor readings
   const proximity = Math.max(0, 1-(Math.abs(personX-l.doorX))/(W*.35));
   const base=.05+Math.sin(t*.2)*.01;
   if(scenario==='alcohol'){
@@ -838,7 +1140,6 @@ function mainLoop(now) {
   sActivation[1]+=(Math.min(1,sReadings[1]*2)-sActivation[1])*dt*3;
   sActivation[2]+=(Math.min(1,sReadings[2]*2)-sActivation[2])*dt*3;
 
-  // Activity levels
   activityLevels.cctv+=(personDetected?1:.2-activityLevels.cctv)*dt*2;
   const maxS=Math.max(...sReadings);
   activityLevels.sensors+=(Math.min(1,maxS*1.5)-activityLevels.sensors)*dt*2;
@@ -847,10 +1148,6 @@ function mainLoop(now) {
   activityLevels.pi+=(activityLevels.wifi*.9-activityLevels.pi)*dt*1;
   activityLevels.db+=(activityLevels.pi*.85-activityLevels.db)*dt*.8;
 
-  phaseProgress = (activityLevels.cctv+activityLevels.sensors+activityLevels.esp+activityLevels.wifi+activityLevels.pi+activityLevels.db)/6;
-  document.getElementById('phase-fill').style.width=(phaseProgress*100)+'%';
-
-  // Spawn data packets
   if(frame%45===0 && activityLevels.sensors>.2){
     spawnPacket(l.s1.x,l.s1.y,l.esp.x,l.esp.y,'rgba(0,255,136,0.9)');
     spawnPacket(l.s2.x,l.s2.y,l.esp.x,l.esp.y,'rgba(0,255,136,0.9)');
@@ -864,69 +1161,42 @@ function mainLoop(now) {
   updateVapor(dt);
   updatePackets(dt);
 
-  // ─── DRAW ───────────────────────────────────────
-  // Background
   if(frame%4===0) drawBackground();
+  ctx.clearRect(0,0,W,SH);
 
-  ctx.clearRect(0,0,W,H);
-
-  // Atmosphere glow based on scenario
   if(scenario==='alcohol'){
-    glowHex(l.doorX,l.personY,H*.4,'#ff3355',0.04*activityLevels.sensors);
+    glowHex(l.doorX,l.personY,SH*.4,'#ff3355',0.04*activityLevels.sensors);
   } else if(scenario==='sanitizer'){
-    glowHex(l.doorX,l.personY,H*.3,'#0088ff',0.04*activityLevels.sensors);
+    glowHex(l.doorX,l.personY,SH*.3,'#0088ff',0.04*activityLevels.sensors);
   }
 
-  // Draw wires (sensor → esp)
   drawGlowWire(l.s1.x,l.s1.y,l.esp.x,l.esp.y,'rgb(0,255,136)',sActivation[0]*.8,0);
   drawGlowWire(l.s2.x,l.s2.y,l.esp.x,l.esp.y,'rgb(0,255,136)',sActivation[1]*.8,0.33);
   drawGlowWire(l.s3.x,l.s3.y,l.esp.x,l.esp.y,'rgb(0,255,136)',sActivation[2]*.8,0.66);
-
-  // Camera to Pi wire
   drawGlowWire(l.cctv.x,l.cctv.y,l.pi.x,l.pi.y,'rgb(0,136,255)',activityLevels.cctv*.4,0.2);
-
-  // Pi to DB/Dash
   drawGlowWire(l.pi.x,l.pi.y,l.db.x,l.db.y,'rgb(0,170,255)',activityLevels.db*.6,0);
   drawGlowWire(l.pi.x,l.pi.y,l.dash.x,l.dash.y,'rgb(0,170,255)',activityLevels.db*.6,0.5);
 
-  // WiFi arcs ESP → Pi
   drawWiFiArcs(l.esp.x,l.esp.y,l.pi.x,l.pi.y,activityLevels.wifi);
-
-  // Vapor
   drawVapor();
-
-  // Person
   drawPerson(personX, l.personY);
-
-  // CCTV
   drawCCTV(l.cctv.x, l.cctv.y, t);
 
-  // Door frame
   ctx.strokeStyle='rgba(0,255,136,0.12)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
-  ctx.beginPath(); ctx.moveTo(l.doorX-30,0); ctx.lineTo(l.doorX-30,H); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(l.doorX+30,0); ctx.lineTo(l.doorX+30,H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(l.doorX-30,0); ctx.lineTo(l.doorX-30,SH); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(l.doorX+30,0); ctx.lineTo(l.doorX+30,SH); ctx.stroke();
   ctx.setLineDash([]);
-  label('ENTRY ZONE', l.doorX, H*.08, 'rgba(0,255,136,0.2)', 9, 'center');
+  label('ENTRY ZONE', l.doorX, SH*.08, 'rgba(0,255,136,0.2)', 9, 'center');
 
-  // Sensors
   drawSensor(l.s1.x,l.s1.y,0,sReadings[0],sActivation[0]);
   drawSensor(l.s2.x,l.s2.y,1,sReadings[1],sActivation[1]);
   drawSensor(l.s3.x,l.s3.y,2,sReadings[2],sActivation[2]);
-
-  // ESP32
   drawESP32(l.esp.x,l.esp.y,activityLevels.esp);
-
-  // Pi
   drawRPi(l.pi.x,l.pi.y,activityLevels.pi);
-
-  // DB + Dash
   drawDB(l.db.x,l.db.y,activityLevels.db);
   drawDash(l.dash.x,l.dash.y,activityLevels.db);
-
-  // Data packets (top layer)
   drawPackets();
 
-  // HUD updates
   if(frame%6===0){
     document.getElementById('h-s1').textContent=sReadings[0].toFixed(3);
     document.getElementById('h-s2').textContent=sReadings[1].toFixed(3);
@@ -937,47 +1207,129 @@ function mainLoop(now) {
     document.getElementById('h-s1').style.color=col;
     document.getElementById('h-s2').style.color=sReadings[1]>.5?'#ff3355':col;
     document.getElementById('h-s3').style.color=col;
+    document.getElementById('hm-avg').textContent=(sReadings.reduce((a,b)=>a+b,0)/3).toFixed(3);
+    document.getElementById('hm-peak').textContent=maxS.toFixed(3);
+    const variance=sReadings.map(r=>(r-sReadings[0])*(r-sReadings[0])).reduce((a,b)=>a+b,0)/3;
+    document.getElementById('hm-var').textContent=variance.toFixed(4);
+    const hmAvg=document.getElementById('hm-avg');
+    const hmPeak=document.getElementById('hm-peak');
+    if(scenario==='alcohol'){hmAvg.className='hm-val red';hmPeak.className='hm-val red';}
+    else if(scenario==='sanitizer'){hmAvg.className='hm-val amber';hmPeak.className='hm-val amber';}
+    else{hmAvg.className='hm-val';hmPeak.className='hm-val';}
   }
 
-  // Verdict flash on scenario change
   if(frame%180===0) showVerdict();
 }
 
 requestAnimationFrame(mainLoop);
 
-// ══════════════════════════════════════════════
-// SCENARIO CONTROL
-// ══════════════════════════════════════════════
 window.setScenario = function(s) {
   scenario=s;
   document.querySelectorAll('.sc-btn').forEach(b=>b.classList.remove('act'));
-  event.target.classList.add('act');
+  document.getElementById('sc-'+s).classList.add('act');
   showVerdict();
-  // Auto-rotate
   clearTimeout(window._autoRotate);
 };
 
-// Auto demo cycle
+window.togglePause = function() {
+  simPaused=!simPaused;
+  document.getElementById('sc-pause').textContent=simPaused?'▶ RESUME':'⏸ PAUSE';
+};
+
 let demoStep=0;
 const demoSeq=['normal','alcohol','sanitizer','normal'];
 function runDemo(){
-  setScenarioAuto(demoSeq[demoStep%demoSeq.length]);
-  demoStep++;
-  window._autoRotate=setTimeout(runDemo, 6000);
-}
-function setScenarioAuto(s){
+  const s=demoSeq[demoStep%demoSeq.length]; demoStep++;
   scenario=s;
   document.querySelectorAll('.sc-btn').forEach(b=>b.classList.remove('act'));
-  document.querySelectorAll('.sc-btn').forEach(b=>{
-    if(b.textContent.toLowerCase().includes(s.slice(0,4))) b.classList.add('act');
-  });
+  document.getElementById('sc-'+s).classList.add('act');
   showVerdict();
+  window._autoRotate=setTimeout(runDemo,6000);
+}
+setTimeout(runDemo,1200);
+showVerdict();
+
+// ─── Flow step animation (original unchanged) ─────────────────────────────────
+let fs=0;
+setInterval(()=>{
+  document.querySelectorAll('.flow-node').forEach(n=>n.classList.remove('lit'));
+  document.getElementById('fn'+fs).classList.add('lit');
+  fs=(fs+1)%5;
+},1100);
+
+// ─── Monitor & chart (original unchanged) ────────────────────────────────────
+const chartCanvas=document.getElementById('chart-canvas');
+const cc=chartCanvas.getContext('2d');
+chartCanvas.width=chartCanvas.offsetWidth||600; chartCanvas.height=140;
+
+let chartHist=Array(80).fill(.07);
+let monFrame=0;
+const evTypes=[
+  {class:0,msg:'Environment clear — baseline readings normal',badge:'pass',label:'CLEAR'},
+  {class:1,msg:'Breath alcohol pattern detected — Class 1 triggered',badge:'fail',label:'ALCOHOL'},
+  {class:2,msg:'Sanitizer vapor event detected — Class 2',badge:'warn',label:'SANITIZER'},
+];
+
+function addLog(ev){
+  const el=document.getElementById('event-log');
+  const t=new Date().toLocaleTimeString('en-US',{hour12:false});
+  const div=document.createElement('div'); div.className='log-row';
+  div.innerHTML=`<span class="lr-time">${t}</span><span class="lr-msg">${ev.msg}</span><span class="lr-badge bd-${ev.badge}">${ev.label}</span>`;
+  el.insertBefore(div,el.firstChild);
+  if(el.children.length>14)el.removeChild(el.lastChild);
 }
 
-// Start demo after a moment
-setTimeout(()=>{ document.querySelector('.sc-btn').textContent='SOBER'; runDemo(); }, 2000);
+function drawChart(){
+  const w=chartCanvas.offsetWidth||600,h=140;
+  if(chartCanvas.width!==w){chartCanvas.width=w;}
+  cc.clearRect(0,0,w,h);
+  cc.strokeStyle='rgba(0,255,136,.05)'; cc.lineWidth=1;
+  for(let i=0;i<=3;i++){const y=(h/3)*i;cc.beginPath();cc.moveTo(0,y);cc.lineTo(w,y);cc.stroke();}
+  cc.strokeStyle='rgba(255,51,85,.2)'; cc.setLineDash([4,4]);
+  cc.beginPath();cc.moveTo(0,h-h*.85*.7);cc.lineTo(w,h-h*.85*.7);cc.stroke();
+  cc.setLineDash([]);
+  const grad=cc.createLinearGradient(0,0,0,h);
+  grad.addColorStop(0,'rgba(0,255,136,.2)'); grad.addColorStop(1,'rgba(0,255,136,0)');
+  cc.beginPath();
+  chartHist.forEach((v,i)=>{
+    const x=(i/(chartHist.length-1))*w, y=h-(v/1.0)*h*.85-8;
+    i===0?cc.moveTo(x,y):cc.lineTo(x,y);
+  });
+  cc.strokeStyle='#00ff88'; cc.lineWidth=1.5; cc.stroke();
+  cc.lineTo(w,h);cc.lineTo(0,h);cc.closePath();cc.fillStyle=grad;cc.fill();
+}
 
-showVerdict();
+function updateMonitor(){
+  monFrame++;
+  const cycle=Math.floor(monFrame/120)%3;
+  let s1,s2,s3,ev;
+  if(cycle===0){s1=.07+Math.random()*.04;s2=.06+Math.random()*.04;s3=.07+Math.random()*.04;ev=evTypes[0];}
+  else if(cycle===1){const w=Math.max(0,Math.sin((monFrame%120)/120*Math.PI));s1=.08+w*.5;s2=.09+w*.7;s3=.08+w*.5;ev=evTypes[1];}
+  else{s1=.07+Math.random()*.04;s2=.82+Math.random()*.12;s3=.07+Math.random()*.04;ev=evTypes[2];}
+  const max=Math.max(s1,s2,s3);
+  [[s1,'m-s1','m-v1'],[s2,'m-s2','m-v2'],[s3,'m-s3','m-v3']].forEach(([v,bid,vid])=>{
+    document.getElementById(bid).style.width=(v*100)+'%';
+    document.getElementById(bid).style.background=v>.5?'#ff3355':v>.3?'#ffaa00':'#00ff88';
+    document.getElementById(vid).textContent=v.toFixed(3);
+    document.getElementById(vid).style.color=v>.5?'#ff3355':v>.3?'#ffaa00':'#00ff88';
+  });
+  const ear=.27+Math.sin(monFrame*.08)*.03;
+  document.getElementById('m-sear').style.width=(ear*100)+'%';document.getElementById('m-vear').textContent=ear.toFixed(3);
+  const temp=27.3+Math.sin(monFrame*.02)*.3;
+  document.getElementById('m-stemp').style.width=((temp-20)/15*100)+'%';document.getElementById('m-vtemp').textContent=temp.toFixed(1)+'°C';
+  const vr=document.getElementById('v-result');
+  if(cycle===0){vr.textContent='CLEAR';vr.style.color='#00ff88';document.getElementById('v-icon').textContent='✅';document.getElementById('v-conf').textContent='97.2%';}
+  else if(cycle===1){vr.textContent='DETECTED';vr.style.color='#ff3355';document.getElementById('v-icon').textContent='🚨';document.getElementById('v-conf').textContent='94.1%';}
+  else{vr.textContent='SANITIZER';vr.style.color='#ffaa00';document.getElementById('v-icon').textContent='🧴';document.getElementById('v-conf').textContent='91.8%';}
+  chartHist.push(max); if(chartHist.length>80)chartHist.shift();
+  drawChart();
+  if(monFrame%120===60)addLog(ev);
+}
+
+setTimeout(()=>addLog(evTypes[0]),400);
+setTimeout(()=>addLog(evTypes[1]),1100);
+setTimeout(()=>addLog(evTypes[2]),1900);
+setInterval(updateMonitor,120);
 </script>
 </body>
 </html>
