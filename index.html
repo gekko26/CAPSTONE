@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AlcoDetect — Cinematic System Animation</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;background:#020a05;overflow:hidden;font-family:'Syne',sans-serif;}
+canvas{display:block;position:absolute;top:0;left:0;}
+#hud{position:fixed;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:10;}
+.hud-corner{position:absolute;font-family:'Space Mono',monospace;font-size:10px;color:rgba(0,255,136,0.6);letter-spacing:.12em;text-transform:uppercase;line-height:1.8;}
+#hud-tl{top:20px;left:24px;}
+#hud-tr{top:20px;right:24px;text-align:right;}
+#hud-bl{bottom:20px;left:24px;}
+#hud-br{bottom:20px;right:24px;text-align:right;}
+.hud-accent{color:#00ff88;}
+.hud-red{color:#ff3355;}
+.hud-amber{color:#ffaa00;}
+.hud-blue{color:#00aaff;}
+
+#phase-bar{
+  position:fixed;bottom:0;left:0;right:0;height:4px;
+  background:rgba(0,255,136,0.08);z-index:20;
+}
+#phase-fill{height:100%;background:linear-gradient(90deg,#00ff88,#00aaff);width:0%;transition:width .3s;}
+
+#scenario-btns{
+  position:fixed;bottom:28px;left:50%;transform:translateX(-50%);
+  display:flex;gap:8px;z-index:20;pointer-events:all;
+}
+.sc-btn{
+  background:rgba(2,10,5,.88);border:1px solid rgba(0,255,136,0.2);
+  color:rgba(0,255,136,0.6);padding:7px 16px;
+  font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+  cursor:pointer;transition:all .2s;
+}
+.sc-btn:hover,.sc-btn.act{color:#00ff88;border-color:rgba(0,255,136,0.5);background:rgba(0,255,136,0.08);}
+
+#verdict-overlay{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  text-align:center;pointer-events:none;z-index:15;opacity:0;transition:opacity .5s;
+}
+#verdict-text{font-family:'Syne',sans-serif;font-size:clamp(48px,7vw,96px);font-weight:800;letter-spacing:-.04em;line-height:1;}
+#verdict-sub{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:.2em;margin-top:10px;opacity:.7;}
+
+#classification-bar{
+  position:fixed;top:0;left:0;right:0;height:3px;background:transparent;z-index:20;
+  transition:background .5s;
+}
+
+.scanline{position:fixed;left:0;right:0;height:2px;background:linear-gradient(transparent,rgba(0,255,136,0.06),transparent);pointer-events:none;z-index:1000;animation:scan 12s linear infinite;}
+@keyframes scan{0%{top:-2px}100%{top:100%}}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<canvas id="main"></canvas>
+<div class="scanline"></div>
+
+<div id="hud">
+  <div class="hud-corner" id="hud-tl">
+    <div>AlcoDetect <span class="hud-accent">v2.4.1</span></div>
+    <div>System: <span class="hud-accent" id="h-status">ACTIVE</span></div>
+    <div>Uptime: <span id="h-uptime">00:00:00</span></div>
+  </div>
+  <div class="hud-corner" id="hud-tr">
+    <div>Model: <span class="hud-accent">RF + XGBoost</span></div>
+    <div>Accuracy: <span class="hud-accent">97.2%</span></div>
+    <div>Latency: <span id="h-latency">342ms</span></div>
+  </div>
+  <div class="hud-corner" id="hud-bl">
+    <div>MQ3-1: <span id="h-s1" class="hud-accent">0.062</span></div>
+    <div>MQ3-2: <span id="h-s2" class="hud-accent">0.047</span></div>
+    <div>MQ3-3: <span id="h-s3" class="hud-accent">0.058</span></div>
+  </div>
+  <div class="hud-corner" id="hud-br">
+    <div>EAR: <span id="h-ear" class="hud-accent">0.281</span></div>
+    <div>Temp: <span id="h-temp" class="hud-accent">27.4°C</span></div>
+    <div>Class: <span id="h-class" class="hud-accent">0 — CLEAR</span></div>
+  </div>
+</div>
+
+<div id="classification-bar"></div>
+<div id="phase-bar"><div id="phase-fill"></div></div>
+
+<div id="verdict-overlay">
+  <div id="verdict-text">CLEAR</div>
+  <div id="verdict-sub">CLASSIFICATION COMPLETE · 97.2% CONFIDENCE</div>
+</div>
+
+<div id="scenario-btns">
+  <button class="sc-btn act" onclick="setScenario('normal')">SOBER</button>
+  <button class="sc-btn" onclick="setScenario('alcohol')">ALCOHOL</button>
+  <button class="sc-btn" onclick="setScenario('sanitizer')">SANITIZER</button>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════
+let scenario = 'normal';
+let W, H;
+let t = 0;
+let startTime = Date.now();
+let frame = 0;
+
+const bgCanvas = document.getElementById('bg');
+const bgCtx = bgCanvas.getContext('2d');
+const canvas = document.getElementById('main');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  bgCanvas.width = canvas.width = W;
+  bgCanvas.height = canvas.height = H;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ═══════════════════════════════════════════════
+// LAYOUT — all positions relative to W,H
+// ═══════════════════════════════════════════════
+function L() {
+  const cx = W * 0.5, cy = H * 0.5;
+  return {
+    // Person walks from left to right
+    personY: cy * 0.9,
+    doorX: W * 0.38,
+
+    // CCTV above entrance
+    cctv: { x: W * 0.38, y: H * 0.12 },
+
+    // Sensor array
+    s1: { x: W * 0.50, y: cy * 0.75 },
+    s2: { x: W * 0.50, y: cy * 0.92 },
+    s3: { x: W * 0.50, y: cy * 1.09 },
+
+    // ESP32
+    esp: { x: W * 0.64, y: cy * 0.92 },
+
+    // Raspberry Pi
+    pi: { x: W * 0.80, y: cy * 0.82 },
+
+    // DB / Dashboard
+    db: { x: W * 0.80, y: cy * 1.06 },
+    dash: { x: W * 0.92, y: cy * 0.82 },
+  };
+}
+
+// ═══════════════════════════════════════════════
+// PARTICLES
+// ═══════════════════════════════════════════════
+const vaporPool = Array.from({length:200}, () => ({active:false,x:0,y:0,vx:0,vy:0,life:0,maxLife:1,r:2,alpha:0}));
+const dataPackets = [];
+const wifiArcs = [];
+const bgParticles = Array.from({length:400}, () => ({
+  x: Math.random()*2000-1000, y: Math.random()*1200-600,
+  vx:(Math.random()-.5)*.15, vy:(Math.random()-.5)*.15,
+}));
+const neuralNodes = [];
+const neuralEdges = [];
+
+// Build neural net overlay for Pi
+(function buildNN(){
+  const layers = [3,5,4,3];
+  let lid=0;
+  layers.forEach((count, li) => {
+    const xs = 0.78*1 + li*0.04;
+    for(let i=0;i<count;i++){
+      neuralNodes.push({li, ni:i, count, xs, ys: (i+1)/(count+1), phase: Math.random()*Math.PI*2});
+    }
+    lid++;
+  });
+  for(let a=0;a<neuralNodes.length;a++){
+    for(let b=0;b<neuralNodes.length;b++){
+      if(neuralNodes[b].li === neuralNodes[a].li+1){
+        if(Math.random()<0.7) neuralEdges.push({a,b,phase:Math.random()*Math.PI*2});
+      }
+    }
+  }
+})();
+
+// ═══════════════════════════════════════════════
+// PERSON STATE
+// ═══════════════════════════════════════════════
+let personX = -80;
+let personWalk = 0;
+let personDetected = false;
+let faceLockAnim = 0;
+
+// ═══════════════════════════════════════════════
+// SENSOR READINGS
+// ═══════════════════════════════════════════════
+let sReadings = [.06,.05,.06];
+let sActivation = [0,0,0]; // animated activation 0..1
+
+// ═══════════════════════════════════════════════
+// PHASE SYSTEM
+// ═══════════════════════════════════════════════
+// phases animate sequentially then hold, controlled by scenario
+let phaseProgress = 0; // 0..1 across all phases
+
+// ═══════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════
+function lerpColor(a, b, t) {
+  const ah = a.replace('#',''); const bh = b.replace('#','');
+  const ar=parseInt(ah.slice(0,2),16), ag=parseInt(ah.slice(2,4),16), ab=parseInt(ah.slice(4,6),16);
+  const br=parseInt(bh.slice(0,2),16), bg=parseInt(bh.slice(2,4),16), bb=parseInt(bh.slice(4,6),16);
+  return `rgb(${Math.round(ar+(br-ar)*t)},${Math.round(ag+(bg-ag)*t)},${Math.round(ab+(bb-ab)*t)})`;
+}
+
+function ease(x){ return x<0.5?2*x*x:1-Math.pow(-2*x+2,2)/2; }
+
+function glow(x,y,r,col,alpha){
+  const g=ctx.createRadialGradient(x,y,0,x,y,r);
+  g.addColorStop(0,col.replace('rgb','rgba').replace(')',`,${alpha})`).replace(/rgba\(rgba/,'rgba'));
+  g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+}
+
+function glowHex(x,y,r,hex,alpha){
+  const c=hex.replace('#','');
+  const cr=parseInt(c.slice(0,2),16), cg=parseInt(c.slice(2,4),16), cb=parseInt(c.slice(4,6),16);
+  const g=ctx.createRadialGradient(x,y,0,x,y,r);
+  g.addColorStop(0,`rgba(${cr},${cg},${cb},${alpha})`);
+  g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+}
+
+function drawRoundRect(x,y,w,h,r,fill,stroke,sw){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y);
+  ctx.arcTo(x+w,y,x+w,y+r,r); ctx.lineTo(x+w,y+h-r);
+  ctx.arcTo(x+w,y+h,x+w-r,y+h,r); ctx.lineTo(x+r,y+h);
+  ctx.arcTo(x,y+h,x,y+h-r,r); ctx.lineTo(x,y+r);
+  ctx.arcTo(x,y,x+r,y,r); ctx.closePath();
+  if(fill){ctx.fillStyle=fill;ctx.fill();}
+  if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=sw||1;ctx.stroke();}
+}
+
+function label(txt, x, y, col, size, align){
+  ctx.fillStyle=col||'#00ff88';
+  ctx.font=`${size||9}px 'Space Mono',monospace`;
+  ctx.textAlign=align||'center';
+  ctx.fillText(txt,x,y);
+}
+
+// ═══════════════════════════════════════════════
+// BACKGROUND CANVAS (grid, particles)
+// ═══════════════════════════════════════════════
+function drawBackground() {
+  bgCtx.clearRect(0,0,W,H);
+  bgCtx.fillStyle='#020a05'; bgCtx.fillRect(0,0,W,H);
+
+  // Grid
+  bgCtx.strokeStyle='rgba(0,255,136,0.025)'; bgCtx.lineWidth=0.5;
+  const gs=50;
+  for(let x=0;x<W;x+=gs){bgCtx.beginPath();bgCtx.moveTo(x,0);bgCtx.lineTo(x,H);bgCtx.stroke();}
+  for(let y=0;y<H;y+=gs){bgCtx.beginPath();bgCtx.moveTo(0,y);bgCtx.lineTo(W,y);bgCtx.stroke();}
+
+  // Vignette
+  const vg=bgCtx.createRadialGradient(W/2,H/2,H*.1,W/2,H/2,H*.85);
+  vg.addColorStop(0,'rgba(0,0,0,0)');
+  vg.addColorStop(1,'rgba(2,10,5,0.7)');
+  bgCtx.fillStyle=vg; bgCtx.fillRect(0,0,W,H);
+
+  // BG particles
+  bgCtx.fillStyle='rgba(0,255,136,0.35)';
+  bgParticles.forEach(p=>{
+    p.x+=p.vx; p.y+=p.vy;
+    if(p.x>W*.6)p.x=-W*.6; if(p.x<-W*.6)p.x=W*.6;
+    if(p.y>H*.7)p.y=-H*.7; if(p.y<-H*.7)p.y=H*.7;
+    bgCtx.beginPath(); bgCtx.arc(W/2+p.x,H/2+p.y,1,0,Math.PI*2); bgCtx.fill();
+  });
+}
+
+// ═══════════════════════════════════════════════
+// COMPONENT DRAWS
+// ═══════════════════════════════════════════════
+
+// ── CCTV Camera ──
+function drawCCTV(cx, cy, scanAngle) {
+  const detected = personDetected;
+  const col = detected ? '#00aaff' : 'rgba(0,136,255,0.6)';
+
+  // Scanning cone
+  const coneAngle = Math.PI/5;
+  const baseAngle = Math.PI/2 + Math.sin(scanAngle * 0.5) * 0.4;
+  ctx.save();
+  const grad = ctx.createConicalGradient ? null : null;
+  // Simple cone as filled triangle with gradient
+  const coneLen = H * 0.55;
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.lineTo(cx + Math.cos(baseAngle-coneAngle)*coneLen, cy + Math.sin(baseAngle-coneAngle)*coneLen);
+  ctx.lineTo(cx + Math.cos(baseAngle+coneAngle)*coneLen, cy + Math.sin(baseAngle+coneAngle)*coneLen);
+  ctx.closePath();
+  const coneGrad = ctx.createLinearGradient(cx,cy,cx+Math.cos(baseAngle)*coneLen,cy+Math.sin(baseAngle)*coneLen);
+  coneGrad.addColorStop(0,'rgba(0,136,255,0.18)');
+  coneGrad.addColorStop(0.5,'rgba(0,136,255,0.06)');
+  coneGrad.addColorStop(1,'rgba(0,136,255,0)');
+  ctx.fillStyle=coneGrad; ctx.fill();
+
+  // Scan sweep line
+  const sweepA = baseAngle + Math.sin(t*1.5)*coneAngle*.8;
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.lineTo(cx+Math.cos(sweepA)*coneLen*0.8, cy+Math.sin(sweepA)*coneLen*0.8);
+  ctx.strokeStyle='rgba(0,200,255,0.25)'; ctx.lineWidth=1; ctx.stroke();
+  ctx.restore();
+
+  // Glow when detected
+  if(detected){
+    glowHex(cx,cy,60,'#0088ff',0.15*faceLockAnim);
+    // Tracking rings
+    for(let r=1;r<=3;r++){
+      ctx.beginPath(); ctx.arc(cx,cy,r*12,0,Math.PI*2);
+      ctx.strokeStyle=`rgba(0,170,255,${0.15/r})`; ctx.lineWidth=1; ctx.stroke();
+    }
+  }
+
+  // Mount pole
+  ctx.strokeStyle='rgba(80,80,80,0.8)'; ctx.lineWidth=3; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx,cy-30); ctx.stroke();
+  ctx.strokeStyle='rgba(120,120,120,0.5)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(cx-15,cy-30); ctx.lineTo(cx+15,cy-30); ctx.stroke();
+
+  // Body
+  ctx.save(); ctx.translate(cx,cy);
+  ctx.rotate(Math.sin(scanAngle*.5)*0.2);
+  drawRoundRect(-12,-8,24,16,4,'#111111','rgba(0,136,255,0.4)',0.8);
+  // Lens
+  ctx.beginPath(); ctx.arc(10,0,5,0,Math.PI*2);
+  ctx.fillStyle='#001133'; ctx.fill();
+  ctx.beginPath(); ctx.arc(10,0,3,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,68,255,0.8)'; ctx.fill();
+  // Activity LED
+  const ledA = detected ? 1 : 0.4+0.3*Math.sin(t*3);
+  ctx.beginPath(); ctx.arc(-8,-4,2.5,0,Math.PI*2);
+  ctx.fillStyle=`rgba(0,255,136,${ledA})`; ctx.fill();
+  ctx.restore();
+
+  // Face lock reticle
+  if(detected && faceLockAnim > 0.1) {
+    const px = personX, py = L().personY - 36;
+    const a = faceLockAnim;
+    const rs = 24;
+    ctx.strokeStyle=`rgba(0,255,136,${a*0.9})`; ctx.lineWidth=1.5;
+    // Corners
+    const corners=[[-1,-1],[1,-1],[1,1],[-1,1]];
+    corners.forEach(([sx,sy])=>{
+      ctx.beginPath();
+      ctx.moveTo(px+sx*rs, py+sy*(rs-rs*.4));
+      ctx.lineTo(px+sx*rs, py+sy*rs);
+      ctx.lineTo(px+(sx-sx*.4)*rs, py+sy*rs);
+      ctx.stroke();
+    });
+    // Center crosshair
+    ctx.strokeStyle=`rgba(0,255,136,${a*0.4})`; ctx.lineWidth=0.5;
+    ctx.beginPath(); ctx.moveTo(px-rs*.3,py); ctx.lineTo(px+rs*.3,py); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px,py-rs*.3); ctx.lineTo(px,py+rs*.3); ctx.stroke();
+    // HUD label
+    label('LOCKED · EAR ACTIVE', px, py-rs-8, `rgba(0,255,136,${a*0.8})`, 8, 'center');
+  }
+
+  label('TAPO C200', cx, cy-38, 'rgba(0,136,255,0.5)', 7, 'center');
+}
+
+// ── MQ-3 Sensor ──
+function drawSensor(x, y, idx, reading, activation) {
+  const col = reading > .45 ? '#ff3355' : reading > .25 ? '#ffaa00' : '#00ff88';
+  const hexCol = reading > .45 ? 'ff3355' : reading > .25 ? 'ffaa00' : '00ff88';
+  const cr=parseInt(hexCol.slice(0,2),16), cg=parseInt(hexCol.slice(2,4),16), cb=parseInt(hexCol.slice(4,6),16);
+
+  // Glow rings — reactive
+  if(activation > 0.05) {
+    for(let r=1;r<=4;r++){
+      const rr = r*14*activation;
+      const pulse = 0.5+0.5*Math.sin(t*3-r*.8);
+      ctx.beginPath(); ctx.arc(x,y,rr,0,Math.PI*2);
+      ctx.strokeStyle=`rgba(${cr},${cg},${cb},${0.2*activation/r})`; ctx.lineWidth=1; ctx.stroke();
+    }
+    // Radar sweep
+    ctx.save(); ctx.translate(x,y);
+    ctx.rotate(t*1.5*(1+activation));
+    const radarGrad=ctx.createConicalGradient?null:null;
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.arc(0,0,30*activation,0,Math.PI*.6);
+    ctx.closePath();
+    ctx.fillStyle=`rgba(${cr},${cg},${cb},${0.1*activation})`; ctx.fill();
+    ctx.restore();
+  }
+
+  // PCB board
+  drawRoundRect(x-14,y-12,28,24,3,'#0a1f0a',col,0.5);
+  // Sensor dome
+  ctx.beginPath(); ctx.arc(x,y,9,0,Math.PI*2);
+  ctx.fillStyle=`rgba(${cr},${cg},${cb},${0.2+activation*.5})`; ctx.fill();
+  ctx.beginPath(); ctx.arc(x,y,9,0,Math.PI*2);
+  ctx.strokeStyle=col; ctx.lineWidth=0.8; ctx.stroke();
+  // Inner LED
+  ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2);
+  const pulse=0.6+0.4*Math.sin(t*4+idx);
+  ctx.fillStyle=`rgba(${cr},${cg},${cb},${activation>0.1?pulse:0.3})`; ctx.fill();
+
+  // Connecting pins
+  for(let p=0;p<3;p++){
+    ctx.beginPath();
+    ctx.moveTo(x-8+p*8, y+12); ctx.lineTo(x-8+p*8, y+18);
+    ctx.strokeStyle='rgba(180,180,100,0.5)'; ctx.lineWidth=1.5; ctx.stroke();
+  }
+
+  label(`MQ3-${idx+1}`, x, y-18, col, 7);
+  label(reading.toFixed(3), x, y+28, col, 7);
+
+  // Heat shimmer
+  if(activation>.3){
+    for(let i=0;i<3;i++){
+      const sx=x+(Math.random()-.5)*10, sy=y-10-Math.random()*20;
+      ctx.beginPath(); ctx.arc(sx,sy,1+Math.random(),0,Math.PI*2);
+      ctx.fillStyle=`rgba(${cr},${cg},${cb},${0.15*activation})`; ctx.fill();
+    }
+  }
+}
+
+// ── ESP32 ──
+function drawESP32(x, y, activity) {
+  const a = activity;
+  glowHex(x,y,50,'#00ff88',0.06*a);
+  drawRoundRect(x-26,y-18,52,36,4,'#0a2a1a','rgba(0,255,136,0.35)',0.8);
+  // Chip
+  drawRoundRect(x-12,y-10,24,20,2,'#1a4a2a');
+  // GPIO pins
+  for(let i=0;i<5;i++){
+    ctx.fillStyle=`rgba(200,180,50,0.6)`;
+    ctx.fillRect(x-26, y-14+i*6, 6, 3);
+    ctx.fillRect(x+20, y-14+i*6, 6, 3);
+  }
+  // Antenna
+  ctx.strokeStyle='rgba(160,160,120,0.8)'; ctx.lineWidth=2; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(x+26,y-12); ctx.lineTo(x+36,y-12);
+  ctx.lineTo(x+36,y+8); ctx.stroke();
+  // Activity LEDs
+  for(let i=0;i<4;i++){
+    const blink = a > 0.1 ? (Math.sin(t*8+i*1.5)>.2?1:0.2) : 0.2;
+    ctx.beginPath(); ctx.arc(x-8+i*5,y-6,2,0,Math.PI*2);
+    ctx.fillStyle=i%2===0?`rgba(0,255,136,${blink})`:`rgba(255,170,0,${blink*.7})`;
+    ctx.fill();
+  }
+  // Processing waveform
+  if(a>.1){
+    ctx.strokeStyle=`rgba(0,255,136,${a*.5})`; ctx.lineWidth=1;
+    ctx.beginPath();
+    for(let i=0;i<20;i++){
+      const wx=x-14+i*1.4, wy=y+3+Math.sin(t*10+i*.8)*3*a;
+      i===0?ctx.moveTo(wx,wy):ctx.lineTo(wx,wy);
+    }
+    ctx.stroke();
+  }
+  label('ESP32', x, y+26, 'rgba(0,255,136,0.55)', 7);
+}
+
+// ── Raspberry Pi ──
+function drawRPi(x, y, activity) {
+  const a = activity;
+  if(a>.1) glowHex(x,y,70,'#00ff88',0.08*a);
+  drawRoundRect(x-40,y-28,80,56,4,'#0d2010','rgba(0,255,136,0.4)',0.8);
+  // CPU
+  drawRoundRect(x-12,y-12,24,24,2,'#1a3a1a','rgba(0,255,136,0.2)',0.5);
+  label('BCM', x, y+3, 'rgba(0,255,136,0.5)', 6);
+  // GPIO header
+  for(let i=0;i<10;i++){
+    const gx=x-36+i*8, gy=y-22;
+    ctx.fillStyle='rgba(200,180,50,0.5)'; ctx.fillRect(gx,gy,5,5);
+  }
+  // USB ports
+  drawRoundRect(x+40,y-14,10,8,1,'#222');
+  drawRoundRect(x+40,y-2,10,8,1,'#222');
+  // Status LED
+  const led=a>.1?0.8+0.2*Math.sin(t*8):0.4;
+  ctx.beginPath(); ctx.arc(x+30,y-20,3.5,0,Math.PI*2);
+  ctx.fillStyle=`rgba(0,255,0,${led})`; ctx.fill();
+  ctx.beginPath(); ctx.arc(x+36,y-20,3.5,0,Math.PI*2);
+  ctx.fillStyle=`rgba(0,100,255,${led*.7})`; ctx.fill();
+
+  // Neural net overlay (AI inference visual)
+  if(a>.3){
+    neuralEdges.forEach(({a:ai,b:bi,phase})=>{
+      const na=neuralNodes[ai], nb=neuralNodes[bi];
+      const nx1=x-55+na.li*28, ny1=y-40+na.ys*80;
+      const nx2=x-55+nb.li*28, ny2=y-40+nb.ys*80;
+      const flowA=0.5+0.5*Math.sin(t*4+phase);
+      ctx.beginPath(); ctx.moveTo(nx1,ny1); ctx.lineTo(nx2,ny2);
+      ctx.strokeStyle=`rgba(0,255,136,${0.06*a*flowA})`; ctx.lineWidth=0.5; ctx.stroke();
+    });
+    neuralNodes.forEach(n=>{
+      const nx=x-55+n.li*28, ny=y-40+n.ys*80;
+      const pulse=0.5+0.5*Math.sin(t*3+n.phase);
+      ctx.beginPath(); ctx.arc(nx,ny,3,0,Math.PI*2);
+      ctx.fillStyle=`rgba(0,255,136,${0.4*a*pulse})`; ctx.fill();
+    });
+    // Feature labels
+    const features=['RISE TIME','PEAK','DECAY','EAR','TEMP'];
+    features.forEach((f,i)=>{
+      label(f, x-52+i*22, y+40, `rgba(0,255,136,${0.2*a})`, 6, 'left');
+    });
+  }
+
+  label('RASPBERRY PI 4', x, y-36, 'rgba(0,255,136,0.55)', 7);
+  label('AI INFERENCE', x, y+46, `rgba(0,255,136,${a*.6})`, 7);
+}
+
+// ── Database node ──
+function drawDB(x, y, activity) {
+  const a = activity;
+  if(a>.1) glowHex(x,y,40,'#00aaff',0.08*a);
+  // Cylinder (3 ellipses)
+  const dw=32, dh=8, dr=16, dbh=30;
+  ctx.beginPath(); ctx.ellipse(x,y,dw/2,dh/2,0,0,Math.PI*2);
+  ctx.fillStyle=`rgba(0,50,80,0.8)`; ctx.fill();
+  ctx.strokeStyle='rgba(0,170,255,0.4)'; ctx.lineWidth=0.8; ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x-dw/2,y); ctx.lineTo(x-dw/2,y+dbh);
+  ctx.ellipse(x,y+dbh,dw/2,dh/2,0,Math.PI,Math.PI*2,true);
+  ctx.lineTo(x+dw/2,y); ctx.stroke();
+  ctx.fillStyle='rgba(0,50,80,0.5)'; ctx.fill();
+  ctx.beginPath(); ctx.ellipse(x,y+dbh,dw/2,dh/2,0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,50,80,0.7)'; ctx.fill();
+  ctx.strokeStyle='rgba(0,170,255,0.4)'; ctx.stroke();
+  // Mid line
+  ctx.beginPath(); ctx.ellipse(x,y+dbh/2,dw/2,dh/2,0,0,Math.PI*2);
+  ctx.strokeStyle='rgba(0,170,255,0.2)'; ctx.stroke();
+  // Activity
+  if(a>.1){
+    const flow=Math.sin(t*4)*0.5+0.5;
+    ctx.fillStyle=`rgba(0,170,255,${0.15*a*flow})`;
+    ctx.beginPath(); ctx.ellipse(x,y+dbh/2,dw/2,dh/2,0,0,Math.PI*2); ctx.fill();
+  }
+  label('MARIADB', x, y+dbh+16, 'rgba(0,170,255,0.5)', 7);
+}
+
+// ── Dashboard node ──
+function drawDash(x, y, activity) {
+  const a = activity;
+  if(a>.1) glowHex(x,y,40,'#00aaff',0.07*a);
+  drawRoundRect(x-24,y-18,48,36,4,'rgba(0,20,40,0.8)','rgba(0,170,255,0.4)',0.8);
+  // Mini chart bars
+  for(let i=0;i<5;i++){
+    const bh = 6+Math.sin(t*2+i)*4+(sReadings[i%3]||.1)*14;
+    ctx.fillStyle=a>.1?'rgba(0,170,255,0.5)':'rgba(0,170,255,0.2)';
+    ctx.fillRect(x-18+i*9, y+10-bh, 7, bh);
+  }
+  // Horizontal scan lines
+  for(let i=0;i<3;i++){
+    ctx.beginPath(); ctx.moveTo(x-20,y-10+i*8); ctx.lineTo(x+20,y-10+i*8);
+    ctx.strokeStyle='rgba(0,170,255,0.15)'; ctx.lineWidth=0.5; ctx.stroke();
+  }
+  label('FASTAPI', x, y-26, 'rgba(0,170,255,0.5)', 7);
+  label('DASHBOARD', x, y+28, 'rgba(0,170,255,0.5)', 7);
+}
+
+// ══════════════════════════════════════════════
+// GLOWING WIRE with animated pulses
+// ══════════════════════════════════════════════
+function drawGlowWire(x1,y1,x2,y2,col,alpha,pulseOffset) {
+  // Main wire
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+  ctx.strokeStyle=col.replace(')',`,${alpha*0.4})`).replace('rgb(','rgba('); 
+  ctx.lineWidth=1; ctx.stroke();
+
+  // Animated pulses
+  const pCount = 3;
+  for(let p=0;p<pCount;p++){
+    const tp = ((t*.3 + p/pCount + (pulseOffset||0)) % 1);
+    const px=x1+(x2-x1)*tp, py=y1+(y2-y1)*tp;
+    const a2=alpha*(1-Math.abs(tp-.5)*2);
+    ctx.beginPath(); ctx.arc(px,py,2.5,0,Math.PI*2);
+    ctx.fillStyle=col.replace(')',`,${a2})`).replace('rgb(','rgba(');
+    ctx.fill();
+    // Trail
+    const tp2=Math.max(0,tp-.05);
+    const px2=x1+(x2-x1)*tp2, py2=y1+(y2-y1)*tp2;
+    ctx.beginPath(); ctx.moveTo(px2,py2); ctx.lineTo(px,py);
+    ctx.strokeStyle=col.replace(')',`,${a2*.3})`).replace('rgb(','rgba(');
+    ctx.lineWidth=1.5; ctx.stroke();
+  }
+}
+
+// ══════════════════════════════════════════════
+// WIFI ARCS (ESP → Pi)
+// ══════════════════════════════════════════════
+function drawWiFiArcs(x1,y1,x2,y2,intensity) {
+  if(intensity<.05) return;
+  const mid={x:(x1+x2)/2, y:Math.min(y1,y2)-40};
+
+  // Expanding rings from transmitter
+  for(let r=1;r<=4;r++){
+    const phase=(t*1.5-r*.3)%1;
+    const rr=r*18*phase;
+    const a=intensity*(1-phase)*0.4;
+    ctx.beginPath(); ctx.arc(x1,y1,rr,Math.PI*1.2,Math.PI*1.8);
+    ctx.strokeStyle=`rgba(0,255,136,${a})`; ctx.lineWidth=1; ctx.stroke();
+  }
+
+  // Signal beam
+  ctx.beginPath(); ctx.moveTo(x1,y1);
+  ctx.quadraticCurveTo(mid.x,mid.y,x2,y2);
+  ctx.strokeStyle=`rgba(0,255,136,${intensity*0.2})`; ctx.lineWidth=1; ctx.setLineDash([4,4]); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Floating packets on the arc
+  const pCount=4;
+  for(let p=0;p<pCount;p++){
+    const tp=((t*.4+p/pCount)%1);
+    const bx=Math.pow(1-tp,2)*x1+2*(1-tp)*tp*mid.x+tp*tp*x2;
+    const by=Math.pow(1-tp,2)*y1+2*(1-tp)*tp*mid.y+tp*tp*y2;
+    ctx.beginPath(); ctx.arc(bx,by,3,0,Math.PI*2);
+    ctx.fillStyle=`rgba(0,255,136,${intensity*0.7*(0.5+0.5*Math.sin(t*4+p))})`; ctx.fill();
+    // Glow
+    glowHex(bx,by,8,'#00ff88',intensity*.2);
+  }
+
+  // Receiving glow on Pi
+  glowHex(x2,y2,30,'#00ff88',intensity*0.1*Math.sin(t*3));
+  label('WiFi TX', (x1+x2)/2, mid.y-14, `rgba(0,255,136,${intensity*.4})`, 7);
+}
+
+// ══════════════════════════════════════════════
+// VAPOR PARTICLES
+// ══════════════════════════════════════════════
+function spawnVapor(x, y) {
+  for(let p of vaporPool){
+    if(!p.active){
+      p.active=true;
+      p.x=x+(Math.random()-.5)*12;
+      p.y=y+(Math.random()-.5)*8;
+      p.vx=(Math.random()-.5)*.6;
+      p.vy=-(0.4+Math.random()*.6);
+      p.life=0;
+      p.maxLife=1.5+Math.random();
+      p.r=2+Math.random()*4;
+      p.alpha=0;
+      break;
+    }
+  }
+}
+
+function updateVapor(dt) {
+  vaporPool.forEach(p=>{
+    if(!p.active) return;
+    p.x+=p.vx; p.y+=p.vy;
+    p.vx*=0.97; p.vy*=0.98; p.vy+=0.01;
+    p.life+=dt;
+    p.alpha=p.life<.2?p.life/.2:Math.max(0,1-p.life/p.maxLife);
+    if(p.life>p.maxLife) p.active=false;
+  });
+}
+
+function drawVapor() {
+  vaporPool.forEach(p=>{
+    if(!p.active||p.alpha<.01) return;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    if(scenario==='sanitizer') ctx.fillStyle=`rgba(100,200,255,${p.alpha*.5})`;
+    else if(scenario==='alcohol') ctx.fillStyle=`rgba(255,140,60,${p.alpha*.5})`;
+    else ctx.fillStyle=`rgba(150,220,150,${p.alpha*.15})`;
+    ctx.fill();
+  });
+}
+
+// ══════════════════════════════════════════════
+// PERSON (holographic)
+// ══════════════════════════════════════════════
+function drawPerson(px, py) {
+  const walkA = personWalk;
+  const col = scenario==='alcohol'?'rgba(255,80,60,0.75)':
+              scenario==='sanitizer'?'rgba(60,180,255,0.75)':'rgba(0,255,136,0.7)';
+  const wireCol = col.replace('0.7','0.15').replace('0.75','0.15');
+
+  // Shadow
+  ctx.beginPath(); ctx.ellipse(px,py+36,18,5,0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fill();
+
+  // Holographic scanlines
+  for(let i=-40;i<40;i+=4){
+    ctx.beginPath(); ctx.moveTo(px-20,py+i); ctx.lineTo(px+20,py+i);
+    ctx.strokeStyle=col.replace('0.7','0.04').replace('0.75','0.04');
+    ctx.lineWidth=0.5; ctx.stroke();
+  }
+
+  const lw=Math.sin(walkA)*10;
+  ctx.strokeStyle=col; ctx.lineCap='round';
+
+  // Legs
+  ctx.lineWidth=6;
+  ctx.beginPath(); ctx.moveTo(px-5,py+14); ctx.lineTo(px-5+lw,py+36); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(px+5,py+14); ctx.lineTo(px+5-lw,py+36); ctx.stroke();
+  // Arms
+  ctx.lineWidth=5;
+  ctx.beginPath(); ctx.moveTo(px-10,py-6); ctx.lineTo(px-16-lw*.6,py+10); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(px+10,py-6); ctx.lineTo(px+16+lw*.6,py+10); ctx.stroke();
+  // Body
+  drawRoundRect(px-11,py-16,22,30,4,col,wireCol,0.6);
+  // Head
+  ctx.beginPath(); ctx.arc(px,py-28,12,0,Math.PI*2);
+  ctx.fillStyle=col; ctx.fill();
+  ctx.strokeStyle=wireCol; ctx.lineWidth=0.8; ctx.stroke();
+  // Eyes
+  ctx.beginPath(); ctx.ellipse(px-5,py-30,2.5,2,0,0,Math.PI*2);
+  ctx.beginPath(); ctx.ellipse(px+5,py-30,2.5,2,0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,0.8)'; ctx.fill();
+
+  // Breath vapor emission
+  if(scenario!=='normal' || Math.random()<.02){
+    const rate = scenario==='alcohol'?.18:scenario==='sanitizer'?.08:.01;
+    if(Math.random()<rate) spawnVapor(px, py-38);
+  }
+}
+
+// ══════════════════════════════════════════════
+// DATA PACKETS (generic)
+// ══════════════════════════════════════════════
+function spawnPacket(x1,y1,x2,y2,col) {
+  dataPackets.push({x:x1,y:y1,tx:x1,ty:y1,dx:x2,dy:y2,t:0,color:col,active:true});
+}
+
+function updatePackets(dt) {
+  for(let i=dataPackets.length-1;i>=0;i--){
+    const p=dataPackets[i];
+    p.t+=dt*1.2;
+    const tp=Math.min(1,p.t);
+    p.tx=p.x; p.ty=p.y;
+    p.x=p.x+(p.dx-p.x)*dt*2;
+    p.y=p.y+(p.dy-p.y)*dt*2;
+    if(p.t>1.5) dataPackets.splice(i,1);
+  }
+}
+
+function drawPackets() {
+  dataPackets.forEach(p=>{
+    const a=Math.max(0,1-p.t/1.5);
+    ctx.beginPath(); ctx.arc(p.x,p.y,3,0,Math.PI*2);
+    ctx.fillStyle=p.color; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(p.tx,p.ty); ctx.lineTo(p.x,p.y);
+    ctx.strokeStyle=p.color; ctx.lineWidth=1; ctx.globalAlpha=a*.4; ctx.stroke();
+    ctx.globalAlpha=1;
+    glowHex(p.x,p.y,8,p.color.replace('rgba(','').replace(/,.*/,'').trim()==='0'?'00ff88':p.color,a*.25);
+  });
+}
+
+// ══════════════════════════════════════════════
+// VERDICT DISPLAY
+// ══════════════════════════════════════════════
+let verdictAnim = 0;
+let lastVerdict = '';
+function showVerdict() {
+  const vEl = document.getElementById('verdict-overlay');
+  const vt = document.getElementById('verdict-text');
+  const vs = document.getElementById('verdict-sub');
+  const cb = document.getElementById('classification-bar');
+  const hs = document.getElementById('h-status');
+  const hc = document.getElementById('h-class');
+
+  if(scenario==='alcohol'){
+    vt.textContent='DETECTED'; vt.style.color='#ff3355';
+    vs.textContent='ALCOHOL EVENT · CLASS 1 · 94.1% CONFIDENCE';
+    cb.style.background='rgba(255,51,85,0.4)';
+    hs.textContent='ALERT'; hs.style.color='#ff3355';
+    hc.textContent='1 — ALCOHOL'; hc.style.color='#ff3355';
+  } else if(scenario==='sanitizer'){
+    vt.textContent='SANITIZER'; vt.style.color='#ffaa00';
+    vs.textContent='NON-ALCOHOL VAPOR · CLASS 2 · 91.8% CONFIDENCE';
+    cb.style.background='rgba(255,170,0,0.3)';
+    hs.textContent='NOTICE'; hs.style.color='#ffaa00';
+    hc.textContent='2 — SANITIZER'; hc.style.color='#ffaa00';
+  } else {
+    vt.textContent='CLEAR'; vt.style.color='#00ff88';
+    vs.textContent='ENVIRONMENT CLEAR · CLASS 0 · 97.2% CONFIDENCE';
+    cb.style.background='rgba(0,255,136,0.15)';
+    hs.textContent='ACTIVE'; hs.style.color='#00ff88';
+    hc.textContent='0 — CLEAR'; hc.style.color='#00ff88';
+  }
+  vEl.style.opacity='1';
+  verdictAnim=1;
+  if(lastVerdict!==scenario){
+    setTimeout(()=>{ vEl.style.opacity='0'; },2500);
+    lastVerdict=scenario;
+  }
+}
+
+// ══════════════════════════════════════════════
+// MAIN LOOP
+// ══════════════════════════════════════════════
+let lastT = performance.now();
+let activityLevels = {cctv:0, sensors:0, esp:0, wifi:0, pi:0, db:0};
+
+function mainLoop(now) {
+  requestAnimationFrame(mainLoop);
+  const dt = Math.min((now-lastT)*.001, .05);
+  lastT=now; t+=dt; frame++;
+
+  // Update uptime
+  if(frame%60===0){
+    const el=Math.floor((Date.now()-startTime)/1000);
+    const hh=String(Math.floor(el/3600)).padStart(2,'0');
+    const mm=String(Math.floor(el%3600/60)).padStart(2,'0');
+    const ss=String(el%60).padStart(2,'0');
+    document.getElementById('h-uptime').textContent=`${hh}:${mm}:${ss}`;
+    document.getElementById('h-latency').textContent=Math.round(280+Math.random()*120)+'ms';
+  }
+
+  const l = L();
+
+  // Person movement
+  personX += 1.4;
+  if(personX > W+60) personX=-60;
+  personWalk += dt*4;
+  personDetected = Math.abs(personX-l.doorX) < W*.35;
+  faceLockAnim += (personDetected ? 1 : -1) * dt * 3;
+  faceLockAnim = Math.max(0,Math.min(1,faceLockAnim));
+
+  // Sensor readings
+  const proximity = Math.max(0, 1-(Math.abs(personX-l.doorX))/(W*.35));
+  const base=.05+Math.sin(t*.2)*.01;
+  if(scenario==='alcohol'){
+    sReadings[0]=base+proximity*(.55+Math.sin(t*2)*.05);
+    sReadings[1]=base+proximity*(.70+Math.sin(t*1.8+.5)*.06);
+    sReadings[2]=base+proximity*(.58+Math.sin(t*2.2+1)*.04);
+  } else if(scenario==='sanitizer'){
+    sReadings[0]=base+Math.random()*.02;
+    sReadings[1]=.82+Math.sin(t*3)*.08;
+    sReadings[2]=base+Math.random()*.02;
+  } else {
+    sReadings=[base,base-.01+Math.sin(t*.3)*.01,base+.01];
+  }
+  sActivation[0]+=(Math.min(1,sReadings[0]*2)-sActivation[0])*dt*3;
+  sActivation[1]+=(Math.min(1,sReadings[1]*2)-sActivation[1])*dt*3;
+  sActivation[2]+=(Math.min(1,sReadings[2]*2)-sActivation[2])*dt*3;
+
+  // Activity levels
+  activityLevels.cctv+=(personDetected?1:.2-activityLevels.cctv)*dt*2;
+  const maxS=Math.max(...sReadings);
+  activityLevels.sensors+=(Math.min(1,maxS*1.5)-activityLevels.sensors)*dt*2;
+  activityLevels.esp+=(activityLevels.sensors*.8-activityLevels.esp)*dt*1.5;
+  activityLevels.wifi+=(activityLevels.esp*.9-activityLevels.wifi)*dt*1.2;
+  activityLevels.pi+=(activityLevels.wifi*.9-activityLevels.pi)*dt*1;
+  activityLevels.db+=(activityLevels.pi*.85-activityLevels.db)*dt*.8;
+
+  phaseProgress = (activityLevels.cctv+activityLevels.sensors+activityLevels.esp+activityLevels.wifi+activityLevels.pi+activityLevels.db)/6;
+  document.getElementById('phase-fill').style.width=(phaseProgress*100)+'%';
+
+  // Spawn data packets
+  if(frame%45===0 && activityLevels.sensors>.2){
+    spawnPacket(l.s1.x,l.s1.y,l.esp.x,l.esp.y,'rgba(0,255,136,0.9)');
+    spawnPacket(l.s2.x,l.s2.y,l.esp.x,l.esp.y,'rgba(0,255,136,0.9)');
+    spawnPacket(l.s3.x,l.s3.y,l.esp.x,l.esp.y,'rgba(0,255,136,0.9)');
+  }
+  if(frame%80===0 && activityLevels.pi>.3){
+    spawnPacket(l.pi.x,l.pi.y,l.db.x,l.db.y,'rgba(0,170,255,0.9)');
+    spawnPacket(l.pi.x,l.pi.y,l.dash.x,l.dash.y,'rgba(0,170,255,0.9)');
+  }
+
+  updateVapor(dt);
+  updatePackets(dt);
+
+  // ─── DRAW ───────────────────────────────────────
+  // Background
+  if(frame%4===0) drawBackground();
+
+  ctx.clearRect(0,0,W,H);
+
+  // Atmosphere glow based on scenario
+  if(scenario==='alcohol'){
+    glowHex(l.doorX,l.personY,H*.4,'#ff3355',0.04*activityLevels.sensors);
+  } else if(scenario==='sanitizer'){
+    glowHex(l.doorX,l.personY,H*.3,'#0088ff',0.04*activityLevels.sensors);
+  }
+
+  // Draw wires (sensor → esp)
+  drawGlowWire(l.s1.x,l.s1.y,l.esp.x,l.esp.y,'rgb(0,255,136)',sActivation[0]*.8,0);
+  drawGlowWire(l.s2.x,l.s2.y,l.esp.x,l.esp.y,'rgb(0,255,136)',sActivation[1]*.8,0.33);
+  drawGlowWire(l.s3.x,l.s3.y,l.esp.x,l.esp.y,'rgb(0,255,136)',sActivation[2]*.8,0.66);
+
+  // Camera to Pi wire
+  drawGlowWire(l.cctv.x,l.cctv.y,l.pi.x,l.pi.y,'rgb(0,136,255)',activityLevels.cctv*.4,0.2);
+
+  // Pi to DB/Dash
+  drawGlowWire(l.pi.x,l.pi.y,l.db.x,l.db.y,'rgb(0,170,255)',activityLevels.db*.6,0);
+  drawGlowWire(l.pi.x,l.pi.y,l.dash.x,l.dash.y,'rgb(0,170,255)',activityLevels.db*.6,0.5);
+
+  // WiFi arcs ESP → Pi
+  drawWiFiArcs(l.esp.x,l.esp.y,l.pi.x,l.pi.y,activityLevels.wifi);
+
+  // Vapor
+  drawVapor();
+
+  // Person
+  drawPerson(personX, l.personY);
+
+  // CCTV
+  drawCCTV(l.cctv.x, l.cctv.y, t);
+
+  // Door frame
+  ctx.strokeStyle='rgba(0,255,136,0.12)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(l.doorX-30,0); ctx.lineTo(l.doorX-30,H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(l.doorX+30,0); ctx.lineTo(l.doorX+30,H); ctx.stroke();
+  ctx.setLineDash([]);
+  label('ENTRY ZONE', l.doorX, H*.08, 'rgba(0,255,136,0.2)', 9, 'center');
+
+  // Sensors
+  drawSensor(l.s1.x,l.s1.y,0,sReadings[0],sActivation[0]);
+  drawSensor(l.s2.x,l.s2.y,1,sReadings[1],sActivation[1]);
+  drawSensor(l.s3.x,l.s3.y,2,sReadings[2],sActivation[2]);
+
+  // ESP32
+  drawESP32(l.esp.x,l.esp.y,activityLevels.esp);
+
+  // Pi
+  drawRPi(l.pi.x,l.pi.y,activityLevels.pi);
+
+  // DB + Dash
+  drawDB(l.db.x,l.db.y,activityLevels.db);
+  drawDash(l.dash.x,l.dash.y,activityLevels.db);
+
+  // Data packets (top layer)
+  drawPackets();
+
+  // HUD updates
+  if(frame%6===0){
+    document.getElementById('h-s1').textContent=sReadings[0].toFixed(3);
+    document.getElementById('h-s2').textContent=sReadings[1].toFixed(3);
+    document.getElementById('h-s3').textContent=sReadings[2].toFixed(3);
+    document.getElementById('h-ear').textContent=(.27+Math.sin(t*.4)*.025).toFixed(3);
+    document.getElementById('h-temp').textContent=(27.2+Math.sin(t*.08)*.4).toFixed(1)+'°C';
+    const col = scenario==='alcohol'?'#ff3355':scenario==='sanitizer'?'#ffaa00':'#00ff88';
+    document.getElementById('h-s1').style.color=col;
+    document.getElementById('h-s2').style.color=sReadings[1]>.5?'#ff3355':col;
+    document.getElementById('h-s3').style.color=col;
+  }
+
+  // Verdict flash on scenario change
+  if(frame%180===0) showVerdict();
+}
+
+requestAnimationFrame(mainLoop);
+
+// ══════════════════════════════════════════════
+// SCENARIO CONTROL
+// ══════════════════════════════════════════════
+window.setScenario = function(s) {
+  scenario=s;
+  document.querySelectorAll('.sc-btn').forEach(b=>b.classList.remove('act'));
+  event.target.classList.add('act');
+  showVerdict();
+  // Auto-rotate
+  clearTimeout(window._autoRotate);
+};
+
+// Auto demo cycle
+let demoStep=0;
+const demoSeq=['normal','alcohol','sanitizer','normal'];
+function runDemo(){
+  setScenarioAuto(demoSeq[demoStep%demoSeq.length]);
+  demoStep++;
+  window._autoRotate=setTimeout(runDemo, 6000);
+}
+function setScenarioAuto(s){
+  scenario=s;
+  document.querySelectorAll('.sc-btn').forEach(b=>b.classList.remove('act'));
+  document.querySelectorAll('.sc-btn').forEach(b=>{
+    if(b.textContent.toLowerCase().includes(s.slice(0,4))) b.classList.add('act');
+  });
+  showVerdict();
+}
+
+// Start demo after a moment
+setTimeout(()=>{ document.querySelector('.sc-btn').textContent='SOBER'; runDemo(); }, 2000);
+
+showVerdict();
+</script>
+</body>
+</html>
