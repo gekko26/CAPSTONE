@@ -2,7 +2,7 @@
 import { Link, useLocation } from "react-router-dom";
 import {
   HomeIcon, LayoutDashboard, CameraIcon,
-  Cpu, InfoIcon, Activity, BarChart3
+  Cpu, InfoIcon, Activity, BarChart3, FlaskConical
 } from "lucide-react";
 
 function Sidebar() {
@@ -52,6 +52,7 @@ function Sidebar() {
       {sectionLabel("Analysis")}
       {navItem("/camera", CameraIcon, "Camera")}
       {navItem("/models", Cpu, "Models")}
+      {navItem("/training", FlaskConical, "Training")}
 
       {sectionLabel("System")}
       {navItem("/report", Activity, "Report")}

@@ -8,7 +8,7 @@ function Camera() {
       <div className="grid grid-cols-5 gap-4">
 
         {/* Feed — 3 cols */}
-        <div className="col-span-3 bg-white border border-black/[0.06] rounded-xl overflow-hidden">
+        <div className="col-span-3 bg-white border border-black/6 rounded-xl overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2.5 bg-[#0c1f14]">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -30,7 +30,7 @@ function Camera() {
         </div>
 
         {/* Detection info — 2 cols */}
-        <div className="col-span-2 bg-white border border-black/[0.06] rounded-xl p-4">
+        <div className="col-span-2 bg-white border border-black/6 rounded-xl p-4">
           <p className="text-xs font-medium text-gray-500 mb-3">Detection info</p>
           <div className="space-y-2">
             <div className="bg-gray-100 rounded-lg px-3 py-2.5">

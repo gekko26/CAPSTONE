@@ -36,7 +36,7 @@ const MODELS = [
 function ProgressBar({ label, value, barCls }) {
   return (
     <div className="flex items-center gap-3">
-      <span className="text-xs text-gray-500 w-16 flex-shrink-0">{label}</span>
+      <span className="text-xs text-gray-500 w-16 shrink-0">{label}</span>
       <div className="flex-1 bg-gray-200 rounded-full h-1.5 overflow-hidden">
         <div className={`h-full rounded-full ${barCls}`} style={{ width: `${value}%` }} />
       </div>
@@ -88,7 +88,7 @@ export default function Models() {
               className={`bg-white border rounded-xl p-5 cursor-pointer transition-all duration-150 ${
                 selected === m.id
                   ? "border-teal-500 shadow-sm"
-                  : "border-black/[0.06] hover:border-black/[0.14]"
+                  : "border-black/6r:border-black/[0.14]"
               }`}
             >
               <div className="flex items-start justify-between mb-3">
@@ -96,7 +96,7 @@ export default function Models() {
                   <p className="text-sm font-semibold text-gray-900">{m.name}</p>
                   <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{m.desc}</p>
                 </div>
-                <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ml-3 flex-shrink-0 ${m.badgeCls}`}>
+                <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ml-3 shrink-0 ${m.badgeCls}`}>
                   {m.badge}
                 </span>
               </div>
@@ -123,7 +123,7 @@ export default function Models() {
         <div className="col-span-2 space-y-3">
 
           {/* Selected model detail */}
-          <div className="bg-white border border-black/[0.06] rounded-xl p-5">
+          <div className="bg-white border border-black/6 rounded-xl p-5">
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs font-medium text-gray-500">Selected model</p>
               <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${detail.badgeCls}`}>
@@ -149,12 +149,12 @@ export default function Models() {
           </div>
 
           {/* Accuracy comparison */}
-          <div className="bg-white border border-black/[0.06] rounded-xl p-5">
+          <div className="bg-white border border-black/6 rounded-xl p-5">
             <p className="text-xs font-medium text-gray-500 mb-3">Accuracy comparison</p>
             <div className="space-y-2.5">
               {MODELS.map((m) => (
                 <div key={m.id} className="flex items-center gap-2">
-                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${m.barCls}`} />
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${m.barCls}`} />
                   <span className="text-xs text-gray-500 flex-1 truncate">
                     {m.name.split(" ").slice(0, 2).join(" ")}
                   </span>
@@ -173,7 +173,7 @@ export default function Models() {
           </div>
 
           {/* Set as default */}
-          <div className="bg-white border border-black/[0.06] rounded-xl p-5">
+          <div className="bg-white border border-black/6 rounded-xl p-5">
             <p className="text-xs font-medium text-gray-500 mb-1">Set as default</p>
             <p className="text-xs text-gray-400 mb-3">
               The default model is used for all new detections unless overridden.
