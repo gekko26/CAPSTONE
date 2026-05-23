@@ -1,63 +1,314 @@
-import {RecentDetections} from "../assets/graph";
 
-function Camera() {
+//Camera.jsx
+import { useState, useEffect, useRef, useCallback } from "react";
+import { RecentDetections } from "../assets/graph";
+
+const BASE = "http://localhost:8000";
+const POLL_INTERVAL = 200; // ms — how often to grab a new frame
+
+// ── Status helpers ────────────────────────────────────────────
+function proximityColor(proximity) {
+  if (proximity === "close")  return "var(--over)";
+  if (proximity === "medium") return "var(--near)";
+  return "var(--text-muted)";
+}
+
+function earColor(status) {
+  if (status === "impaired") return "var(--over)";
+  if (status === "drowsy")   return "var(--near)";
+  return "var(--pass)";
+}
+
+function StatBox({ label, value, sub, valueColor }) {
+  return (
+    <div
+      className="rounded-lg px-3 py-2.5"
+      style={{ background: "var(--bg-active)" }}
+    >
+      <p className="text-[10px] mb-0.5" style={{ color: "var(--text-muted)" }}>{label}</p>
+      <p className="text-sm font-semibold" style={{ color: valueColor ?? "var(--text-primary)" }}>
+        {value ?? "---"}
+      </p>
+      {sub && <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{sub}</p>}
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════
+export default function Camera() {
+  const [frameUrl, setFrameUrl]       = useState(null);
+  const [analysis, setAnalysis]       = useState(null);
+  const [camError, setCamError]       = useState(false);
+  const [streaming, setStreaming]     = useState(false);
+  const intervalRef                   = useRef(null);
+  const latestBlobRef                 = useRef(null);
+  const errorCountRef                 = useRef(0); // consecutive failures before showing error
+
+  // ── Fetch frame + analyze ──────────────────────────────────
+  const poll = useCallback(async () => {
+    try {
+      const frameRes = await fetch(`${BASE}/camera/stream/frame`, {
+        cache: "no-store",
+      });
+
+      if (!frameRes.ok) {
+        errorCountRef.current += 1;
+        // Only show error after 5 consecutive failures (~1 second)
+        // prevents single dropped frame from flashing "unavailable"
+        if (errorCountRef.current >= 5) setCamError(true);
+        return;
+      }
+
+      // Successful frame — reset error count and clear error state
+      errorCountRef.current = 0;
+      setCamError(false);
+
+      const blob = await frameRes.blob();
+      const url = URL.createObjectURL(blob);
+      setFrameUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+
+      latestBlobRef.current = blob;
+
+      const fd = new FormData();
+      fd.append("file", blob, "frame.jpg");
+
+      const analyzeRes = await fetch(`${BASE}/camera/analyze`, {
+        method: "POST",
+        body: fd,
+      });
+
+      if (analyzeRes.ok) {
+        const data = await analyzeRes.json();
+        setAnalysis(data);
+      }
+    } catch {
+      errorCountRef.current += 1;
+      if (errorCountRef.current >= 5) setCamError(true);
+    }
+  }, []);
+
+  // ── Start / stop stream ────────────────────────────────────
+  const startStream = useCallback(() => {
+    if (intervalRef.current) return;
+    setStreaming(true);
+    poll(); // immediate first frame
+    intervalRef.current = setInterval(poll, POLL_INTERVAL);
+  }, [poll]);
+
+  const stopStream = useCallback(() => {
+    clearInterval(intervalRef.current);
+    intervalRef.current = null;
+    setStreaming(false);
+  }, []);
+
+  // Auto-start on mount, stop on unmount
+  useEffect(() => {
+    startStream();
+    return () => {
+      stopStream();
+      if (frameUrl) URL.revokeObjectURL(frameUrl);
+    };
+  }, [startStream, stopStream]);
+
+  // ── Derived display values ─────────────────────────────────
+  const proximity  = analysis?.proximity  ?? "---";
+  const isClose    = analysis?.is_close   ?? false;
+  const earStatus  = analysis?.status     ?? "---";
+  const ear        = analysis?.ear        != null ? analysis.ear.toFixed(3) : "---";
+  const identified = analysis?.identified ?? false;
+  const name       = analysis?.name       ?? "---";
+  const confidence = analysis?.confidence != null
+    ? `${(analysis.confidence * 100).toFixed(1)}%`
+    : "---";
+
   return (
     <div className="space-y-4">
 
-      {/* Camera feed */}
+      {/* ── Camera feed + detection info ── */}
       <div className="grid grid-cols-5 gap-4">
 
         {/* Feed — 3 cols */}
-        <div className="col-span-3 bg-white border border-black/6 rounded-xl overflow-hidden">
+        <div
+          className="col-span-3 rounded-xl overflow-hidden border"
+          style={{ borderColor: "var(--border-subtle)", background: "var(--bg-card)" }}
+        >
+          {/* Top bar */}
           <div className="flex items-center justify-between px-4 py-2.5 bg-[#0c1f14]">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-xs text-white/60 font-medium">Live · CAM-01</span>
+              <span
+                className={`w-2 h-2 rounded-full ${streaming && !camError ? "bg-emerald-400 animate-pulse" : "bg-red-500"}`}
+              />
+              <span className="text-xs text-white/60 font-medium">
+                {camError ? "Camera unavailable" : "Live · CAM-01"}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Proximity badge */}
+              {analysis && (
+                <span
+                  className="text-[10px] font-medium px-2 py-0.5 rounded-full border"
+                  style={{
+                    color:       proximityColor(proximity),
+                    borderColor: proximityColor(proximity),
+                    background:  `color-mix(in srgb, ${proximityColor(proximity)} 10%, transparent)`,
+                  }}
+                >
+                  {proximity.toUpperCase()}
+                </span>
+              )}
+              {/* Stream toggle */}
+              <button
+                onClick={streaming ? stopStream : startStream}
+                className="text-[10px] px-2 py-0.5 rounded-full border text-white/50 border-white/20 hover:border-white/40 transition-colors"
+              >
+                {streaming ? "Pause" : "Resume"}
+              </button>
             </div>
           </div>
+
+          {/* Viewfinder */}
           <div className="relative bg-[#0c1f14] aspect-video flex items-center justify-center">
-            {/* Replace this div with your actual <video> element when ready */}
-            <div className="flex flex-col items-center gap-3">
-              <div className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
-                <svg className="w-7 h-7 text-white/25" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round"
-                    d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 9.75v9A2.25 2.25 0 004.5 18.75z" />
-                </svg>
+            {frameUrl && !camError ? (
+              <>
+                <img
+                  src={frameUrl}
+                  alt="C200C live feed"
+                  className="w-full h-full object-cover"
+                />
+                {/* EAR overlay — top left */}
+                {analysis && (
+                  <div
+                    className="absolute top-2 left-2 flex flex-col gap-1"
+                  >
+                    <div
+                      className="text-[10px] font-medium px-2 py-0.5 rounded-full"
+                      style={{
+                        background: `color-mix(in srgb, ${earColor(earStatus)} 15%, rgba(0,0,0,0.6))`,
+                        color: earColor(earStatus),
+                      }}
+                    >
+                      EAR {ear} · {earStatus.toUpperCase()}
+                    </div>
+                    {identified && (
+                      <div
+                        className="text-[10px] font-medium px-2 py-0.5 rounded-full"
+                        style={{ background: "rgba(0,0,0,0.6)", color: "var(--pass)" }}
+                      >
+                        ✓ {name}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* Proximity indicator — bottom right */}
+                {isClose && (
+                  <div
+                    className="absolute bottom-2 right-2 text-[10px] font-medium px-2 py-0.5 rounded-full animate-pulse"
+                    style={{ background: "rgba(220,38,38,0.8)", color: "#fff" }}
+                  >
+                    ⚠ CLOSE — triggering sensor
+                  </div>
+                )}
+              </>
+            ) : (
+              /* Placeholder when camera unavailable */
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
+                  <svg className="w-7 h-7 text-white/25" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round"
+                      d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 9.75v9A2.25 2.25 0 004.5 18.75z" />
+                  </svg>
+                </div>
+                <p className="text-white/30 text-sm">
+                  {camError ? "Cannot reach camera — check RTSP_URL" : "Connecting..."}
+                </p>
               </div>
-              <p className="text-white/30 text-sm">Camera feed goes here</p>
-            </div>
+            )}
           </div>
         </div>
 
         {/* Detection info — 2 cols */}
-        <div className="col-span-2 bg-white border border-black/6 rounded-xl p-4">
-          <p className="text-xs font-medium text-gray-500 mb-3">Detection info</p>
+        <div
+          className="col-span-2 rounded-xl border p-4"
+          style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}
+        >
+          <p className="text-xs font-medium mb-3" style={{ color: "var(--text-muted)" }}>
+            Detection info
+          </p>
+
           <div className="space-y-2">
-            <div className="bg-gray-100 rounded-lg px-3 py-2.5">
-              <p className="text-[10px] text-gray-500 mb-0.5">Subject ID</p>
-              <p className="text-sm font-semibold text-gray-900">---</p>
-              <p className="text-[10px] text-gray-400">Auto-assigned</p>
-            </div>
+            {/* Subject ID */}
+            <StatBox
+              label="Subject"
+              value={identified ? name : "Unidentified"}
+              sub={identified ? `${confidence} match` : "No face matched"}
+              valueColor={identified ? "var(--pass)" : "var(--text-secondary)"}
+            />
+
+            {/* EAR + Proximity */}
             <div className="grid grid-cols-2 gap-2">
-              <div className="bg-gray-100 rounded-lg px-3 py-2.5">
-                <p className="text-[10px] text-gray-500 mb-0.5">BAC level</p>
-                <p className="text-sm font-semibold text-gray-400">---</p>
-              </div>
-              <div className="bg-gray-100 rounded-lg px-3 py-2.5">
-                <p className="text-[10px] text-gray-500 mb-0.5">Confidence</p>
-                <p className="text-sm font-semibold text-gray-400">---</p>
-                <p className="text-[10px] text-gray-400">LinearReg v2</p>
+              <StatBox
+                label="EAR"
+                value={ear}
+                sub={earStatus}
+                valueColor={earColor(earStatus)}
+              />
+              <StatBox
+                label="Proximity"
+                value={proximity}
+                sub={isClose ? "Sensor active" : "Waiting"}
+                valueColor={proximityColor(proximity)}
+              />
+            </div>
+
+            {/* Left / Right EAR */}
+            <div className="grid grid-cols-2 gap-2">
+              <StatBox
+                label="Left EAR"
+                value={analysis?.left_ear != null ? analysis.left_ear.toFixed(3) : "---"}
+                valueColor="var(--text-secondary)"
+              />
+              <StatBox
+                label="Right EAR"
+                value={analysis?.right_ear != null ? analysis.right_ear.toFixed(3) : "---"}
+                valueColor="var(--text-secondary)"
+              />
+            </div>
+
+            {/* Impairment status */}
+            <div
+              className="rounded-lg px-3 py-2.5 flex items-center gap-2"
+              style={{ background: "var(--bg-active)" }}
+            >
+              <div
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{
+                  background: analysis?.impaired
+                    ? "var(--over)"
+                    : analysis
+                    ? "var(--pass)"
+                    : "var(--text-muted)",
+                }}
+              />
+              <div>
+                <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>Visual status</p>
+                <p className="text-sm font-semibold" style={{
+                  color: analysis?.impaired ? "var(--over)" : "var(--text-primary)"
+                }}>
+                  {analysis
+                    ? analysis.impaired ? "Impaired" : "Normal"
+                    : "---"}
+                </p>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Reuse your existing graph component — chart + stats + recent detections all included */}
+      {/* Recent detections — reuses existing component */}
       <RecentDetections />
-
     </div>
   );
 }
-
-export default Camera;
