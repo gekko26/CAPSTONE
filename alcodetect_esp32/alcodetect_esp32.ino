@@ -63,14 +63,14 @@
 #include <DHT.h>
 
 // ── WiFi credentials ──────────────────────────────────────────
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID     = "Bayot kaba?";
+const char* WIFI_PASSWORD = "bayotko123";
 
 // ── Backend URL ───────────────────────────────────────────────
 // Change to your laptop/Pi IP. Must be on same WiFi network.
 // Training:   http://192.168.x.x:8000/training/collect/sensor-data
 // Deployment: http://192.168.x.x:8000/sensor
-const char* BACKEND_IP      = "192.168.1.x";   // ← change this
+const char* BACKEND_IP      = "192.168.69.1";   // ← change this
 const int   BACKEND_PORT    = 8000;
 const char* TRAINING_ENDPOINT  = "/training/collect/sensor-data";
 const char* DEPLOYMENT_ENDPOINT = "/sensor";
@@ -80,7 +80,7 @@ const char* DEPLOYMENT_ENDPOINT = "/sensor";
 #define MQ3_PIN_2    35    // ADC1_CH7 — sensor 2 (top-right in enclosure)
 #define MQ3_PIN_3    32    // ADC1_CH4 — sensor 3 (bottom-center in enclosure)
 #define DHT_PIN       4    // DHT22 data pin
-#define DHT_TYPE    DHT22
+#define DHT_TYPE    DHT11 
 #define LED_PIN       2    // Built-in LED — status indicator
 
 
