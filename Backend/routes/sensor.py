@@ -13,7 +13,7 @@ load_dotenv()
 
 router = APIRouter()
 
-ESP32_URL = os.getenv("ESP32_URL", "http://192.168.1.200")
+ESP32_URL = os.getenv("ESP32_URL", "http://192.168.69.18")
 
 
 # ── ESP32 trigger (backend middleman) ─────────────────────────

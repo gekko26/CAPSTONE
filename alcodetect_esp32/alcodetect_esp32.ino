@@ -1,4 +1,4 @@
-/*
+  /*
  * AlcoDetect — ESP32-WROOM-32 Firmware
  * =====================================
  * Board:    ESP32-WROOM-32 (use "ESP32 Dev Module" in Arduino IDE)
@@ -381,7 +381,12 @@ void loop() {
       float v1 = readMQ3(MQ3_PIN_1);
       float v2 = readMQ3(MQ3_PIN_2);
       float v3 = readMQ3(MQ3_PIN_3);
-
+      Serial.print("MQ1: ");
+      Serial.println(v1);
+       Serial.print("MQ2: ");
+      Serial.println(v2);
+       Serial.print("MQ3: ");
+      Serial.println(v3);
       buf1.push_back(v1);
       buf2.push_back(v2);
       buf3.push_back(v3);
@@ -414,8 +419,31 @@ void loop() {
     }
   }
 
-  // Small delay when idle to prevent watchdog reset
+  // ── Idle monitoring — prints sensor + DHT every 2s when not buffering ──
+  // Watch baseline recovery before sending next trigger
   if (!isBuffering) {
+//    static unsigned long lastIdlePrint = 0;
+//    unsigned long now = millis();
+//
+//    if (now - lastIdlePrint >= 2000) {
+//      lastIdlePrint = now;
+//
+//      float v1   = readMQ3(MQ3_PIN_1);
+//      float v2   = readMQ3(MQ3_PIN_2);
+//      float v3   = readMQ3(MQ3_PIN_3);
+//      float temp = dht.readTemperature();
+//      float hum  = dht.readHumidity();
+//
+//      Serial.println("─────────────────────────────");
+//      Serial.printf("  MQ3-1: %.0f  MQ3-2: %.0f  MQ3-3: %.0f\n", v1, v2, v3);
+//      if (isnan(temp) || isnan(hum)) {
+//        Serial.println("  Temp: --.-°C   Hum: --.-%");
+//      } else {
+//        Serial.printf("  Temp: %.1f°C   Hum: %.1f%%\n", temp, hum); 
+//      }
+//      Serial.println("  (idle — waiting for trigger)");
+//    }
+
     delay(10);
   }
-}
+} 

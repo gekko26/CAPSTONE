@@ -1,13 +1,41 @@
+# File: Backend/models/train/cv_model.py
 import cv2
 import numpy as np
 import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+import os
+import threading
 
 LEFT_EYE  = [362, 385, 387, 263, 373, 380]
 RIGHT_EYE = [33,  160, 158, 133, 153, 144]
 
-# Tune this based on your camera distance from the sensor gate
-# 0.18 means face occupies 18% of frame width = person is close enough
 FACE_CLOSE_THRESHOLD = 0.18
+
+_MODEL_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "../../face_landmarker.task"
+)
+
+_landmarker = None
+_landmarker_lock = threading.Lock()
+
+
+def _get_landmarker():
+    global _landmarker
+    if _landmarker is None:
+        with _landmarker_lock:
+            if _landmarker is None:
+                options = vision.FaceLandmarkerOptions(
+                    base_options=python.BaseOptions(model_asset_path=_MODEL_PATH),
+                    running_mode=vision.RunningMode.IMAGE,
+                    num_faces=1,
+                    min_face_detection_confidence=0.5,
+                    min_face_presence_confidence=0.5,
+                    min_tracking_confidence=0.5,
+                )
+                _landmarker = vision.FaceLandmarker.create_from_options(options)
+    return _landmarker
 
 
 def eye_aspect_ratio(landmarks, eye_indices, w, h):
@@ -22,10 +50,6 @@ def eye_aspect_ratio(landmarks, eye_indices, w, h):
 
 
 def estimate_proximity(landmarks, w, h):
-    """
-    Estimates proximity based on face width fraction of frame.
-    Returns: 'close', 'medium', 'far'
-    """
     x_coords            = [lm.x for lm in landmarks]
     face_width_fraction = max(x_coords) - min(x_coords)
 
@@ -45,47 +69,45 @@ def analyze_frame(frame):
     h, w = frame.shape[:2]
     rgb  = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    with mp.solutions.face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=1,
-        min_detection_confidence=0.5
-    ) as face_mesh:
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    
+    landmarker = _get_landmarker()
+    results  = landmarker.detect(mp_image)
 
-        results = face_mesh.process(rgb)
-
-        if not results.multi_face_landmarks:
-            return {
-                "ear":       None,
-                "status":    "no_face",
-                "impaired":  False,
-                "left_ear":  None,
-                "right_ear": None,
-                "proximity": "none",
-                "is_close":  False,
-            }
-
-        landmarks = results.multi_face_landmarks[0].landmark
-        left_ear  = eye_aspect_ratio(landmarks, LEFT_EYE,  w, h)
-        right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE, w, h)
-        avg_ear   = round((left_ear + right_ear) / 2.0, 4)
-        proximity = estimate_proximity(landmarks, w, h)
-
-        if avg_ear > 0.25:
-            status, impaired = "normal", False
-        elif avg_ear > 0.20:
-            status, impaired = "drowsy", True
-        else:
-            status, impaired = "impaired", True
-
+    if not results.face_landmarks:
         return {
-            "ear":       avg_ear,
-            "status":    status,
-            "impaired":  impaired,
-            "left_ear":  left_ear,
-            "right_ear": right_ear,
-            "proximity": proximity,
-            "is_close":  proximity == "close",
+            "ear":       None,
+            "status":    "no_face",
+            "impaired":  False,
+            "left_ear":  None,
+            "right_ear": None,
+            "proximity": "none",
+            "is_close":  False,
         }
+
+    landmarks = results.face_landmarks[0]
+
+    left_ear  = eye_aspect_ratio(landmarks, LEFT_EYE,  w, h)
+    right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE, w, h)
+    avg_ear   = round((left_ear + right_ear) / 2.0, 4)
+    proximity = estimate_proximity(landmarks, w, h)
+
+    if avg_ear > 0.25:
+        status, impaired = "normal", False
+    elif avg_ear > 0.20:
+        status, impaired = "drowsy", True
+    else:
+        status, impaired = "impaired", True
+
+    return {
+        "ear":       avg_ear,
+        "status":    status,
+        "impaired":  impaired,
+        "left_ear":  left_ear,
+        "right_ear": right_ear,
+        "proximity": proximity,
+        "is_close":  proximity == "close",
+    }
 
 
 def analyze_blink(ear_history, threshold=0.20):
@@ -102,4 +124,4 @@ def analyze_blink(ear_history, threshold=0.20):
 
 if __name__ == "__main__":
     print("CV model ready — no training needed.")
-    print("Uses MediaPipe Face Mesh + EAR formula.")
+    print("Uses MediaPipe Face Landmarker (Tasks API) + EAR formula.")

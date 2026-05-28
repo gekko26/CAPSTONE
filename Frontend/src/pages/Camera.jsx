@@ -1,10 +1,9 @@
-
-//Camera.jsx
+// File: Frontend/src/pages/Camera.jsx
 import { useState, useEffect, useRef, useCallback } from "react";
 import { RecentDetections } from "../assets/graph";
 
 const BASE = "http://localhost:8000";
-const POLL_INTERVAL = 200; // ms — how often to grab a new frame
+const POLL_INTERVAL = 200; // ms — wait margin between sequential loop steps
 
 // ── Status helpers ────────────────────────────────────────────
 function proximityColor(proximity) {
@@ -40,71 +39,83 @@ export default function Camera() {
   const [analysis, setAnalysis]       = useState(null);
   const [camError, setCamError]       = useState(false);
   const [streaming, setStreaming]     = useState(false);
-  const intervalRef                   = useRef(null);
+  
+  const timeoutRef                    = useRef(null);
   const latestBlobRef                 = useRef(null);
-  const errorCountRef                 = useRef(0); // consecutive failures before showing error
+  const errorCountRef                 = useRef(0);
+  const loopActiveRef                 = useRef(false);
 
-  // ── Fetch frame + analyze ──────────────────────────────────
-  const poll = useCallback(async () => {
+  // FIX: Tracks hardware trigger lockouts to guarantee deployment calls fire exactly ONCE per approach
+  const hasTriggeredSensorRef         = useRef(false);
+
+  // ── Safe Non-Overlapping Execution Pipeline ───────────────
+  const pollLoop = async () => {
+    if (!loopActiveRef.current) return;
+
     try {
-      const frameRes = await fetch(`${BASE}/camera/stream/frame`, {
-        cache: "no-store",
-      });
+      const frameRes = await fetch(`${BASE}/camera/stream/frame`, { cache: "no-store" });
 
       if (!frameRes.ok) {
         errorCountRef.current += 1;
-        // Only show error after 5 consecutive failures (~1 second)
-        // prevents single dropped frame from flashing "unavailable"
         if (errorCountRef.current >= 5) setCamError(true);
-        return;
-      }
+      } else {
+        errorCountRef.current = 0;
+        setCamError(false);
 
-      // Successful frame — reset error count and clear error state
-      errorCountRef.current = 0;
-      setCamError(false);
+        const blob = await frameRes.blob();
+        latestBlobRef.current = blob;
 
-      const blob = await frameRes.blob();
-      const url = URL.createObjectURL(blob);
-      setFrameUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return url;
-      });
+        const url = URL.createObjectURL(blob);
+        setFrameUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return url;
+        });
 
-      latestBlobRef.current = blob;
+        const fd = new FormData();
+        fd.append("file", blob, "frame.jpg");
 
-      const fd = new FormData();
-      fd.append("file", blob, "frame.jpg");
+        const analyzeRes = await fetch(`${BASE}/camera/analyze`, { method: "POST", body: fd });
 
-      const analyzeRes = await fetch(`${BASE}/camera/analyze`, {
-        method: "POST",
-        body: fd,
-      });
+        if (analyzeRes.ok) {
+          const data = await analyzeRes.json();
+          setAnalysis(data);
 
-      if (analyzeRes.ok) {
-        const data = await analyzeRes.json();
-        setAnalysis(data);
+          // FIX: Triggers deployment mode sensor logging via Option B middleman when proximity shifts
+          if (data.is_close) {
+            if (!hasTriggeredSensorRef.current) {
+              hasTriggeredSensorRef.current = true;
+              fetch(`${BASE}/sensor/trigger`, { method: "POST" }).catch(() => {});
+            }
+          } else {
+            // Unlocks trigger barrier only when subject moves clear of target zone
+            hasTriggeredSensorRef.current = false;
+          }
+        }
       }
     } catch {
       errorCountRef.current += 1;
       if (errorCountRef.current >= 5) setCamError(true);
     }
-  }, []);
+
+    // Schedule next execution cycle only AFTER current processing pass has completed
+    timeoutRef.current = setTimeout(pollLoop, POLL_INTERVAL);
+  };
 
   // ── Start / stop stream ────────────────────────────────────
   const startStream = useCallback(() => {
-    if (intervalRef.current) return;
+    if (loopActiveRef.current) return;
+    loopActiveRef.current = true;
     setStreaming(true);
-    poll(); // immediate first frame
-    intervalRef.current = setInterval(poll, POLL_INTERVAL);
-  }, [poll]);
+    pollLoop();
+  }, []);
 
   const stopStream = useCallback(() => {
-    clearInterval(intervalRef.current);
-    intervalRef.current = null;
+    loopActiveRef.current = false;
+    clearTimeout(timeoutRef.current);
+    timeoutRef.current = null;
     setStreaming(false);
   }, []);
 
-  // Auto-start on mount, stop on unmount
   useEffect(() => {
     startStream();
     return () => {

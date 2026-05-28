@@ -1,4 +1,4 @@
-// Topbar.jsx
+// File: Frontend/src/components/Topbar.jsx
 import { useLocation } from "react-router-dom";
 import { SearchIcon, Sun, Moon } from "lucide-react";
 import Searchbar from "./Searchbar";
@@ -12,29 +12,29 @@ function Topbar() {
     switch (location.pathname) {
       case "/":           return "Home";
       case "/dashboard":  return "Dashboard";
-      case "/camera":     return "Camera";
-      case "/models":     return "Models";
-      case "/about":      return "About";
-      case "/report":     return "Report";
-      default:            return "Page";
+      case "/camera":     return "Camera Live Stream";
+      case "/models":     return "Model Topologies";
+      case "/about":      return "About Project";
+      case "/report":     return "Audit Logs & Reports";
+      default:            return "Console Page";
     }
   };
 
   const getDescription = () => {
     switch (location.pathname) {
-      case "/":           return "Welcome — system is running";
-      case "/dashboard":  return "Live sensor monitoring · Updated just now";
-      case "/camera":     return "Live webcam feed · Detection active";
-      case "/models":     return "3 models loaded and active";
-      case "/about":      return "Team and technology overview";
-      case "/report":     return "Reports and updates";
-      default:            return "";
+      case "/":           return "Welcome — core services initialized";
+      case "/dashboard":  return "Live decision fusion monitoring stream";
+      case "/camera":     return "Proximity gating array stream active";
+      case "/models":     return "4 machine learning nodes loaded and operational";
+      case "/about":      return "System overview architecture definitions";
+      case "/report":     return "Compiled institutional compliance tracking logs";
+      default:            return "Telemetry service active";
     }
   };
 
   return (
     <div
-      className="flex p-4 rounded-xl justify-between items-center"
+      className="flex p-4 rounded-xl justify-between items-center relative z-30"
       style={{
         background: "var(--topbar-bg)",
         border: "1px solid var(--topbar-border)",
@@ -50,9 +50,10 @@ function Topbar() {
       </div>
 
       <div className="flex items-center gap-6">
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
-             style={{ background: "var(--bg-card-alt)", border: "1px solid var(--border)" }}>
-          <SearchIcon size={14} style={{ color: "var(--text-muted)" }} />
+        {/* Container style handles inner inputs neatly */}
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg relative"
+             style={{ background: "var(--bg-card-alt)", border: "1px solid var(--border)", width: "260px" }}>
+          <SearchIcon size={14} style={{ color: "var(--text-muted)" }} className="shrink-0" />
           <Searchbar />
         </div>
 

@@ -1,3 +1,6 @@
+import os
+import cv2
+import numpy as np
 from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.orm import Session
 from database.db import get_db
@@ -6,10 +9,14 @@ from models.train import sensor_models
 from models.train.cv_model import analyze_frame
 from models.train.mobilenet import predict_frame
 from models.train.fusion_model import predict_single
-import numpy as np
-import cv2
 
 router = APIRouter(prefix="/predict", tags=["predict"])
+
+# ── Storage Isolation Configuration ───────────────────────────
+BASE_DIR = os.path.dirname(__file__)
+# Maps directly to your centralized snapshots folder inside your Capstone system
+SNAPSHOTS_DIR = os.path.normpath(os.path.join(BASE_DIR, "../../data/snapshots"))
+os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
 
 
 def sensor_ensemble(reading):
@@ -18,10 +25,6 @@ def sensor_ensemble(reading):
     If both agree   → high confidence, use agreed class.
     If they disagree → lower confidence, use RF as tiebreaker.
     """
-    # We don't have raw windows here — sensor was already saved
-    # So we use saved reading values as a proxy signal
-    # Real ensemble happens in /sensor route with live windows
-    # Here we just use the saved label from the reading
     return {
         "class":      0,
         "confidence": 0.0,
@@ -34,15 +37,6 @@ def run_sensor_ensemble(window_1, window_2, window_3, temp, humidity):
     """
     Runs RF + XGBoost on live MQ3 windows and combines results.
     Called from /predict/full when live windows are available.
-
-    Returns:
-        {
-            "class":      1,
-            "confidence": 0.88,
-            "agreed":     True,   ← both models agreed
-            "rf_class":   1,
-            "xgb_class":  1,
-        }
     """
     try:
         rf_result = sensor_models.predict(
@@ -65,13 +59,11 @@ def run_sensor_ensemble(window_1, window_2, window_3, temp, humidity):
     agreed = rf_result["class"] == xgb_result["class"]
 
     if agreed:
-        # Both agree — average their confidence
         final_class = rf_result["class"]
         confidence  = round(
             (rf_result["confidence"] + xgb_result["confidence"]) / 2, 4
         )
     else:
-        # Disagree — use RF as tiebreaker, lower confidence
         final_class = rf_result["class"]
         confidence  = round(rf_result["confidence"] * 0.7, 4)  # penalize disagreement
 
@@ -93,19 +85,8 @@ async def full_predict(
     db:         Session    = Depends(get_db)
 ):
     """
-    Full prediction pipeline:
-        1. Decode camera frame
-        2. EAR from MediaPipe (cv_model)
-        3. Visual impairment from MobileNet
-        4. Sensor ensemble from DB reading (RF + XGBoost)
-        5. Fusion model — combines all signals
-        6. Save result back to reading
-
-    Usage:
-        POST /predict/full?reading_id=42
-        Body: form-data, key=file, value=<image>
+    Full prediction pipeline blending computer vision profiles and historical data logs.
     """
-
     # 1. Decode image
     contents = await file.read()
     np_arr   = np.frombuffer(contents, np.uint8)
@@ -141,7 +122,7 @@ async def full_predict(
     # 5. Get sensor class from reading label
     sensor_label_map = {"No alcohol": 0, "Breath alcohol": 1, "Sanitizer": 2}
     sensor_class      = sensor_label_map.get(reading.label, 0)
-    sensor_confidence = 0.5   # fallback — no confidence stored in reading
+    sensor_confidence = 0.5   
 
     # 6. Fusion model
     try:
@@ -169,29 +150,27 @@ async def full_predict(
     reading.label = fusion_result["label"]
     db.commit()
 
+    # FIX: Audit Verification Snapshot generation block.
+    # Automatically files violation snapshots onto disk linked directly to database primary keys.
+    if fusion_result["label"] in ["Over Limit", "Near Limit"]:
+        label_slug = fusion_result["label"].replace(" ", "_").lower()
+        file_path = os.path.join(SNAPSHOTS_DIR, f"flagged_{reading.id}_{label_slug}.jpg")
+        cv2.imwrite(file_path, frame)
+        print(f"[SECURITY LOCKOUT] Snapshot generated for database log entry evaluation: {file_path}")
+
     return {
         "reading_id": reading.id,
-
-        # Sensor result
         "sensor_class":      sensor_class,
         "sensor_label":      reading.label,
-
-        # EAR result
         "ear":               ear,
         "eye_status":        ear_result["status"],
         "impaired":          ear_result["impaired"],
-
-        # MobileNet result
         "visual_label":      mobile_result["label"],
         "visual_confidence": mobile_result["confidence"],
-
-        # Fusion result
         "final_label":       fusion_result["label"],
         "final_risk":        fusion_result["risk"],
         "final_action":      fusion_result["action"],
         "final_confidence":  fusion_result["confidence"],
-
-        # Raw sensor values
         "bac":               reading.bac,
         "temperature":       reading.temperature,
         "humidity":          reading.humidity,
@@ -204,7 +183,7 @@ async def live_predict(
     file:        UploadFile  = File(...),
     temperature: float       = 0.0,
     humidity:    float       = 0.0,
-    mq3_1:       str         = "",   # comma-separated values
+    mq3_1:       str         = "",   
     mq3_2:       str         = "",
     mq3_3:       str         = "",
     db:          Session     = Depends(get_db)
@@ -212,18 +191,7 @@ async def live_predict(
     """
     Full prediction with live MQ3 windows + camera frame.
     Used during deployment when ESP32 + camera both send data together.
-
-    Usage:
-        POST /predict/live
-        Form fields:
-            file        — camera frame
-            temperature — from ESP32
-            humidity    — from ESP32
-            mq3_1       — comma-separated readings e.g. "112,115,320,400,380"
-            mq3_2       — comma-separated readings
-            mq3_3       — comma-separated readings
     """
-
     # 1. Decode image
     contents = await file.read()
     np_arr   = np.frombuffer(contents, np.uint8)
@@ -291,35 +259,32 @@ async def live_predict(
     db.commit()
     db.refresh(new_reading)
 
+    # FIX: Audit Verification Snapshot generation block for deployment logic routes.
+    if fusion_result["label"] in ["Over Limit", "Near Limit"]:
+        label_slug = fusion_result["label"].replace(" ", "_").lower()
+        file_path = os.path.join(SNAPSHOTS_DIR, f"flagged_{new_reading.id}_{label_slug}.jpg")
+        cv2.imwrite(file_path, frame)
+        print(f"[SECURITY LOCKOUT] Deployment Snapshot written to archival registry: {file_path}")
+
     return {
         "reading_id": new_reading.id,
-
-        # Sensor ensemble
         "sensor_class":      sensor_result["class"],
         "sensor_label":      sensor_result["label"],
         "sensor_confidence": sensor_result["confidence"],
-        "sensor_agreed":     sensor_result["agreed"],   # did RF + XGBoost agree?
+        "sensor_agreed":     sensor_result["agreed"],   
         "rf_class":          sensor_result["rf_class"],
         "xgb_class":         sensor_result["xgb_class"],
-
-        # EAR
         "ear":               ear,
         "eye_status":        ear_result["status"],
         "impaired":          ear_result["impaired"],
         "proximity":         ear_result["proximity"],
-
-        # MobileNet
         "visual_label":      mobile_result["label"],
         "visual_confidence": mobile_result["confidence"],
-
-        # Fusion final decision
         "final_label":       fusion_result["label"],
         "final_risk":        fusion_result["risk"],
         "final_action":      fusion_result["action"],
         "final_confidence":  fusion_result["confidence"],
         "all_probs":         fusion_result.get("all_probs", {}),
-
-        # Environment
         "temperature":       temperature,
         "humidity":          humidity,
     }
@@ -331,9 +296,6 @@ def predict_from_reading(reading_id: int, db: Session = Depends(get_db)):
     """
     Re-run fusion prediction from an existing saved reading.
     Useful for re-evaluating old data after retraining.
-
-    Usage:
-        GET /predict/reading/42
     """
     reading = db.query(Reading).filter(Reading.id == reading_id).first()
     if not reading:

@@ -1,4 +1,4 @@
-#camera.py
+# File: Backend/routes/camera.py
 from fastapi import APIRouter, Depends, File, UploadFile, Form, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -11,68 +11,76 @@ import numpy as np
 import cv2
 import os
 import time
+import threading
+import logging
 
-load_dotenv()  # loads .env from Backend/ root — picks up RTSP_URL, DB_* etc.
+load_dotenv()
 
 router = APIRouter(prefix="/camera", tags=["Camera"])
 
 REGISTERED = os.path.join(os.path.dirname(__file__), "../data/faces/registered")
 os.makedirs(REGISTERED, exist_ok=True)
 
-# ── RTSP config — read from .env ──────────────────────────────
-# .env entry:  RTSP_URL=rtsp://admin:yourpassword@192.168.x.x:554/stream2
-# stream2 = 360p, faster than stream1 (1080p), good enough for face detection
 RTSP_URL = os.getenv("RTSP_URL")
 
+# Configure explicit debugging logs to output to stdout
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("AlcoDetect.Camera")
+logger.setLevel(logging.INFO)
+
 if not RTSP_URL:
-    raise RuntimeError(
-        "RTSP_URL not set — add it to your .env file:\n"
-        "RTSP_URL=rtsp://admin:yourpassword@192.168.x.x:554/stream2"
-    )
+    logger.warning("RTSP_URL not set in .env — camera endpoints will return 503.")
 
 
 # ── Persistent RTSP capture — runs in background thread ──────
-# Opens the RTSP connection ONCE and keeps reading frames into
-# a buffer. get_rtsp_frame() just returns the latest buffered
-# frame instantly — no connection overhead per request.
-import threading
-
 class RTSPStream:
     def __init__(self, url: str):
-        self.url    = url
-        self.frame  = None
-        self.lock   = threading.Lock()
-        self.active = False
+        self.url     = url
+        self.frame   = None
+        self.lock    = threading.Lock()
+        self.active  = False
         self._thread = None
+        self.connected = False
 
     def start(self):
+        if not self.url:
+            return
         self.active  = True
         self._thread = threading.Thread(target=self._capture, daemon=True)
         self._thread.start()
 
     def _capture(self):
         cap = None
+        logger.info("[RTSP THREAD] Capture loop initiated.")
         while self.active:
             try:
                 if cap is None or not cap.isOpened():
+                    logger.info(f"[RTSP THREAD] Connecting to: {self.url}")
                     cap = cv2.VideoCapture(self.url)
-                    # reduce internal buffer to 1 frame — kills stale frame lag
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
+                    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)
 
                 ret, frame = cap.read()
                 if ret and frame is not None:
                     with self.lock:
-                        self.frame = frame
+                        self.frame     = frame
+                        self.connected = True
+                    time.sleep(0.01)  # Yield GIL to prevent starving Uvicorn worker threads
                 else:
-                    # stream dropped — reconnect
-                    cap.release()
+                    logger.warning("[RTSP THREAD] Failed to grab frame. Reconnecting...")
+                    self.connected = False
+                    if cap:
+                        cap.release()
                     cap = None
-                    time.sleep(1)
-            except Exception:
+                    time.sleep(2)
+            except Exception as e:
+                logger.error(f"[RTSP THREAD] Critical capture error: {e}")
+                self.connected = False
                 if cap:
                     cap.release()
                 cap = None
-                time.sleep(1)
+                time.sleep(2)
 
         if cap:
             cap.release()
@@ -85,123 +93,127 @@ class RTSPStream:
         self.active = False
 
 
-# Start the stream immediately when the module loads
 _stream = RTSPStream(RTSP_URL)
 _stream.start()
 
-# Wait up to 8s for the first frame before accepting requests
-# Prevents the "unavailable → stream" flash on startup
-_waited = 0
-while _stream.read() is None and _waited < 8:
-    time.sleep(0.5)
-    _waited += 0.5
-
 
 def get_rtsp_frame() -> np.ndarray | None:
-    """Returns the latest buffered frame — no connection overhead."""
     return _stream.read()
 
 
-# ── Stream frame endpoint — frontend polls this for live feed ──
+_analyze_lock = threading.Lock()
+_last_analysis = None
+
+
+# ── Stream frame endpoint ─────────────────────────────────────
 @router.get("/stream/frame")
 def stream_frame():
     """
     Returns a single JPEG frame from the C200C RTSP stream.
-    Frontend polls this every 500ms to display the live feed.
-
-    Frontend usage:
-        const res = await fetch("/camera/stream/frame");
-        const blob = await res.blob();
-        setFrameUrl(URL.createObjectURL(blob));
     """
+    logger.debug("[GET /stream/frame] Fetching raw frame buffer...")
     frame = get_rtsp_frame()
 
     if frame is None:
-        raise HTTPException(status_code=503, detail="Camera unavailable — check RTSP_URL and camera connection")
+        logger.warning("[GET /stream/frame] Frame buffer empty. Returning 503.")
+        raise HTTPException(
+            status_code=503,
+            detail="Camera unavailable — connecting in background"
+        )
 
-    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    logger.debug("[GET /stream/frame] Frame successfully encoded and served.")
     return Response(
         content=buffer.tobytes(),
         media_type="image/jpeg",
         headers={
-            # Prevent browser caching so every poll gets a fresh frame
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
         }
     )
 
 
-# ── Analyze endpoint — accepts uploaded frame OR grabs from RTSP
+# ── Analyze endpoint ──────────────────────────────────────────
 @router.post("/analyze")
-async def analyze(
-    file: UploadFile = File(None),  # optional — if None, grabs from RTSP
+def analyze(
+    file: UploadFile = File(None),
     db:   Session    = Depends(get_db)
 ):
     """
     Analyzes a camera frame for EAR + proximity + face identity.
-
-    Two modes:
-      - file provided → use uploaded frame (training mode, browser webcam)
-      - file is None  → grab from RTSP directly (deployment mode, C200C)
-
-    Frontend should call this continuously while displaying the stream.
-    When is_close = True, frontend triggers ESP32 to buffer MQ3 data.
     """
+    global _last_analysis
+    logger.info("[POST /analyze] Request received.")
+
     if file is not None:
-        # Training mode — frame uploaded from browser webcam
-        contents = await file.read()
+        logger.info("[POST /analyze] Parsing frame uploaded via request.")
+        contents = file.file.read()
         np_arr   = np.frombuffer(contents, np.uint8)
         frame    = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     else:
-        # Deployment mode — grab frame from C200C RTSP
+        logger.info("[POST /analyze] Pulling frame from passive RTSP buffer.")
         frame = get_rtsp_frame()
 
     if frame is None:
+        logger.warning("[POST /analyze] No frame content available.")
+        if _last_analysis:
+            return _last_analysis
         return {"error": "No frame available — check camera connection"}
 
-    ear_result  = analyze_frame(frame)
-    face_result = identify(frame)
+    logger.info("[POST /analyze] Attempting to acquire non-blocking analysis lock...")
+    acquired = _analyze_lock.acquire(blocking=False)
+    if not acquired:
+        logger.warning("[POST /analyze] Lock acquisition failed. Analysis is busy. Returning cache.")
+        if _last_analysis:
+            return _last_analysis
+        return {"error": "Analysis busy — try again"}
 
-    return {
-        # Proximity — frontend uses this to trigger ESP32
-        "proximity":  ear_result["proximity"],
-        "is_close":   ear_result["is_close"],
+    logger.info("[POST /analyze] Lock secured successfully.")
+    try:
+        logger.info("[POST /analyze] Line Check: Entering MediaPipe 'analyze_frame'...")
+        start_mp = time.time()
+        ear_result = analyze_frame(frame)
+        logger.info(f"[POST /analyze] Line Check: MediaPipe finished in {time.time() - start_mp:.4f}s.")
 
-        # EAR
-        "ear":        ear_result["ear"],
-        "status":     ear_result["status"],
-        "impaired":   ear_result["impaired"],
-        "left_ear":   ear_result["left_ear"],
-        "right_ear":  ear_result["right_ear"],
+        logger.info("[POST /analyze] Line Check: Entering DeepFace 'identify'...")
+        start_df = time.time()
+        face_result = identify(frame)
+        logger.info(f"[POST /analyze] Line Check: DeepFace finished in {time.time() - start_df:.4f}s.")
 
-        # Face identity
-        "identified": face_result["identified"],
-        "name":       face_result["name"],
-        "confidence": face_result["confidence"],
-    }
+        result = {
+            "proximity":  ear_result["proximity"],
+            "is_close":   ear_result["is_close"],
+            "ear":        ear_result["ear"],
+            "status":     ear_result["status"],
+            "impaired":   ear_result["impaired"],
+            "left_ear":   ear_result["left_ear"],
+            "right_ear":  ear_result["right_ear"],
+            "identified": face_result["identified"],
+            "name":       face_result["name"],
+            "confidence": face_result["confidence"],
+        }
+        _last_analysis = result
+        logger.info("[POST /analyze] Analysis sequence completed safely.")
+        return result
+    except Exception as exc:
+        logger.error(f"[POST /analyze] CRITICAL exception caught during processing loop: {exc}")
+        return {"error": f"Internal processing crash: {str(exc)}"}
+    finally:
+        _analyze_lock.release()
+        logger.info("[POST /analyze] Analysis lock released clean.")
 
 
 # ── Register subject ONLY if alcohol detected ──────────────────
 @router.post("/register")
-async def register_subject(
-    file:       UploadFile = File(None),  # optional — grabs from RTSP if None
+def register_subject(
+    file:       UploadFile = File(None),
     name:       str        = Form(None),
     reading_id: int        = Form(None),
     db:         Session    = Depends(get_db)
 ):
-    """
-    Called ONLY when alcohol is detected.
-    Saves subject to DB + enrolls face via DeepFace.
-
-    Flow:
-        1. Sensor detects alcohol
-        2. Frontend calls this endpoint with the captured frame
-        3. Subject is saved to subjects table
-        4. Face enrolled via enroll() so DeepFace can identify later
-        5. Reading is linked to subject_id
-    """
+    logger.info("[POST /register] Processing enrolment sequence...")
     if file is not None:
-        contents = await file.read()
+        contents = file.file.read()
         np_arr   = np.frombuffer(contents, np.uint8)
         frame    = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     else:
@@ -210,22 +222,15 @@ async def register_subject(
     if frame is None:
         return {"error": "No frame available"}
 
-    # 1. Check if already registered via face recognition
     face_result = identify(frame)
 
     if face_result["identified"] and face_result["confidence"] > 0.7:
-        existing = db.query(Subject).filter(
-            Subject.face_id == face_result["name"]
-        ).first()
-
+        existing = db.query(Subject).filter(Subject.face_id == face_result["name"]).first()
         if existing and reading_id:
-            reading = db.query(Reading).filter(
-                Reading.id == reading_id
-            ).first()
+            reading = db.query(Reading).filter(Reading.id == reading_id).first()
             if reading:
                 reading.subject_id = existing.id
                 db.commit()
-
         return {
             "registered":    False,
             "already_known": True,
@@ -234,18 +239,13 @@ async def register_subject(
             "message":       "Already registered — reading linked",
         }
 
-    # 2. New person — register them
     subject_name = name or f"subject_{int(time.time())}"
-
-    new_subject = Subject(
-        name    = subject_name,
-        face_id = subject_name,
-    )
+    new_subject = Subject(name=subject_name, face_id=subject_name)
     db.add(new_subject)
     db.commit()
     db.refresh(new_subject)
 
-    # enroll() saves image + builds DeepFace index
+    logger.info(f"[POST /register] Enrolling face for: {subject_name}")
     enroll(subject_name, [frame])
 
     if reading_id:
@@ -255,7 +255,6 @@ async def register_subject(
             db.commit()
 
     img_path = os.path.join(REGISTERED, subject_name, "01.jpg")
-
     return {
         "registered":    True,
         "already_known": False,
@@ -264,3 +263,4 @@ async def register_subject(
         "face_saved":    img_path,
         "message":       "Subject registered — alcohol incident logged",
     }
+    

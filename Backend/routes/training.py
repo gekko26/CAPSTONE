@@ -1,3 +1,5 @@
+#training.py
+
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
@@ -13,14 +15,15 @@ import os
 import csv
 import io
 import time
-import requests
+import httpx                  # FIX: replaced requests with httpx for async-safe HTTP
+import requests               # kept only for sync endpoints (collect_sober, collect_sanitizer)
 from dotenv import load_dotenv
 
 load_dotenv()
 
 router = APIRouter(prefix="/training", tags=["Training"])
 
-ESP32_URL = os.getenv("ESP32_URL", "http://192.168.1.200")
+ESP32_URL = os.getenv("ESP32_URL", "http://192.168.69.18")
 FACES_DIR = os.path.join(os.path.dirname(__file__), "../data/faces")
 
 LABEL_NAMES = {
@@ -32,14 +35,36 @@ LABEL_NAMES = {
 
 
 # ── Helpers ───────────────────────────────────────────────────
+
 def trigger_esp32() -> dict:
-    """Tells ESP32 to start buffering MQ3. Returns trigger status."""
+    """
+    SYNC version — used by collect_sober and collect_sanitizer (sync endpoints).
+    Safe to call from regular def functions.
+    """
     try:
         r = requests.post(f"{ESP32_URL}/trigger", timeout=3)
         return {"triggered": True, "esp32_status": r.status_code}
     except requests.exceptions.ConnectionError:
         return {"triggered": False, "error": "ESP32 unreachable"}
     except requests.exceptions.Timeout:
+        return {"triggered": False, "error": "ESP32 timeout"}
+
+
+async def trigger_esp32_async() -> dict:
+    """
+    ASYNC version — used by collect_alcohol and collect_perfume (async endpoints).
+    FIX: Using httpx async client prevents blocking the FastAPI event loop.
+    Previously using sync requests.post() inside async def caused the deadlock —
+    the event loop was blocked for up to 3s, queuing up ESP32 sensor-data posts
+    and camera analyze requests until they timed out.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(f"{ESP32_URL}/trigger", timeout=3.0)
+        return {"triggered": True, "esp32_status": r.status_code}
+    except httpx.ConnectError:
+        return {"triggered": False, "error": "ESP32 unreachable"}
+    except httpx.TimeoutException:
         return {"triggered": False, "error": "ESP32 timeout"}
 
 
@@ -84,7 +109,7 @@ def build_pending_row(label: int, sub_label: str = None, bac: float = None) -> T
 
 
 # ═════════════════════════════════════════════════════════════
-# NEW — 4 Dedicated Collection Endpoints
+# 4 Dedicated Collection Endpoints
 # ═════════════════════════════════════════════════════════════
 
 # ── Label 0 — Sober (manual, no camera, no BAC) ───────────────
@@ -92,6 +117,7 @@ def build_pending_row(label: int, sub_label: str = None, bac: float = None) -> T
 def collect_sober(db: Session = Depends(get_db)):
     """
     Manual trigger for sober event.
+    Uses sync trigger_esp32() — safe because this is a sync def endpoint.
 
     Flow:
       1. Operator clicks "Trigger Sober" in UI
@@ -99,12 +125,9 @@ def collect_sober(db: Session = Depends(get_db)):
       3. Person stands/walks through gate normally
       4. ESP32 posts sensor data to /training/collect/sensor-data
       5. Row auto-labeled 0 (no alcohol), sub_label=NULL
-
-    No camera, no BAC input needed.
     """
     trigger_result = trigger_esp32()
 
-    # Create pending row — sensor features filled when ESP32 posts
     row = build_pending_row(label=0, sub_label=None, bac=0.00)
     db.add(row)
     db.commit()
@@ -129,17 +152,16 @@ async def collect_alcohol(
 ):
     """
     Camera-triggered alcohol event.
+    FIX: Uses async trigger_esp32_async() to avoid blocking the event loop.
 
     Flow:
       1. Frontend polls C200C RTSP stream
-      2. is_close=True detected → frontend captures frame + triggers ESP32
+      2. is_close=True detected → frontend captures frame
       3. Frontend POSTs frame here with BAC value from breathalyzer
       4. Frame saved to faces/impaired/ for MobileNet training
       5. Row created as label=1, sub_label=NULL
-      6. ESP32 posts sensor data to /training/collect/sensor-data to fill features
-
-    BAC is REQUIRED — it is the ground truth for training.
-    Model learns alcohol vapor patterns; BAC is recorded, not predicted in deployment.
+      6. ESP32 trigger sent async — does NOT block camera analyze loop
+      7. ESP32 posts sensor data to /training/collect/sensor-data to fill features
 
     IMPORTANT: drunk people frequently look drowsy via EAR.
     Image is ALWAYS saved to faces/impaired/ regardless of EAR status.
@@ -165,10 +187,9 @@ async def collect_alcohol(
             # Never redirect to drowsy/ even if EAR says drowsy
             image_path = save_face(frame, os.path.join(FACES_DIR, "impaired"))
 
-    # Trigger ESP32 simultaneously
-    trigger_result = trigger_esp32()
+    # FIX: await async trigger — event loop stays free during the HTTP call
+    trigger_result = await trigger_esp32_async()
 
-    # Create pending row
     row = build_pending_row(label=1, sub_label=None, bac=bac)
     db.add(row)
     db.commit()
@@ -193,6 +214,7 @@ async def collect_alcohol(
 def collect_sanitizer(db: Session = Depends(get_db)):
     """
     Manual trigger for direct sanitizer / rubbing alcohol spray event.
+    Uses sync trigger_esp32() — safe because this is a sync def endpoint.
 
     Flow:
       1. Operator clicks "Trigger Sanitizer" in UI
@@ -200,9 +222,6 @@ def collect_sanitizer(db: Session = Depends(get_db)):
       3. Operator sprays rubbing alcohol / sanitizer near sensors
       4. ESP32 posts sensor data to /training/collect/sensor-data
       5. Row auto-labeled 2, sub_label='sanitizer'
-
-    No camera, no BAC needed.
-    Expected sensor pattern: 1–2 sensors spike hard, spatial_variance_max ≈ 180–220.
     """
     trigger_result = trigger_esp32()
 
@@ -230,17 +249,15 @@ async def collect_perfume(
 ):
     """
     Camera-triggered perfume / cologne event.
+    FIX: Uses async trigger_esp32_async() to avoid blocking the event loop.
 
     Flow:
       1. Frontend polls C200C RTSP stream
-      2. is_close=True detected → frontend captures frame + triggers ESP32
+      2. is_close=True detected → frontend captures frame
       3. Frontend POSTs frame here (no BAC needed)
       4. Row created as label=2, sub_label='perfume'
-      5. ESP32 posts sensor data to /training/collect/sensor-data
-
-    No face image saved — person is not impaired.
-    Expected sensor pattern: mild rise on all 3 sensors, spatial_variance_max ≈ 80–120.
-    Weaker signal than direct sanitizer spray (180–220).
+      5. ESP32 trigger sent async — does NOT block camera analyze loop
+      6. ESP32 posts sensor data to /training/collect/sensor-data
     """
     contents   = await file.read()
     frame      = decode_frame(contents)
@@ -249,7 +266,8 @@ async def collect_perfume(
     if frame is not None:
         ear_result = analyze_frame(frame)
 
-    trigger_result = trigger_esp32()
+    # FIX: await async trigger — event loop stays free during the HTTP call
+    trigger_result = await trigger_esp32_async()
 
     row = build_pending_row(label=2, sub_label="perfume", bac=0.00)
     db.add(row)
@@ -275,7 +293,7 @@ class SensorPayload(BaseModel):
     mq3_1:       List[float]
     mq3_2:       List[float]
     mq3_3:       List[float]
-    row_id:      Optional[int] = None  # if ESP32 knows which row to fill
+    row_id:      Optional[int] = None
 
 
 @router.post("/collect/sensor-data")
@@ -321,13 +339,11 @@ def receive_sensor_data(data: SensorPayload, db: Session = Depends(get_db)):
     if features is None:
         raise HTTPException(status_code=400, detail="Feature extraction failed")
 
-    # Find the row to fill
     if data.row_id:
         row = db.query(TrainingData).filter(TrainingData.id == data.row_id).first()
         if not row:
             raise HTTPException(status_code=404, detail=f"Row {data.row_id} not found")
     else:
-        # Fill most recent row with null sensor features
         row = (
             db.query(TrainingData)
             .filter(TrainingData.mq3_1_max == None)
@@ -335,11 +351,9 @@ def receive_sensor_data(data: SensorPayload, db: Session = Depends(get_db)):
             .first()
         )
         if not row:
-            # No pending row — create new one (old-style ESP32 direct post)
             row = TrainingData(label=-1, sub_label=None)
             db.add(row)
 
-    # Fill sensor features (correct indices)
     row.mq3_1_max            = features[0]
     row.mq3_1_avg            = features[1]
     row.mq3_1_std            = features[2]
@@ -353,8 +367,8 @@ def receive_sensor_data(data: SensorPayload, db: Session = Depends(get_db)):
     row.decay_time           = features[10]
     row.spatial_variance     = features[11]
     row.spatial_variance_avg = features[12]
-    row.temperature          = features[13]   # BUG FIX: was [12] in original sensor.py
-    row.humidity             = features[14]   # BUG FIX: was [13] in original sensor.py
+    row.temperature          = features[13]
+    row.humidity             = features[14]
 
     db.commit()
     db.refresh(row)
@@ -382,13 +396,11 @@ def receive_sensor_data(data: SensorPayload, db: Session = Depends(get_db)):
 # ORIGINAL Endpoints (kept + updated for sub_label)
 # ═════════════════════════════════════════════════════════════
 
-# ── Old collect (ESP32 direct post, kept for compatibility) ────
 @router.post("/collect")
 def collect_sensor(data: SensorPayload, db: Session = Depends(get_db)):
     """
     Legacy endpoint — ESP32 posts MQ3 window directly.
     Kept for backward compatibility with old firmware.
-    New firmware should use /training/collect/sensor-data instead.
     """
     if not (len(data.mq3_1) == len(data.mq3_2) == len(data.mq3_3)):
         raise HTTPException(
@@ -439,7 +451,6 @@ def collect_sensor(data: SensorPayload, db: Session = Depends(get_db)):
     }
 
 
-# ── Old session (kept for compatibility) ──────────────────────
 @router.post("/session")
 async def training_session(
     file:        UploadFile = File(...),
@@ -451,10 +462,7 @@ async def training_session(
     event_type:  str        = Form(...),
     db:          Session    = Depends(get_db),
 ):
-    """
-    Legacy combined session endpoint. Kept for compatibility.
-    New flow uses /collect/alcohol or /collect/perfume + /collect/sensor-data separately.
-    """
+    """Legacy combined session endpoint. Kept for compatibility."""
     if event_type not in ["sober", "alcohol", "sanitizer"]:
         raise HTTPException(status_code=400, detail="event_type must be sober, alcohol, or sanitizer")
 
@@ -543,7 +551,6 @@ def attach_label(row_id: int, payload: LabelPayload, db: Session = Depends(get_d
     Operator submits BAC from breathalyzer.
     Label auto-assigned based on BAC + sanitizer flag + sensor pattern.
     Only works on pending rows (label = -1).
-    Use /relabel for already-labeled rows.
     """
     row = db.query(TrainingData).filter(TrainingData.id == row_id).first()
     if not row:
@@ -588,15 +595,12 @@ def attach_label(row_id: int, payload: LabelPayload, db: Session = Depends(get_d
 class RelabelPayload(BaseModel):
     label:     int
     reason:    Optional[str] = None
-    sub_label: Optional[str] = None  # optionally correct sub_label too
+    sub_label: Optional[str] = None
 
 
 @router.patch("/relabel/{row_id}")
 def relabel(row_id: int, payload: RelabelPayload, db: Session = Depends(get_db)):
-    """
-    Correct a mislabeled row. label must be 0, 1, or 2.
-    Optionally pass sub_label to correct 'sanitizer'/'perfume' as well.
-    """
+    """Correct a mislabeled row. label must be 0, 1, or 2."""
     if payload.label not in [0, 1, 2]:
         raise HTTPException(
             status_code=400,
@@ -652,7 +656,7 @@ def get_training_data(db: Session = Depends(get_db)):
             "date":                 r.date,
             "label":                r.label,
             "label_name":           LABEL_NAMES.get(r.label, "Unknown"),
-            "sub_label":            r.sub_label,   # BUG FIX: was missing
+            "sub_label":            r.sub_label,
             "bac":                  r.bac,
             "mq3_1_max":            r.mq3_1_max,
             "mq3_1_avg":            r.mq3_1_avg,
@@ -701,7 +705,7 @@ def training_summary(db: Session = Depends(get_db)):
         "no_alcohol":     counts[0],
         "breath_alcohol": counts[1],
         "sanitizer":      counts[2],
-        "sanitizer_breakdown": {          # BUG FIX: was missing
+        "sanitizer_breakdown": {
             "rubbing_alcohol": sub_counts["sanitizer"],
             "perfume":         sub_counts["perfume"],
         },
@@ -734,7 +738,6 @@ def export_csv(db: Session = Depends(get_db)):
     output = io.StringIO()
     writer = csv.writer(output)
 
-    # BUG FIX: sub_label column was missing from CSV
     writer.writerow([
         "id", "date", "label", "label_name", "sub_label", "bac",
         "mq3_1_max", "mq3_1_avg", "mq3_1_std",
@@ -770,7 +773,6 @@ def trigger_training(db: Session = Depends(get_db)):
     """
     Train RF + XGBoost on labeled rows.
     Requires at least 20 samples per class (60 total minimum).
-    Only uses label (0/1/2) — sub_label is stored for future use, not fed to model.
     """
     rows = db.query(TrainingData).filter(TrainingData.label >= 0).all()
 
@@ -793,7 +795,6 @@ def trigger_training(db: Session = Depends(get_db)):
 
     X, y = [], []
     for r in rows:
-        # Only use rows with complete sensor features
         if r.mq3_1_max is None:
             continue
         X.append([

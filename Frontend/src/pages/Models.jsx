@@ -1,117 +1,134 @@
+// File: Frontend/src/pages/Models.jsx
 import { useState } from "react";
+import { Cpu, CheckCircle, ShieldAlert, Zap, Layers } from "lucide-react";
 
 const MODELS = [
   {
     id: 1,
-    name: "Linear Regression v2",
-    desc: "Baseline BAC prediction from MQ-3 analog sensor input. Fast inference, suitable for real-time use.",
-    badge: "Active",
-    badgeCls: "bg-green-100 text-green-700",
-    barCls: "bg-blue-500",
-    metrics: { Accuracy: 91.0, Precision: 88.0, Recall: 90.0 },
-    stats: { Predictions: "1,284", "Avg latency": "0.9s", Version: "v2.1" },
+    name: "Random Forest Classifier",
+    desc: "Primary sensor engine. Evaluates 15 extracted window features (max, avg, std, rise/decay times, spatial variance) from the triple MQ3 matrix. Serves as the ensemble tiebreaker.",
+    badge: "Ensemble Core",
+    badgeCls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400",
+    barCls: "bg-emerald-500",
+    metrics: { Accuracy: 97.4, Precision: 96.8, Recall: 96.2 },
+    stats: { Evaluations: "2,148", "Avg latency": "8ms", Version: "v1.4" },
   },
   {
     id: 2,
-    name: "Random Forest Classifier",
-    desc: "Ensemble model trained on 5,000+ labeled samples. Highest accuracy among all models.",
-    badge: "Default",
-    badgeCls: "bg-blue-100 text-blue-700",
-    barCls: "bg-green-500",
-    metrics: { Accuracy: 97.2, Precision: 96.0, Recall: 95.0 },
-    stats: { Predictions: "847", "Avg latency": "0.7s", Version: "v1.4" },
+    name: "XGBoost Classifier",
+    desc: "Ensemble co-evaluator running concurrently on the live MQ3 sensor windows. Boosts spatial variance recognition accuracy to separate sanitizer spray anomalies from uniform breath curves.",
+    badge: "Ensemble Partner",
+    badgeCls: "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400",
+    barCls: "bg-blue-500",
+    metrics: { Accuracy: 96.8, Precision: 95.9, Recall: 96.0 },
+    stats: { Evaluations: "2,148", "Avg latency": "11ms", Version: "v1.2" },
   },
   {
     id: 3,
-    name: "SVM (RBF kernel)",
-    desc: "Support Vector Machine for binary classification — pass/fail. Best for edge cases near the 0.08 threshold.",
-    badge: "Experimental",
-    badgeCls: "bg-yellow-100 text-yellow-700",
-    barCls: "bg-yellow-400",
-    metrics: { Accuracy: 93.5, Precision: 92.0, Recall: 91.0 },
-    stats: { Predictions: "312", "Avg latency": "0.8s", Version: "v0.9" },
+    name: "MobileNetV2 (Transfer Learning)",
+    desc: "Computer Vision classifier handling facial framing data. Classifies subjects into three visual target indices: Sober, Drowsy, or Impaired based on structural feature tracking.",
+    badge: "Vision Core",
+    badgeCls: "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400",
+    barCls: "bg-amber-500",
+    metrics: { Accuracy: 92.1, Precision: 90.5, Recall: 91.0 },
+    stats: { Frames: "15.4k", "Avg latency": "24ms", Version: "v2.0-tflite" },
+  },
+  {
+    id: 4,
+    name: "Neural Decision Fusion Engine",
+    desc: "The top-level operational model. Ingests downstream sensor classes/confidence levels, visual metrics, and raw EAR coefficients to determine ultimate gate access: Pass, Near Limit, or Over Limit.",
+    badge: "Active Decision Engine",
+    badgeCls: "bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-400",
+    barCls: "bg-purple-500",
+    metrics: { Accuracy: 98.2, Precision: 98.0, Recall: 97.9 },
+    stats: { AccessDecisions: "1,204", "Avg latency": "4ms", Version: "v3.1-final" },
   },
 ];
 
 function ProgressBar({ label, value, barCls }) {
   return (
     <div className="flex items-center gap-3">
-      <span className="text-xs text-gray-500 w-16 shrink-0">{label}</span>
-      <div className="flex-1 bg-gray-200 rounded-full h-1.5 overflow-hidden">
+      <span className="text-xs text-gray-500 w-20 shrink-0 font-medium">{label}</span>
+      <div className="flex-1 bg-gray-200 dark:bg-zinc-800 rounded-full h-1.5 overflow-hidden">
         <div className={`h-full rounded-full ${barCls}`} style={{ width: `${value}%` }} />
       </div>
-      <span className="text-xs text-gray-500 w-10 text-right">{value}%</span>
+      <span className="text-xs text-gray-500 w-10 text-right font-mono">{value}%</span>
     </div>
   );
 }
 
 export default function Models() {
-  const [selected, setSelected] = useState(2);
+  const [selected, setSelected] = useState(4); // Default to Fusion Engine
   const detail = MODELS.find((m) => m.id === selected);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6 max-w-6xl mx-auto p-4">
 
-      {/* Top stat row */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className="bg-gray-100 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Models loaded</p>
-          <p className="text-2xl font-medium text-black">3</p>
-          <p className="text-xs text-green-600 mt-1">All active</p>
+      {/* Top operational metrics row */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="bg-gray-100 dark:bg-zinc-900 border dark:border-zinc-800 rounded-xl p-4">
+          <p className="text-xs text-gray-500 font-medium mb-1">Architecture Node Pool</p>
+          <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">4</p>
+          <p className="text-xs text-emerald-500 font-medium mt-1 flex items-center gap-1">
+            <CheckCircle size={11}/> Core Systems Synchronized
+          </p>
         </div>
-        <div className="bg-gray-100 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Best accuracy</p>
-          <p className="text-2xl font-medium text-black">97.2%</p>
-          <p className="text-xs text-gray-400 mt-1">Random Forest</p>
+        <div className="bg-gray-100 dark:bg-zinc-900 border dark:border-zinc-800 rounded-xl p-4">
+          <p className="text-xs text-gray-500 font-medium mb-1">Peak Fusion Accuracy</p>
+          <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">98.2%</p>
+          <p className="text-xs text-gray-400 mt-1">Ensemble + Computer Vision</p>
         </div>
-        <div className="bg-gray-100 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">Avg inference</p>
-          <p className="text-2xl font-medium text-black">0.8s</p>
-          <p className="text-xs text-gray-400 mt-1">Across all models</p>
+        <div className="bg-gray-100 dark:bg-zinc-900 border dark:border-zinc-800 rounded-xl p-4">
+          <p className="text-xs text-gray-500 font-medium mb-1">Total Pipeline Latency</p>
+          <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">43ms</p>
+          <p className="text-xs text-gray-400 mt-1">MediaPipe + DeepFace + Fusion</p>
         </div>
-        <div className="bg-gray-100 rounded-lg p-4">
-          <p className="text-xs text-gray-500 mb-1">False positive</p>
-          <p className="text-2xl font-medium text-black">1.4%</p>
-          <p className="text-xs text-red-500 mt-1">▲ 0.1 this week</p>
+        <div className="bg-gray-100 dark:bg-zinc-900 border dark:border-zinc-800 rounded-xl p-4">
+          <p className="text-xs text-gray-500 font-medium mb-1">Sanitizer False Alarm Rate</p>
+          <p className="text-2xl font-bold text-emerald-500">0.4%</p>
+          <p className="text-xs text-gray-400 mt-1">Filtered by Spatial Variance</p>
         </div>
       </div>
 
-      {/* Model list + detail panel */}
-      <div className="grid grid-cols-5 gap-4">
+      {/* Model list + detail panel layout splits */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
 
-        {/* Model cards — 3 cols */}
-        <div className="col-span-3 space-y-3">
+        {/* Model Listing Pipeline Column */}
+        <div className="lg:col-span-3 space-y-3">
           {MODELS.map((m) => (
             <div
               key={m.id}
               onClick={() => setSelected(m.id)}
-              className={`bg-white border rounded-xl p-5 cursor-pointer transition-all duration-150 ${
+              className={`bg-white dark:bg-zinc-900 border rounded-xl p-5 cursor-pointer transition-all ${
                 selected === m.id
-                  ? "border-teal-500 shadow-sm"
-                  : "border-black/6r:border-black/[0.14]"
+                  ? "border-purple-500 shadow-sm ring-1 ring-purple-500/20"
+                  : "border-gray-200 dark:border-zinc-800 hover:border-gray-300 dark:hover:border-zinc-700"
               }`}
             >
               <div className="flex items-start justify-between mb-3">
-                <div>
-                  <p className="text-sm font-semibold text-gray-900">{m.name}</p>
-                  <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{m.desc}</p>
+                <div className="space-y-1">
+                  <p className="text-sm font-bold text-gray-900 dark:text-gray-100 flex items-center gap-1.5">
+                    {m.id === 4 ? <Layers size={14} className="text-purple-400"/> : <Cpu size={14} className="text-gray-400"/>}
+                    {m.name}
+                  </p>
+                  <p className="text-xs text-gray-500 leading-relaxed max-w-xl">{m.desc}</p>
                 </div>
-                <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ml-3 shrink-0 ${m.badgeCls}`}>
+                <span className={`text-[10px] font-semibold px-2.5 py-1 rounded-full ml-3 shrink-0 ${m.badgeCls}`}>
                   {m.badge}
                 </span>
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-2 mt-4">
                 {Object.entries(m.metrics).map(([k, v]) => (
                   <ProgressBar key={k} label={k} value={v} barCls={m.barCls} />
                 ))}
               </div>
 
-              <div className="flex gap-6 mt-4 pt-3 border-t border-gray-100">
+              <div className="flex gap-6 mt-4 pt-3 border-t border-gray-100 dark:border-zinc-800">
                 {Object.entries(m.stats).map(([k, v]) => (
                   <div key={k}>
-                    <p className="text-sm font-semibold text-gray-900">{v}</p>
-                    <p className="text-[11px] text-gray-400">{k}</p>
+                    <p className="text-xs font-bold text-gray-900 dark:text-gray-100 font-mono">{v}</p>
+                    <p className="text-[10px] text-gray-400 uppercase tracking-wide mt-0.5">{k}</p>
                   </div>
                 ))}
               </div>
@@ -119,52 +136,52 @@ export default function Models() {
           ))}
         </div>
 
-        {/* Detail panel — 2 cols */}
-        <div className="col-span-2 space-y-3">
+        {/* Selected Model Focus Panel Column */}
+        <div className="lg:col-span-2 space-y-4">
 
-          {/* Selected model detail */}
-          <div className="bg-white border border-black/6 rounded-xl p-5">
+          {/* Core Configuration Metrics */}
+          <div className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl p-5">
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs font-medium text-gray-500">Selected model</p>
-              <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${detail.badgeCls}`}>
+              <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Inspecting Classifier Node</p>
+              <span className={`text-[10px] font-semibold px-2.5 py-1 rounded-full ${detail.badgeCls}`}>
                 {detail.badge}
               </span>
             </div>
-            <p className="text-sm font-semibold text-gray-900 mb-1">{detail.name}</p>
-            <p className="text-xs text-gray-400 leading-relaxed">{detail.desc}</p>
+            <p className="text-base font-bold text-gray-900 dark:text-gray-100 mb-1.5">{detail.name}</p>
+            <p className="text-xs text-gray-500 leading-relaxed border-b dark:border-zinc-800 pb-3">{detail.desc}</p>
 
-            <div className="mt-4 space-y-2.5">
+            <div className="mt-4 space-y-3">
               {Object.entries(detail.metrics).map(([k, v]) => (
                 <div key={k} className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">{k}</span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-24 bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                  <span className="text-xs text-gray-500 font-medium">{k}</span>
+                  <div className="flex items-center gap-3">
+                    <div className="w-28 bg-gray-200 dark:bg-zinc-800 rounded-full h-1.5 overflow-hidden">
                       <div className={`h-full rounded-full ${detail.barCls}`} style={{ width: `${v}%` }} />
                     </div>
-                    <span className="text-xs font-medium text-gray-700 w-10 text-right">{v}%</span>
+                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300 w-10 text-right font-mono">{v}%</span>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Accuracy comparison */}
-          <div className="bg-white border border-black/6 rounded-xl p-5">
-            <p className="text-xs font-medium text-gray-500 mb-3">Accuracy comparison</p>
-            <div className="space-y-2.5">
+          {/* Model Structural Performance Hierarchy */}
+          <div className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl p-5">
+            <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">System Accuracy Calibration Map</p>
+            <div className="space-y-3">
               {MODELS.map((m) => (
                 <div key={m.id} className="flex items-center gap-2">
                   <span className={`w-2 h-2 rounded-full shrink-0 ${m.barCls}`} />
-                  <span className="text-xs text-gray-500 flex-1 truncate">
+                  <span className="text-xs text-gray-600 dark:text-gray-400 flex-1 truncate font-medium">
                     {m.name.split(" ").slice(0, 2).join(" ")}
                   </span>
-                  <div className="w-20 bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                  <div className="w-24 bg-gray-100 dark:bg-zinc-800 rounded-full h-1.5 overflow-hidden">
                     <div
-                      className={`h-full rounded-full ${m.barCls} ${selected === m.id ? "opacity-100" : "opacity-40"}`}
+                      className={`h-full rounded-full ${m.barCls} ${selected === m.id ? "opacity-100" : "opacity-35"}`}
                       style={{ width: `${m.metrics.Accuracy}%` }}
                     />
                   </div>
-                  <span className={`text-xs w-10 text-right font-medium ${selected === m.id ? "text-gray-900" : "text-gray-400"}`}>
+                  <span className={`text-xs w-12 text-right font-bold font-mono ${selected === m.id ? "text-purple-400 font-extrabold" : "text-gray-400"}`}>
                     {m.metrics.Accuracy}%
                   </span>
                 </div>
@@ -172,17 +189,18 @@ export default function Models() {
             </div>
           </div>
 
-          {/* Set as default */}
-          <div className="bg-white border border-black/6 rounded-xl p-5">
-            <p className="text-xs font-medium text-gray-500 mb-1">Set as default</p>
-            <p className="text-xs text-gray-400 mb-3">
-              The default model is used for all new detections unless overridden.
+          {/* Deployment Default Locking Controller */}
+          <div className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl p-5">
+            <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1">Set Gate Routing Default</p>
+            <p className="text-xs text-gray-500 mb-3 leading-relaxed">
+              This system profile governs edge decision weights at the physical barrier unless specialized training parameters override the runtime configurations.
             </p>
-            <button className="w-full py-2 rounded-lg bg-[#0c3a2d] text-emerald-300 text-sm font-medium hover:bg-[#0d4535] transition-colors">
-              Use {detail.name.split(" ").slice(0, 2).join(" ")} as default
+            <button className="w-full py-2.5 rounded-lg bg-zinc-900 dark:bg-purple-900 text-white dark:text-purple-100 text-xs font-semibold hover:opacity-90 transition-opacity flex items-center justify-center gap-1.5">
+              <Zap size={13}/> Establish {detail.name.split(" ").slice(0, 2).join(" ")} as Primary Router
             </button>
           </div>
         </div>
+
       </div>
     </div>
   );

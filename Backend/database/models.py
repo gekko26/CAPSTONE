@@ -1,4 +1,3 @@
-#models.py
 from sqlalchemy import Column, Integer, Float, String, Boolean, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -13,9 +12,9 @@ class Subject(Base):
     face_id    = Column(String(255), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
-    readings         = relationship("Reading",        back_populates="subject")
-    training_data    = relationship("TrainingData",   back_populates="subject")
-    deployment_logs  = relationship("DeploymentLog",  back_populates="subject")
+    readings         = relationship("Reading",       back_populates="subject")
+    training_data    = relationship("TrainingData",  back_populates="subject")
+    deployment_logs  = relationship("DeploymentLog", back_populates="subject")
 
 
 class Reading(Base):
@@ -40,24 +39,25 @@ class TrainingData(Base):
     id                   = Column(Integer, primary_key=True, index=True)
     date                 = Column(DateTime, server_default=func.now())
     subject_id           = Column(Integer, ForeignKey("subjects.id"), nullable=True)
-    mq3_1_max            = Column(Float)
-    mq3_1_avg            = Column(Float)
-    mq3_1_std            = Column(Float)
-    mq3_2_max            = Column(Float)
-    mq3_2_avg            = Column(Float)
-    mq3_2_std            = Column(Float)
-    mq3_3_max            = Column(Float)
-    mq3_3_avg            = Column(Float)
-    mq3_3_std            = Column(Float)
-    rise_time            = Column(Float)
-    decay_time           = Column(Float)
-    spatial_variance     = Column(Float)   # spatial_variance_max
-    spatial_variance_avg = Column(Float)   # ← new
-    temperature          = Column(Float)
-    humidity             = Column(Float)
-    bac                  = Column(Float)
-    label                = Column(Integer, nullable=True, default=-1)  # ← -1 = pending
-    confidence           = Column(Float)
+    mq3_1_max            = Column(Float,        nullable=True)
+    mq3_1_avg            = Column(Float,        nullable=True)
+    mq3_1_std            = Column(Float,        nullable=True)
+    mq3_2_max            = Column(Float,        nullable=True)
+    mq3_2_avg            = Column(Float,        nullable=True)
+    mq3_2_std            = Column(Float,        nullable=True)
+    mq3_3_max            = Column(Float,        nullable=True)
+    mq3_3_avg            = Column(Float,        nullable=True)
+    mq3_3_std            = Column(Float,        nullable=True)
+    rise_time            = Column(Float,        nullable=True)
+    decay_time           = Column(Float,        nullable=True)
+    spatial_variance     = Column(Float,        nullable=True)  # spatial_variance_max
+    spatial_variance_avg = Column(Float,        nullable=True)
+    temperature          = Column(Float,        nullable=True)
+    humidity             = Column(Float,        nullable=True)
+    bac                  = Column(Float,        nullable=True)
+    label                = Column(Integer,      nullable=True, default=-1)  # -1 = pending
+    confidence           = Column(Float,        nullable=True)
+    sub_label            = Column(String(20),   nullable=True)  # 'sanitizer', 'perfume', or NULL
 
     subject = relationship("Subject", back_populates="training_data")
 
