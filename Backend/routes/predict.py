@@ -1,7 +1,7 @@
 import os
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile, BackgroundTasks
 from sqlalchemy.orm import Session
 from database.db import get_db
 from database.models import Reading
@@ -14,17 +14,23 @@ router = APIRouter(prefix="/predict", tags=["predict"])
 
 # ── Storage Isolation Configuration ───────────────────────────
 BASE_DIR = os.path.dirname(__file__)
-# Maps directly to your centralized snapshots folder inside your Capstone system
 SNAPSHOTS_DIR = os.path.normpath(os.path.join(BASE_DIR, "../../data/snapshots"))
 os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
 
 
+def save_snapshot_task(file_path: str, frame_data: np.ndarray):
+    """
+    Executes entirely in the background to prevent disk I/O from 
+    blocking the high-speed RTSP asynchronous inference loop.
+    """
+    try:
+        cv2.imwrite(file_path, frame_data)
+        print(f"[SECURITY LOCKOUT] Async Snapshot written to disk: {file_path}")
+    except Exception as e:
+        print(f"[ERROR] Failed to write background snapshot: {e}")
+
+
 def sensor_ensemble(reading):
-    """
-    Runs RF + XGBoost on the same reading and combines results.
-    If both agree   → high confidence, use agreed class.
-    If they disagree → lower confidence, use RF as tiebreaker.
-    """
     return {
         "class":      0,
         "confidence": 0.0,
@@ -34,25 +40,13 @@ def sensor_ensemble(reading):
 
 
 def run_sensor_ensemble(window_1, window_2, window_3, temp, humidity):
-    """
-    Runs RF + XGBoost on live MQ3 windows and combines results.
-    Called from /predict/full when live windows are available.
-    """
     try:
-        rf_result = sensor_models.predict(
-            window_1, window_2, window_3,
-            temp, humidity,
-            model_name="random_forest"
-        )
+        rf_result = sensor_models.predict(window_1, window_2, window_3, temp, humidity, model_name="random_forest")
     except FileNotFoundError:
         rf_result = {"class": 0, "confidence": 0.0, "label": "No model"}
 
     try:
-        xgb_result = sensor_models.predict(
-            window_1, window_2, window_3,
-            temp, humidity,
-            model_name="xgboost"
-        )
+        xgb_result = sensor_models.predict(window_1, window_2, window_3, temp, humidity, model_name="xgboost")
     except FileNotFoundError:
         xgb_result = {"class": 0, "confidence": 0.0, "label": "No model"}
 
@@ -60,12 +54,10 @@ def run_sensor_ensemble(window_1, window_2, window_3, temp, humidity):
 
     if agreed:
         final_class = rf_result["class"]
-        confidence  = round(
-            (rf_result["confidence"] + xgb_result["confidence"]) / 2, 4
-        )
+        confidence  = round((rf_result["confidence"] + xgb_result["confidence"]) / 2, 4)
     else:
         final_class = rf_result["class"]
-        confidence  = round(rf_result["confidence"] * 0.7, 4)  # penalize disagreement
+        confidence  = round(rf_result["confidence"] * 0.7, 4)
 
     return {
         "class":      final_class,
@@ -80,14 +72,11 @@ def run_sensor_ensemble(window_1, window_2, window_3, temp, humidity):
 # ── Full prediction pipeline ───────────────────────────────────
 @router.post("/full")
 async def full_predict(
-    file:       UploadFile = File(...),
-    reading_id: int        = None,
-    db:         Session    = Depends(get_db)
+    background_tasks: BackgroundTasks,  # <--- FIX: Injected FastAPI Background Thread Pool
+    file: UploadFile = File(...),
+    reading_id: int = None,
+    db: Session = Depends(get_db)
 ):
-    """
-    Full prediction pipeline blending computer vision profiles and historical data logs.
-    """
-    # 1. Decode image
     contents = await file.read()
     np_arr   = np.frombuffer(contents, np.uint8)
     frame    = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -95,22 +84,14 @@ async def full_predict(
     if frame is None:
         return {"error": "Invalid image"}
 
-    # 2. EAR from MediaPipe
     ear_result = analyze_frame(frame)
     ear        = ear_result["ear"] or 0.0
 
-    # 3. MobileNet visual prediction
     try:
         mobile_result = predict_frame(frame)
     except FileNotFoundError:
-        mobile_result = {
-            "label":       "no_model",
-            "confidence":  0.0,
-            "class_index": 0
-        }
+        mobile_result = {"label": "no_model", "confidence": 0.0, "class_index": 0}
 
-    # 4. Get sensor reading from DB
-    reading = None
     if reading_id:
         reading = db.query(Reading).filter(Reading.id == reading_id).first()
     else:
@@ -119,80 +100,51 @@ async def full_predict(
     if not reading:
         return {"error": "No sensor reading found"}
 
-    # 5. Get sensor class from reading label
     sensor_label_map = {"No alcohol": 0, "Breath alcohol": 1, "Sanitizer": 2}
     sensor_class      = sensor_label_map.get(reading.label, 0)
     sensor_confidence = 0.5   
 
-    # 6. Fusion model
     try:
         fusion_result = predict_single(
-            sensor_class      = sensor_class,
-            sensor_confidence = sensor_confidence,
-            visual_class      = mobile_result["class_index"],
-            visual_confidence = mobile_result["confidence"],
-            ear               = ear,
-            blink_rate        = 0.0,
-            temperature       = reading.temperature or 0.0,
-            humidity          = reading.humidity    or 0.0,
+            sensor_class=sensor_class, sensor_confidence=sensor_confidence,
+            visual_class=mobile_result["class_index"], visual_confidence=mobile_result["confidence"],
+            ear=ear, blink_rate=0.0,
+            temperature=reading.temperature or 0.0, humidity=reading.humidity or 0.0,
         )
     except FileNotFoundError:
-        fusion_result = {
-            "class":      0,
-            "label":      "no_model",
-            "risk":       "unknown",
-            "action":     "unknown",
-            "confidence": 0.0,
-        }
+        fusion_result = {"class": 0, "label": "no_model", "risk": "unknown", "action": "unknown", "confidence": 0.0}
 
-    # 7. Save EAR + fusion result back to reading
     reading.ear   = ear
     reading.label = fusion_result["label"]
     db.commit()
 
-    # FIX: Audit Verification Snapshot generation block.
-    # Automatically files violation snapshots onto disk linked directly to database primary keys.
+    # FIX: Push the file write to a non-blocking background thread
     if fusion_result["label"] in ["Over Limit", "Near Limit"]:
         label_slug = fusion_result["label"].replace(" ", "_").lower()
         file_path = os.path.join(SNAPSHOTS_DIR, f"flagged_{reading.id}_{label_slug}.jpg")
-        cv2.imwrite(file_path, frame)
-        print(f"[SECURITY LOCKOUT] Snapshot generated for database log entry evaluation: {file_path}")
+        background_tasks.add_task(save_snapshot_task, file_path, frame)
 
     return {
         "reading_id": reading.id,
-        "sensor_class":      sensor_class,
-        "sensor_label":      reading.label,
-        "ear":               ear,
-        "eye_status":        ear_result["status"],
-        "impaired":          ear_result["impaired"],
-        "visual_label":      mobile_result["label"],
-        "visual_confidence": mobile_result["confidence"],
-        "final_label":       fusion_result["label"],
-        "final_risk":        fusion_result["risk"],
-        "final_action":      fusion_result["action"],
-        "final_confidence":  fusion_result["confidence"],
-        "bac":               reading.bac,
-        "temperature":       reading.temperature,
-        "humidity":          reading.humidity,
+        "sensor_class": sensor_class, "sensor_label": reading.label,
+        "ear": ear, "eye_status": ear_result["status"], "impaired": ear_result["impaired"],
+        "visual_label": mobile_result["label"], "visual_confidence": mobile_result["confidence"],
+        "final_label": fusion_result["label"], "final_risk": fusion_result["risk"],
+        "final_action": fusion_result["action"], "final_confidence": fusion_result["confidence"],
+        "bac": reading.bac, "temperature": reading.temperature, "humidity": reading.humidity,
     }
 
 
 # ── Full prediction with live MQ3 windows ─────────────────────
 @router.post("/live")
 async def live_predict(
-    file:        UploadFile  = File(...),
-    temperature: float       = 0.0,
-    humidity:    float       = 0.0,
-    mq3_1:       str         = "",   
-    mq3_2:       str         = "",
-    mq3_3:       str         = "",
-    db:          Session     = Depends(get_db)
+    background_tasks: BackgroundTasks, # <--- FIX: Injected FastAPI Background Thread Pool
+    file: UploadFile = File(...),
+    temperature: float = 0.0,
+    humidity: float = 0.0,
+    mq3_1: str = "", mq3_2: str = "", mq3_3: str = "",
+    db: Session = Depends(get_db)
 ):
-    """
-    Full prediction with live MQ3 windows + camera frame.
-    Used during deployment when ESP32 + camera both send data together.
-    """
-    # 1. Decode image
     contents = await file.read()
     np_arr   = np.frombuffer(contents, np.uint8)
     frame    = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -200,7 +152,6 @@ async def live_predict(
     if frame is None:
         return {"error": "Invalid image"}
 
-    # 2. Parse MQ3 windows from comma-separated strings
     try:
         w1 = [float(x) for x in mq3_1.split(",") if x.strip()]
         w2 = [float(x) for x in mq3_2.split(",") if x.strip()]
@@ -208,128 +159,79 @@ async def live_predict(
     except ValueError:
         return {"error": "Invalid MQ3 values — must be comma-separated numbers"}
 
-    # 3. EAR from MediaPipe
     ear_result = analyze_frame(frame)
     ear        = ear_result["ear"] or 0.0
 
-    # 4. MobileNet visual prediction
     try:
         mobile_result = predict_frame(frame)
     except FileNotFoundError:
-        mobile_result = {
-            "label":       "no_model",
-            "confidence":  0.0,
-            "class_index": 0
-        }
+        mobile_result = {"label": "no_model", "confidence": 0.0, "class_index": 0}
 
-    # 5. Sensor ensemble — RF + XGBoost on live windows
     sensor_result = run_sensor_ensemble(w1, w2, w3, temperature, humidity)
 
-    # 6. Fusion model
     try:
         fusion_result = predict_single(
-            sensor_class      = sensor_result["class"],
-            sensor_confidence = sensor_result["confidence"],
-            visual_class      = mobile_result["class_index"],
-            visual_confidence = mobile_result["confidence"],
-            ear               = ear,
-            blink_rate        = 0.0,
-            temperature       = temperature,
-            humidity          = humidity,
+            sensor_class=sensor_result["class"], sensor_confidence=sensor_result["confidence"],
+            visual_class=mobile_result["class_index"], visual_confidence=mobile_result["confidence"],
+            ear=ear, blink_rate=0.0,
+            temperature=temperature, humidity=humidity,
         )
     except FileNotFoundError:
-        fusion_result = {
-            "class":      0,
-            "label":      "no_model",
-            "risk":       "unknown",
-            "action":     "unknown",
-            "confidence": 0.0,
-        }
+        fusion_result = {"class": 0, "label": "no_model", "risk": "unknown", "action": "unknown", "confidence": 0.0}
 
-    # 7. Save to DB
     new_reading = Reading(
-        temperature = temperature,
-        humidity    = humidity,
-        bac         = None,
-        ear         = ear,
-        label       = fusion_result["label"],
-        model_used  = "ensemble_v1",
+        temperature=temperature, humidity=humidity, bac=None,
+        ear=ear, label=fusion_result["label"], model_used="ensemble_v1",
     )
     db.add(new_reading)
     db.commit()
     db.refresh(new_reading)
 
-    # FIX: Audit Verification Snapshot generation block for deployment logic routes.
+    # FIX: Push the file write to a non-blocking background thread
     if fusion_result["label"] in ["Over Limit", "Near Limit"]:
         label_slug = fusion_result["label"].replace(" ", "_").lower()
         file_path = os.path.join(SNAPSHOTS_DIR, f"flagged_{new_reading.id}_{label_slug}.jpg")
-        cv2.imwrite(file_path, frame)
-        print(f"[SECURITY LOCKOUT] Deployment Snapshot written to archival registry: {file_path}")
+        background_tasks.add_task(save_snapshot_task, file_path, frame)
 
     return {
         "reading_id": new_reading.id,
-        "sensor_class":      sensor_result["class"],
-        "sensor_label":      sensor_result["label"],
-        "sensor_confidence": sensor_result["confidence"],
-        "sensor_agreed":     sensor_result["agreed"],   
-        "rf_class":          sensor_result["rf_class"],
-        "xgb_class":         sensor_result["xgb_class"],
-        "ear":               ear,
-        "eye_status":        ear_result["status"],
-        "impaired":          ear_result["impaired"],
-        "proximity":         ear_result["proximity"],
-        "visual_label":      mobile_result["label"],
-        "visual_confidence": mobile_result["confidence"],
-        "final_label":       fusion_result["label"],
-        "final_risk":        fusion_result["risk"],
-        "final_action":      fusion_result["action"],
-        "final_confidence":  fusion_result["confidence"],
-        "all_probs":         fusion_result.get("all_probs", {}),
-        "temperature":       temperature,
-        "humidity":          humidity,
+        "sensor_class": sensor_result["class"], "sensor_label": sensor_result["label"],
+        "sensor_confidence": sensor_result["confidence"], "sensor_agreed": sensor_result["agreed"],   
+        "rf_class": sensor_result["rf_class"], "xgb_class": sensor_result["xgb_class"],
+        "ear": ear, "eye_status": ear_result["status"], "impaired": ear_result["impaired"],
+        "proximity": ear_result["proximity"],
+        "visual_label": mobile_result["label"], "visual_confidence": mobile_result["confidence"],
+        "final_label": fusion_result["label"], "final_risk": fusion_result["risk"],
+        "final_action": fusion_result["action"], "final_confidence": fusion_result["confidence"],
+        "all_probs": fusion_result.get("all_probs", {}),
+        "temperature": temperature, "humidity": humidity,
     }
 
 
 # ── Re-evaluate from saved reading ────────────────────────────
 @router.get("/reading/{reading_id}")
 def predict_from_reading(reading_id: int, db: Session = Depends(get_db)):
-    """
-    Re-run fusion prediction from an existing saved reading.
-    Useful for re-evaluating old data after retraining.
-    """
     reading = db.query(Reading).filter(Reading.id == reading_id).first()
     if not reading:
         return {"error": "Reading not found"}
 
-    sensor_label_map  = {"No alcohol": 0, "Breath alcohol": 1, "Sanitizer": 2}
-    sensor_class      = sensor_label_map.get(reading.label, 0)
+    sensor_label_map = {"No alcohol": 0, "Breath alcohol": 1, "Sanitizer": 2}
+    sensor_class = sensor_label_map.get(reading.label, 0)
 
     try:
         fusion_result = predict_single(
-            sensor_class      = sensor_class,
-            sensor_confidence = 0.5,
-            visual_class      = 0,
-            visual_confidence = 0.0,
-            ear               = reading.ear or 0.0,
-            blink_rate        = 0.0,
-            temperature       = reading.temperature or 0.0,
-            humidity          = reading.humidity    or 0.0,
+            sensor_class=sensor_class, sensor_confidence=0.5,
+            visual_class=0, visual_confidence=0.0,
+            ear=reading.ear or 0.0, blink_rate=0.0,
+            temperature=reading.temperature or 0.0, humidity=reading.humidity or 0.0,
         )
     except FileNotFoundError:
-        fusion_result = {
-            "label":  "no_model",
-            "risk":   "unknown",
-            "action": "unknown",
-        }
+        fusion_result = {"label": "no_model", "risk": "unknown", "action": "unknown"}
 
     return {
-        "reading_id":   reading_id,
-        "bac":          reading.bac,
-        "ear":          reading.ear,
-        "temperature":  reading.temperature,
-        "humidity":     reading.humidity,
-        "saved_label":  reading.label,
-        "final_label":  fusion_result["label"],
-        "final_risk":   fusion_result["risk"],
+        "reading_id": reading_id, "bac": reading.bac, "ear": reading.ear,
+        "temperature": reading.temperature, "humidity": reading.humidity,
+        "saved_label": reading.label,
+        "final_label": fusion_result["label"], "final_risk": fusion_result["risk"],
         "final_action": fusion_result["action"],
     }

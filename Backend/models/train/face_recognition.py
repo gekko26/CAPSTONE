@@ -1,18 +1,23 @@
-# File: Backend/models/train/face_recognition.py
 import os
 import sys
+import threading
+import tempfile
+import cv2
+import numpy as np
 
-# FIX: Prevent OpenMP and TensorFlow thread collisions with OpenCV.
-# Both libraries try to hog all CPU cores for matrix algebra. Forcing them 
-# to single-thread mode prevents CPU scheduling deadlocks inside web servers.
+# 1. Aggressively restrict threading before importing ML libraries
 os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
 os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
 os.environ["TF_NUM_INTEROP_THREADS"] = "1"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1" 
 
-import cv2
-import threading
 from deepface import DeepFace
+import tensorflow.keras.backend as K
 
 # ── Paths ──────────────────────────────────────────────────────
 BASE_DIR     = os.path.dirname(__file__)
@@ -21,23 +26,24 @@ SNAPSHOTS    = os.path.join(BASE_DIR, "../../data/snapshots")
 os.makedirs(REGISTERED, exist_ok=True)
 os.makedirs(SNAPSHOTS,  exist_ok=True)
 
-_deepface_lock = threading.Lock()
+_deepface_lock = threading.RLock()
 
-# FIX: Pre-warm the model graphs on the main thread during startup.
-# This forces TensorFlow to allocate memory handles and compile configurations 
-# right now, instead of lazily executing it inside an execution pool thread later.
-print("[FACE RECOGNITION] Pre-warming Facenet architecture on main thread...")
+print("[FACE RECOGNITION] Pre-warming DeepFace models on main thread...")
 try:
-    DeepFace.build_model("Facenet")
-    print("[FACE RECOGNITION] Facenet model ready and pre-warmed.")
+    with _deepface_lock:
+        DeepFace.build_model("Facenet")
+        
+        # We use 'skip' to force it to ignore OpenCV/MTCNN detectors completely 
+        # and just compile the Keras graph in memory.
+        dummy_img = np.zeros((224, 224, 3), dtype=np.uint8)
+        _ = DeepFace.represent(img_path=dummy_img, model_name="Facenet", enforce_detection=False, detector_backend='skip')
+        
+    print("[FACE RECOGNITION] Models fully pre-warmed and ready.")
 except Exception as e:
     print(f"[FACE RECOGNITION] Pre-warm notice: {e}")
 
 
 def enroll(name, images):
-    """
-    Register a new subject with their face images.
-    """
     subject_dir = os.path.join(REGISTERED, name)
     os.makedirs(subject_dir, exist_ok=True)
 
@@ -60,91 +66,108 @@ def enroll(name, images):
 
 
 def identify(frame):
-    """
-    Identify who is in the frame by comparing against registered faces.
-    """
-    # FIX: Use unique file markers per thread to guarantee file I/O isolation.
-    # DeepFace.find requires clean file paths to process structural identity indexing 
-    # cleanly without falling back to unstable internal type inferences.
-    tid = threading.get_ident()
-    temp_path = os.path.join(SNAPSHOTS, f"temp_identify_{tid}.jpg")
-    cv2.imwrite(temp_path, frame)
+    if not os.path.exists(REGISTERED) or not os.listdir(REGISTERED):
+        return {"identified": False, "name": "Unknown", "confidence": 0.0}
+
+    fd, temp_path = tempfile.mkstemp(suffix=".jpg", dir=SNAPSHOTS)
+    os.close(fd) 
+
+    try:
+        cv2.imwrite(temp_path, frame)
+    except Exception as e:
+        print(f"Failed to write identify temp frame: {e}")
+        return {"identified": False, "name": "Unknown", "confidence": 0.0}
+
+    result_data = {"identified": False, "name": "Unknown", "confidence": 0.0}
 
     with _deepface_lock:
         try:
+            K.clear_session()
+            
+            # FIX: Bypass OpenCV detector entirely using 'skip'
             results = DeepFace.find(
-                img_path=temp_path,
+                img_path=temp_path, 
                 db_path=REGISTERED,
                 model_name="Facenet",
                 enforce_detection=False,
+                detector_backend="skip", 
                 silent=True
             )
 
-            # Clean up the thread-isolated temporary file immediately after inference
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-
-            if len(results) > 0 and len(results[0]) > 0:
+            if len(results) > 0 and not results[0].empty:
                 best      = results[0].iloc[0]
                 name      = os.path.basename(os.path.dirname(best["identity"]))
-                distance  = best["distance"]
-                confidence = round(1 - distance, 4)
+                distance  = best.get("distance", 1.0)
+                confidence = max(0.0, min(1.0, 1.0 - (distance / 0.4)))
 
-                return {
+                result_data = {
                     "identified": True,
                     "name":       name,
                     "confidence": confidence
                 }
 
         except Exception as e:
-            print(f"Recognition error: {e}")
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
+            print(f"DeepFace processing error: {e}")
+        
+        finally:
+            K.clear_session()
 
-        return {
-            "identified": False,
-            "name":       None,
-            "confidence": None
-        }
+    if os.path.exists(temp_path):
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+
+    return result_data
 
 
 def verify(frame, name):
-    """
-    Verify if the person in the frame is a specific registered subject.
-    """
     subject_path = os.path.join(REGISTERED, name)
 
     if not os.path.exists(subject_path):
         return {"verified": False, "error": f"{name} not registered"}
 
     ref_img = os.path.join(subject_path, "01.jpg")
-    tid = threading.get_ident()
-    temp_path = os.path.join(SNAPSHOTS, f"temp_verify_{tid}.jpg")
-    cv2.imwrite(temp_path, frame)
+    
+    fd, temp_path = tempfile.mkstemp(suffix=".jpg", dir=SNAPSHOTS)
+    os.close(fd)
+
+    try:
+        cv2.imwrite(temp_path, frame)
+    except Exception as e:
+        return {"verified": False, "error": f"Write failed: {e}"}
+
+    result_data = {"verified": False, "error": "Unknown verification error"}
 
     with _deepface_lock:
         try:
+            K.clear_session()
+            
+            # FIX: Bypass OpenCV detector entirely using 'skip'
             result = DeepFace.verify(
                 img1_path=temp_path,
                 img2_path=ref_img,
                 model_name="Facenet",
                 enforce_detection=False,
+                detector_backend="skip",
                 silent=True
             )
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
                 
-            return {
+            result_data = {
                 "verified":   result["verified"],
                 "confidence": round(1 - result["distance"], 4)
             }
+            
         except Exception as e:
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
-            return {"verified": False, "error": str(e)}
+            result_data = {"verified": False, "error": str(e)}
+            
+        finally:
+            K.clear_session()
+            
+    if os.path.exists(temp_path):
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+
+    return result_data
