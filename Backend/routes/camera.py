@@ -1,4 +1,9 @@
-# File: Backend/routes/camera.py
+import os
+
+# 1. THE STABLE SPEED HACK: TCP for reliability, nobuffer for speed.
+# This prevents the av_frame_get_buffer Out of Memory crash.
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay"
+
 from fastapi import APIRouter, Depends, File, UploadFile, Form, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -9,7 +14,6 @@ from models.train.cv_model import analyze_frame
 from models.train.face_recognition import identify, enroll
 import numpy as np
 import cv2
-import os
 import time
 import threading
 import logging
@@ -23,7 +27,6 @@ os.makedirs(REGISTERED, exist_ok=True)
 
 RTSP_URL = os.getenv("RTSP_URL")
 
-# Configure explicit debugging logs to output to stdout
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AlcoDetect.Camera")
 logger.setLevel(logging.INFO)
@@ -56,24 +59,28 @@ class RTSPStream:
             try:
                 if cap is None or not cap.isOpened():
                     logger.info(f"[RTSP THREAD] Connecting to: {self.url}")
-                    cap = cv2.VideoCapture(self.url)
+                    cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+                    # Force OpenCV to hold only the absolute newest frame in memory
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
-                    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)
 
+                # Use standard read() instead of grab/retrieve to prevent H.264 header corruption
                 ret, frame = cap.read()
                 if ret and frame is not None:
+                    
+                    # 2. Downscale instantly to 360p (640x360) to keep AI processing lightning fast
+                    frame = cv2.resize(frame, (640, 360), interpolation=cv2.INTER_AREA)
+
                     with self.lock:
-                        self.frame     = frame
+                        self.frame = frame
                         self.connected = True
-                    time.sleep(0.01)  # Yield GIL to prevent starving Uvicorn worker threads
                 else:
-                    logger.warning("[RTSP THREAD] Failed to grab frame. Reconnecting...")
+                    logger.warning("[RTSP THREAD] Frame dropped. Reconnecting...")
                     self.connected = False
                     if cap:
                         cap.release()
                     cap = None
                     time.sleep(2)
+                    
             except Exception as e:
                 logger.error(f"[RTSP THREAD] Critical capture error: {e}")
                 self.connected = False
@@ -96,10 +103,8 @@ class RTSPStream:
 _stream = RTSPStream(RTSP_URL)
 _stream.start()
 
-
 def get_rtsp_frame() -> np.ndarray | None:
     return _stream.read()
-
 
 _analyze_lock = threading.Lock()
 _last_analysis = None
@@ -108,21 +113,15 @@ _last_analysis = None
 # ── Stream frame endpoint ─────────────────────────────────────
 @router.get("/stream/frame")
 def stream_frame():
-    """
-    Returns a single JPEG frame from the C200C RTSP stream.
-    """
-    logger.debug("[GET /stream/frame] Fetching raw frame buffer...")
     frame = get_rtsp_frame()
 
     if frame is None:
-        logger.warning("[GET /stream/frame] Frame buffer empty. Returning 503.")
         raise HTTPException(
             status_code=503,
             detail="Camera unavailable — connecting in background"
         )
 
-    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-    logger.debug("[GET /stream/frame] Frame successfully encoded and served.")
+    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
     return Response(
         content=buffer.tobytes(),
         media_type="image/jpeg",
@@ -135,50 +134,30 @@ def stream_frame():
 
 # ── Analyze endpoint ──────────────────────────────────────────
 @router.post("/analyze")
-def analyze(
-    file: UploadFile = File(None),
-    db:   Session    = Depends(get_db)
-):
-    """
-    Analyzes a camera frame for EAR + proximity + face identity.
-    """
+def analyze(file: UploadFile = File(None), db: Session = Depends(get_db)):
     global _last_analysis
-    logger.info("[POST /analyze] Request received.")
 
     if file is not None:
-        logger.info("[POST /analyze] Parsing frame uploaded via request.")
         contents = file.file.read()
         np_arr   = np.frombuffer(contents, np.uint8)
         frame    = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     else:
-        logger.info("[POST /analyze] Pulling frame from passive RTSP buffer.")
         frame = get_rtsp_frame()
 
     if frame is None:
-        logger.warning("[POST /analyze] No frame content available.")
         if _last_analysis:
             return _last_analysis
         return {"error": "No frame available — check camera connection"}
 
-    logger.info("[POST /analyze] Attempting to acquire non-blocking analysis lock...")
     acquired = _analyze_lock.acquire(blocking=False)
     if not acquired:
-        logger.warning("[POST /analyze] Lock acquisition failed. Analysis is busy. Returning cache.")
         if _last_analysis:
             return _last_analysis
         return {"error": "Analysis busy — try again"}
 
-    logger.info("[POST /analyze] Lock secured successfully.")
     try:
-        logger.info("[POST /analyze] Line Check: Entering MediaPipe 'analyze_frame'...")
-        start_mp = time.time()
         ear_result = analyze_frame(frame)
-        logger.info(f"[POST /analyze] Line Check: MediaPipe finished in {time.time() - start_mp:.4f}s.")
-
-        logger.info("[POST /analyze] Line Check: Entering DeepFace 'identify'...")
-        start_df = time.time()
         face_result = identify(frame)
-        logger.info(f"[POST /analyze] Line Check: DeepFace finished in {time.time() - start_df:.4f}s.")
 
         result = {
             "proximity":  ear_result["proximity"],
@@ -193,25 +172,22 @@ def analyze(
             "confidence": face_result["confidence"],
         }
         _last_analysis = result
-        logger.info("[POST /analyze] Analysis sequence completed safely.")
         return result
     except Exception as exc:
         logger.error(f"[POST /analyze] CRITICAL exception caught during processing loop: {exc}")
         return {"error": f"Internal processing crash: {str(exc)}"}
     finally:
         _analyze_lock.release()
-        logger.info("[POST /analyze] Analysis lock released clean.")
 
 
 # ── Register subject ONLY if alcohol detected ──────────────────
 @router.post("/register")
 def register_subject(
-    file:       UploadFile = File(None),
-    name:       str        = Form(None),
-    reading_id: int        = Form(None),
-    db:         Session    = Depends(get_db)
+    file: UploadFile = File(None),
+    name: str = Form(None),
+    reading_id: int = Form(None),
+    db: Session = Depends(get_db)
 ):
-    logger.info("[POST /register] Processing enrolment sequence...")
     if file is not None:
         contents = file.file.read()
         np_arr   = np.frombuffer(contents, np.uint8)
@@ -245,7 +221,6 @@ def register_subject(
     db.commit()
     db.refresh(new_subject)
 
-    logger.info(f"[POST /register] Enrolling face for: {subject_name}")
     enroll(subject_name, [frame])
 
     if reading_id:
@@ -263,4 +238,3 @@ def register_subject(
         "face_saved":    img_path,
         "message":       "Subject registered — alcohol incident logged",
     }
-    

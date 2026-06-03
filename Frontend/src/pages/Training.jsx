@@ -1,4 +1,3 @@
-// File: Frontend/src/pages/Training.jsx
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   FlaskConical, RefreshCw, Download, ChevronDown, ChevronUp,
@@ -8,11 +7,11 @@ import {
 } from "lucide-react";
 
 const BASE    = "http://localhost:8000";
-const FRAME_MS    = 200;   // Wait margin between frame draws
-const ANALYZE_MS  = 800;   // Wait margin between inference calls
+const FRAME_MS    = 200;   
+const ANALYZE_MS  = 800;   
 
 const LABEL_NAMES = { "-1": "Pending", 0: "No alcohol", 1: "Breath alcohol", 2: "Sanitizer" };
-const SUB_NAMES   = { sanitizer: "Rubbing alcohol", perfume: "Perfume / cologne" };
+const SUB_NAMES   = { sanitizer: "Rubbing alcohol", perfume: "Perfume / cologne", drowsy: "Drowsy (Fake Sleep)", clear_air: "Clear Air (Empty)" };
 
 // ── Toast ─────────────────────────────────────────────────────
 function useToast() {
@@ -149,7 +148,7 @@ function EventCard({ active, color, icon: Icon, label, hint, badge, onClick }) {
 function SensorPatternVisualizer({ row }) {
   if (!row || row.mq3_1_max == null) {
     return (
-      <div className="text-center py-4 text-xs italic text-(--near)">
+      <div className="text-center py-4 text-xs italic" style={{ color: "var(--near)" }}>
         ⏳ Waiting for ESP32 hardware package execution to compile metrics...
       </div>
     );
@@ -158,7 +157,7 @@ function SensorPatternVisualizer({ row }) {
   const s1 = row.mq3_1_max;
   const s2 = row.mq3_2_max;
   const s3 = row.mq3_3_max;
-  const variance = row.spatial_variance_max ?? 0;
+  const variance = row.spatial_variance ?? 0;
   const rise = row.rise_time ?? 0;
   const decay = row.decay_time ?? 0;
 
@@ -176,18 +175,18 @@ function SensorPatternVisualizer({ row }) {
   }
 
   return (
-    <div className="space-y-4 p-4 rounded-xl border mt-2 bg-(--bg-card) border-(--border-subtle) text-left">
-      <div className="flex items-center gap-2 text-xs font-semibold tracking-wide uppercase text-(--text-muted)">
-        <Sliders size={12} className="text-(--pass)"/>
+    <div className="space-y-4 p-4 rounded-xl border mt-2 text-left" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
+      <div className="flex items-center gap-2 text-xs font-semibold tracking-wide uppercase" style={{ color: "var(--text-muted)" }}>
+        <Sliders size={12} style={{ color: "var(--pass)" }}/>
         ML Feature Array Engine Diagnosis
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Topology Heatmap */}
-        <div className="p-3 rounded-lg border flex flex-col justify-between bg-(--bg-active) border-(--border-subtle)">
+        <div className="p-3 rounded-lg border flex flex-col justify-between" style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
           <div>
-            <span className="text-[10px] uppercase font-medium text-(--text-muted)">Spatial Array Topology</span>
-            <p className="text-xs font-semibold mt-0.5 mb-3 text-(--text-primary)">Chamber Intake Load</p>
+            <span className="text-[10px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Spatial Array Topology</span>
+            <p className="text-xs font-semibold mt-0.5 mb-3" style={{ color: "var(--text-primary)" }}>Chamber Intake Load</p>
           </div>
           <div className="flex justify-around items-end gap-2 h-16 px-2">
             {[
@@ -196,7 +195,7 @@ function SensorPatternVisualizer({ row }) {
               { id: "MQ3 #3", val: s3, pct: getPct(s3) },
             ].map((sensor) => (
               <div key={sensor.id} className="flex flex-col items-center flex-1 group relative">
-                <span className="text-[9px] mb-1 font-mono text-(--text-secondary)">{Math.round(sensor.val)}</span>
+                <span className="text-[9px] mb-1 font-mono" style={{ color: "var(--text-secondary)" }}>{Math.round(sensor.val)}</span>
                 <div className="w-full rounded-t" 
                      style={{ 
                        height: `${sensor.pct}%`, 
@@ -204,78 +203,77 @@ function SensorPatternVisualizer({ row }) {
                        background: `linear-gradient(to top, var(--bg-active), ${sensor.pct > 70 ? "var(--over)" : "var(--pass)"})`
                      }} 
                 />
-                <span className="text-[9px] mt-1 text-center scale-90 text-(--text-muted)">{sensor.id}</span>
+                <span className="text-[9px] mt-1 text-center scale-90" style={{ color: "var(--text-muted)" }}>{sensor.id}</span>
               </div>
             ))}
           </div>
         </div>
 
         {/* Deviation Meter */}
-        <div className="p-3 rounded-lg border flex flex-col justify-between bg-(--bg-active) border-(--border-subtle)">
+        <div className="p-3 rounded-lg border flex flex-col justify-between" style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
           <div>
-            <span className="text-[10px] uppercase font-medium text-(--text-muted)">Mathematical Deviation</span>
-            <p className="text-xs font-semibold mt-0.5 mb-1 text-(--text-primary)">Spatial Variance Coefficient</p>
+            <span className="text-[10px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Mathematical Deviation</span>
+            <p className="text-xs font-semibold mt-0.5 mb-1" style={{ color: "var(--text-primary)" }}>Spatial Variance Coefficient</p>
           </div>
           <div className="my-2">
             <div className="flex justify-between items-baseline mb-1">
               <span className="text-xl font-bold tabular-nums" style={{ color: varianceColor }}>{variance.toFixed(2)}</span>
-              <span className="text-[9px] text-(--text-muted)">σ index</span>
+              <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>σ index</span>
             </div>
-            <div className="w-full h-1.5 rounded-full overflow-hidden bg-(--bg-card)">
+            <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "var(--bg-card)" }}>
               <div className="h-full rounded-full transition-all duration-500" 
                    style={{ width: `${Math.min((variance / 220) * 100, 100)}%`, background: varianceColor }}/>
             </div>
           </div>
-          <p className="text-[10px] font-medium leading-normal text-(--text-muted)">
+          <p className="text-[10px] font-medium leading-normal" style={{ color: "var(--text-muted)" }}>
             Verdict: <span style={{ color: varianceColor }}>{varianceAnalysis}</span>
           </p>
         </div>
 
         {/* Waveform Kinetics */}
-        <div className="p-3 rounded-lg border flex flex-col justify-between bg-(--bg-active) border-(--border-subtle)">
+        <div className="p-3 rounded-lg border flex flex-col justify-between" style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
           <div>
-            <span className="text-[10px] uppercase font-medium text-(--text-muted)">Waveform Kinetics</span>
-            <p className="text-xs font-semibold mt-0.5 mb-2 text-(--text-primary)">Intake Time Coefficients</p>
+            <span className="text-[10px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Waveform Kinetics</span>
+            <p className="text-xs font-semibold mt-0.5 mb-2" style={{ color: "var(--text-primary)" }}>Intake Time Coefficients</p>
           </div>
           <div className="space-y-2.5">
             <div>
-              <div className="flex justify-between text-[9px] mb-0.5 text-(--text-secondary)">
+              <div className="flex justify-between text-[9px] mb-0.5" style={{ color: "var(--text-secondary)" }}>
                 <span>Rise Profile (Slope Velocity)</span>
                 <span className="font-mono">{rise.toFixed(1)} samples</span>
               </div>
-              <div className="w-full h-1 rounded-full overflow-hidden bg-(--bg-card)">
+              <div className="w-full h-1 rounded-full overflow-hidden" style={{ background: "var(--bg-card)" }}>
                 <div className="h-full bg-amber-400" style={{ width: `${Math.min((rise / 30) * 100, 100)}%` }} />
               </div>
             </div>
             <div>
-              <div className="flex justify-between text-[9px] mb-0.5 text-(--text-secondary)">
+              <div className="flex justify-between text-[9px] mb-0.5" style={{ color: "var(--text-secondary)" }}>
                 <span>Decay Profile (Desorption Rate)</span>
                 <span className="font-mono">{decay.toFixed(1)} samples</span>
               </div>
-              <div className="w-full h-1 rounded-full overflow-hidden bg-(--bg-card)">
+              <div className="w-full h-1 rounded-full overflow-hidden" style={{ background: "var(--bg-card)" }}>
                 <div className="h-full bg-indigo-400" style={{ width: `${Math.min((decay / 30) * 100, 100)}%` }} />
               </div>
             </div>
           </div>
-          <div className="text-[9px] italic mt-1 text-(--text-muted)">
+          <div className="text-[9px] italic mt-1" style={{ color: "var(--text-muted)" }}>
             *Sanitizers show steep rise / slow decay configurations.
           </div>
         </div>
       </div>
-
       {/* Atmospheric Compensation Status Footer */}
-      <div className="flex items-center gap-4 pt-2 border-t text-[10px] border-(--border-subtle) text-(--text-secondary)">
+      <div className="flex items-center gap-4 pt-2 border-t text-[10px]" style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
         <div className="flex items-center gap-1">
           <Thermometer size={12} className="text-orange-400"/>
-          Ambient Temp: <span className="font-semibold text-mono text-(--text-primary)">{row.temperature ? `${row.temperature.toFixed(1)}°C` : "—"}</span>
+          Ambient Temp: <span className="font-semibold text-mono" style={{ color: "var(--text-primary)" }}>{row.temperature ? `${row.temperature.toFixed(1)}°C` : "—"}</span>
         </div>
         <div className="flex items-center gap-1">
           <Droplets size={12} className="text-blue-400"/>
-          Intake Humidity: <span className="font-semibold text-mono text-(--text-primary)">{row.humidity ? `${row.humidity.toFixed(1)}%` : "—"}</span>
+          Intake Humidity: <span className="font-semibold text-mono" style={{ color: "var(--text-primary)" }}>{row.humidity ? `${row.humidity.toFixed(1)}%` : "—"}</span>
         </div>
         <div className="flex items-center gap-1 ml-auto">
           <Gauge size={12} className="text-emerald-400 animate-pulse"/>
-          <span className="font-medium font-mono text-(--pass)">Dynamic Baseline Compensation Calibrated</span>
+          <span className="font-medium font-mono" style={{ color: "var(--pass)" }}>Dynamic Baseline Compensation Calibrated</span>
         </div>
       </div>
     </div>
@@ -293,7 +291,15 @@ export default function Training() {
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [loadingData, setLoadingData]     = useState(false);
   const [training, setTraining]           = useState(false);
-  const [activeEvent, setActiveEvent]     = useState("sober");
+  
+  // ── FIX: STATE TUNNEL ──
+  const [activeEvent, setActiveEvent] = useState("sober");
+  const activeEventRef = useRef(activeEvent);
+  
+  useEffect(() => {
+    activeEventRef.current = activeEvent;
+  }, [activeEvent]);
+
   const [esp32Online, setEsp32Online]     = useState(null);
 
   // ── Camera state ──────────────────────────────────────────
@@ -316,9 +322,8 @@ export default function Training() {
     setCollecting(val);
   };
 
-  const [waitingEsp32, setWaitingEsp32] = useState(false);
   const [countdown, setCountdown]       = useState(0);
-  const [hardwareState, setHardwareState] = useState("idle"); // idle, triggering, buffering, completed
+  const [hardwareState, setHardwareState] = useState("idle");
 
   const [bacModal, setBacModal]           = useState(null);
   const [bacValue, setBacValue]           = useState("");
@@ -330,7 +335,7 @@ export default function Training() {
   const [relabelSubLabel, setRelabelSubLabel] = useState("");
   const [relabelReason, setRelabelReason] = useState("");
 
-  const isCameraEvent = ["alcohol", "perfume"].includes(activeEvent);
+  const isCameraEvent = ["alcohol", "perfume", "sober", "drowsy"].includes(activeEvent);
 
   // ── Data ──────────────────────────────────────────────────
   const loadSummary = useCallback(async () => {
@@ -410,7 +415,11 @@ export default function Training() {
 
           if (data.is_close && !capturedRef.current && collectingRef.current) {
             capturedRef.current = true;
-            await handleCameraCapture(latestBlobRef.current);
+            toast("Subject detected! Capturing in 2 seconds...", "success");
+            
+            setTimeout(async () => {
+              await handleCameraCapture(latestBlobRef.current);
+            }, 2000);
           }
           if (!data.is_close) capturedRef.current = false;
         }
@@ -448,41 +457,18 @@ export default function Training() {
     return () => stopStream();
   }, [activeEvent, isCameraEvent, startStream, stopStream]);
 
-  // ── ESP32 Trigger ─────────────────────────────────────────
-  const triggerEsp32 = async () => {
-    setHardwareState("triggering");
-    try {
-      const r = await fetch(`${BASE}/sensor/trigger`, { method: "POST" });
-      const d = await r.json();
-      if (d.triggered) {
-        setHardwareState("buffering");
-        setCountdown(5);
-      }
-      return d.triggered;
-    } catch { 
-      setHardwareState("idle");
-      return false; 
-    }
-  };
-
-  // ── Camera capture pipeline ───────────────────────────────
+  // ── FIX: CRASH-PROOF DATA PIPELINE ────────────────────────────
   const handleCameraCapture = async (blob) => {
-    setWaitingEsp32(true);
-    
-    const triggered = await triggerEsp32();
-    if (!triggered) {
-      toast("ESP32 not responding — capture halted. Check hardware configurations.", "error");
-      setCollectingSync(false);
-      setWaitingEsp32(false);
-      setHardwareState("idle");
-      return;
-    }
+    setHardwareState("buffering");
+    setCountdown(5);
 
     try {
       const fd = new FormData();
       fd.append("file", blob, "frame.jpg");
+      
+      const liveEvent = activeEventRef.current;
 
-      if (activeEvent === "alcohol") {
+      if (liveEvent === "alcohol") {
         fd.append("bac", "0");
         const r = await fetch(`${BASE}/training/collect/alcohol`, { method: "POST", body: fd });
         const d = await r.json();
@@ -490,70 +476,66 @@ export default function Training() {
         setBacModal({ id: d.id });
         setBacValue("");
         toast(`Face layout captured! Row #${d.id} waiting for gas matrix.`);
-      } else {
-        // perfume
+      } else if (liveEvent === "perfume") {
         const r = await fetch(`${BASE}/training/collect/perfume`, { method: "POST", body: fd });
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail);
         toast(`Perfume exposure logged — Row #${d.id}. Stream active.`);
+      } else if (liveEvent === "sober") {
+        const r = await fetch(`${BASE}/training/collect/sober`, { method: "POST", body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail);
+        toast(`Sober baseline logged — Row #${d.id}. Stream active.`);
+      } else if (liveEvent === "drowsy") {
+        const r = await fetch(`${BASE}/training/collect/drowsy`, { method: "POST", body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail);
+        toast(`Drowsy baseline logged — Row #${d.id}. Stream active.`);
       }
       
       setTimeout(() => {
         setHardwareState("completed");
         loadAll();
-        setWaitingEsp32(false);
         setTimeout(() => setHardwareState("idle"), 2000);
       }, 5000);
 
     } catch (e) {
       toast(e.message || "Capture verification error", "error");
-      setWaitingEsp32(false);
       setHardwareState("idle");
     } finally {
       setCollectingSync(false);
     }
   };
 
-  // ── Manual collect (sober + sanitizer only) ───────────────
   const handleManualCollect = async () => {
     setCollectingSync(true);
-    setWaitingEsp32(true);
-
-    const triggered = await triggerEsp32();
-    if (!triggered) {
-      toast("ESP32 not reachable — check configurations", "error");
-      setCollectingSync(false);
-      setWaitingEsp32(false);
-      setHardwareState("idle");
-      return;
-    }
+    setHardwareState("buffering");
+    setCountdown(5);
 
     try {
-      const endpoint = activeEvent === "sober"
-        ? `${BASE}/training/collect/sober`
-        : `${BASE}/training/collect/sanitizer`;
-
-      const r = await fetch(endpoint, { method: "POST" });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail);
-
-      toast(
-        activeEvent === "sober"
-          ? `Baseline active — Row #${d.id}. Do not introduce compounds.`
-          : `Vapor reference logged — Row #${d.id}. Keep compound active.`
-      );
+      const liveEvent = activeEventRef.current;
+      
+      if (liveEvent === "clear_air") {
+        const r = await fetch(`${BASE}/training/collect/clear_air`, { method: "POST" });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail);
+        toast(`Clear air baseline logged — Row #${d.id}.`);
+      } else if (liveEvent === "sanitizer") {
+        const r = await fetch(`${BASE}/training/collect/sanitizer`, { method: "POST" });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail);
+        toast(`Vapor reference logged — Row #${d.id}. Keep compound active.`);
+      }
 
       setTimeout(() => {
         setHardwareState("completed");
         loadAll();
-        setWaitingEsp32(false);
         setCollectingSync(false);
         setTimeout(() => setHardwareState("idle"), 2000);
       }, 5000);
     } catch (e) {
-      toast(e.message || "Collection execution drop", "error");
+      toast("Collection execution drop", "error");
       setCollectingSync(false);
-      setWaitingEsp32(false);
       setHardwareState("idle");
     }
   };
@@ -562,11 +544,15 @@ export default function Training() {
     capturedRef.current = false;
     setCollectingSync(true);
     setHardwareState("idle");
-    toast(
-      activeEvent === "alcohol"
-        ? "Proximity pipeline armed — stand in front of lens layout"
-        : "Chemical evaluation armed — execute walkthrough step"
-    );
+    
+    const msgs = {
+      alcohol: "Proximity pipeline armed — stand in front of lens",
+      perfume: "Chemical evaluation armed — execute walkthrough",
+      sober: "Baseline armed — Keep eyes open",
+      drowsy: "Baseline armed — Fake sleep (close eyes)"
+    };
+    
+    toast(msgs[activeEventRef.current] || "Pipeline armed");
   };
 
   const handleStopCameraCollect = () => {
@@ -695,26 +681,16 @@ export default function Training() {
     completed: { label: "Matrix Synchronized Successfully! ✓", color: "var(--pass)", icon: Check }
   };
 
-  const currentHw = hardwareStateConfig[hardwareState];
+  const currentHw = hardwareStateConfig[hardwareState] || hardwareStateConfig.idle;
   const HwIcon = currentHw.icon;
 
   const EVENT_CONFIG = {
-    sober: {
-      label: "Sober", hint: "Manual trigger. No camera. Person stands at gate normally.",
-      color: "var(--pass)", icon: Activity, badge: "Manual", camera: false,
-    },
-    alcohol: {
-      label: "Breath alcohol", hint: "Camera detects proximity → auto-captures. BAC required after.",
-      color: "var(--over)", icon: Wind, badge: "Camera + BAC", camera: true,
-    },
-    sanitizer: {
-      label: "Sanitizer / rubbing alcohol", hint: "Manual trigger. Spray near sensors after clicking.",
-      color: "var(--text-secondary)", icon: Droplets, badge: "Manual", camera: false,
-    },
-    perfume: {
-      label: "Perfume / cologne", hint: "Camera detects proximity → auto-captures. No BAC needed.",
-      color: "var(--near)", icon: Camera, badge: "Camera", camera: true,
-    },
+    clear_air: { label: "Clear Air (Empty)", hint: "Manual trigger. Records clean room environment.", color: "#3b82f6", icon: Wind, badge: "Manual", camera: false },
+    sober: { label: "Sober Face", hint: "Camera auto-captures. Open eyes.", color: "var(--pass)", icon: Camera, badge: "Camera", camera: true },
+    drowsy: { label: "Drowsy (Fake Sleep)", hint: "Camera auto-captures. Close eyes.", color: "var(--near)", icon: Eye, badge: "Camera", camera: true },
+    alcohol: { label: "Breath alcohol", hint: "Camera auto-captures. BAC required.", color: "var(--over)", icon: Wind, badge: "Camera + BAC", camera: true },
+    sanitizer: { label: "Rubbing alcohol", hint: "Manual trigger. Spray near sensors.", color: "var(--text-secondary)", icon: Droplets, badge: "Manual", camera: false },
+    perfume: { label: "Perfume / cologne", hint: "Camera auto-captures. Image discarded.", color: "var(--text-secondary)", icon: Camera, badge: "Camera", camera: true },
   };
 
   const cfg = EVENT_CONFIG[activeEvent];
@@ -836,7 +812,7 @@ export default function Training() {
           <div className="text-xs font-medium uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
             Collect event
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
             {Object.entries(EVENT_CONFIG).map(([key, c]) => (
               <EventCard key={key} active={activeEvent === key}
                 color={c.color} icon={c.icon} label={c.label} hint={c.hint} badge={c.badge}
@@ -873,8 +849,8 @@ export default function Training() {
               </div>
             </div>
 
-          </div>
-
+          </div>          
+          
           {/* Camera feed */}
           {isCameraEvent && (
             <div className="relative rounded-lg overflow-hidden border" style={{ borderColor: "var(--border-subtle)", background: "#0c1f14", aspectRatio: "16/9" }}>
@@ -898,7 +874,7 @@ export default function Training() {
                   {isClose && collecting && (
                     <div className="absolute bottom-2 right-2 text-[10px] font-medium px-2 py-0.5 rounded-full animate-pulse"
                       style={{ background: "rgba(220,38,38,0.85)", color: "#fff" }}>
-                      ⚠ CLOSE — capturing
+                      ⚠ CLOSE — capturing in 2s
                     </div>
                   )}
                   {collecting && !isClose && (
@@ -923,19 +899,6 @@ export default function Training() {
             </div>
           )}
 
-          {waitingEsp32 && (
-            <div className="flex flex-col gap-1.5 px-3 py-2.5 rounded-lg text-xs"
-              style={{ background: "color-mix(in srgb, var(--over) 10%, transparent)", color: "var(--over)" }}>
-              <div className="flex items-center gap-2">
-                <RefreshCw size={11} className="animate-spin shrink-0"/>
-                <span className="font-semibold">ESP32 Ingestion Sequence Engaged</span>
-              </div>
-              <p className="text-[11px] opacity-80 leading-relaxed">
-                The microcontroller is currently executing its 3-second sampling window. Ground truth analog features are arriving in the database momentarily.
-              </p>
-            </div>
-          )}
-
           <div className="mt-auto">
             {isCameraEvent ? (
               <button
@@ -949,7 +912,7 @@ export default function Training() {
                 {collecting ? <><Square size={13}/> Stop monitoring</> : <><Play size={13}/> Arm Pipeline — {cfg.label}</>}
               </button>
             ) : (
-              <button onClick={handleManualCollect} disabled={collecting || waitingEsp32}
+              <button onClick={handleManualCollect} disabled={collecting || hardwareState !== "idle"}
                 className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
                 style={{ background: cfg.color, color: "#fff" }}>
                 {collecting
@@ -979,7 +942,7 @@ export default function Training() {
         </button>
       </div>
 
-      {/* Data table */}
+      {/* ── RESTORED CLEAN LOGS TABLE ── */}
       <div className="rounded-xl border overflow-hidden" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
         <div className="flex items-center justify-between px-4 py-3 border-b flex-wrap gap-2" style={{ borderColor: "var(--border-subtle)" }}>
           <div className="flex items-center gap-2 text-sm font-medium" style={{ color: "var(--text-primary)" }}>
@@ -1053,7 +1016,7 @@ export default function Training() {
                       <td className="px-3 py-2.5 text-xs tabular-nums" style={{ color: "var(--text-secondary)" }}>{fmt(row.mq3_1_max)}</td>
                       <td className="px-3 py-2.5 text-xs tabular-nums" style={{ color: "var(--text-secondary)" }}>{fmt(row.mq3_2_max)}</td>
                       <td className="px-3 py-2.5 text-xs tabular-nums" style={{ color: "var(--text-secondary)" }}>{fmt(row.mq3_3_max)}</td>
-                      <td className="px-3 py-2.5 text-xs tabular-nums" style={{ color: "var(--text-secondary)" }}>{fmt(row.spatial_variance_max, 1)}</td>
+                      <td className="px-3 py-2.5 text-xs tabular-nums" style={{ color: "var(--text-secondary)" }}>{fmt(row.spatial_variance, 1)}</td>
                       <td className="px-3 py-2.5 text-xs tabular-nums" style={{ color: "var(--text-secondary)" }}>{fmt(row.temperature, 1)}</td>
                       <td className="px-3 py-2.5 text-xs tabular-nums" style={{ color: "var(--text-secondary)" }}>{fmt(row.humidity, 1)}</td>
                       <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>

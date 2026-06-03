@@ -84,7 +84,7 @@ def identify(frame):
         try:
             K.clear_session()
             
-            # FIX: Bypass OpenCV detector entirely using 'skip'
+            # Bypass OpenCV detector entirely using 'skip'
             results = DeepFace.find(
                 img_path=temp_path, 
                 db_path=REGISTERED,
@@ -96,7 +96,20 @@ def identify(frame):
 
             if len(results) > 0 and not results[0].empty:
                 best      = results[0].iloc[0]
-                name      = os.path.basename(os.path.dirname(best["identity"]))
+                file_path = best["identity"]
+                
+                # ---------------------------------------------------------
+                # FIX: Smart Name Extraction
+                parent_folder = os.path.basename(os.path.dirname(file_path))
+                
+                if parent_folder.lower() == "registered":
+                    # It's a direct file (e.g., registered/Edrian.jpg) -> Extract "Edrian"
+                    name = os.path.splitext(os.path.basename(file_path))[0]
+                else:
+                    # It's inside a user folder (e.g., registered/Edrian/01.jpg) -> Extract "Edrian"
+                    name = parent_folder
+                # ---------------------------------------------------------
+
                 distance  = best.get("distance", 1.0)
                 confidence = max(0.0, min(1.0, 1.0 - (distance / 0.4)))
 
@@ -143,7 +156,7 @@ def verify(frame, name):
         try:
             K.clear_session()
             
-            # FIX: Bypass OpenCV detector entirely using 'skip'
+            # Bypass OpenCV detector entirely using 'skip'
             result = DeepFace.verify(
                 img1_path=temp_path,
                 img2_path=ref_img,
