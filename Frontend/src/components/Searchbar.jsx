@@ -1,14 +1,28 @@
 // File: Frontend/src/components/Searchbar.jsx
 import React, { useState, useEffect, useRef } from "react";
-import { useBAC } from "../context/BAC_CONTEXT";
+import { API_BASE } from "../api";
 import { ShieldAlert, ShieldCheck, Eye, Zap, CornerDownLeft } from "lucide-react";
 
 export default function Searchbar() {
-  const { readings } = useBAC(); // Extract complete shared dataset array
+  const [readings, setReadings] = useState([]);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef(null);
+
+  // Live deployment logs feed for the search index
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/deployment-logs?limit=200`);
+        if (res.ok && active) setReadings((await res.json()).logs);
+      } catch { /* keep last known */ }
+    };
+    load();
+    const interval = setInterval(load, 15000);
+    return () => { active = false; clearInterval(interval); };
+  }, []);
 
   // Close dropdown if developer clicks outside the lookup hit-box
   useEffect(() => {
@@ -32,9 +46,9 @@ export default function Searchbar() {
 
     const filtered = readings.filter((row) => {
       const matchId = String(row.id).includes(cleanQuery);
-      const matchLabel = row.label ? row.label.toLowerCase().includes(cleanQuery) : false;
-      const matchType = row.type ? row.type.toLowerCase().includes(cleanQuery) : false;
-      
+      const matchLabel = row.prediction ? row.prediction.toLowerCase().includes(cleanQuery) : false;
+      const matchType = row.risk_level ? row.risk_level.toLowerCase().includes(cleanQuery) : false;
+
       return matchId || matchLabel || matchType;
     });
 
@@ -87,7 +101,7 @@ export default function Searchbar() {
             boxShadow: "0 10px 25px -5px rgba(0,0,0,0.3)"
           }}
         >
-          <div className="text-[9px] uppercase font-bold tracking-wider px-2 py-1" style={{ color: "var(--text-muted)" }}>
+          <div className="text-[11px] uppercase font-bold tracking-wider px-2 py-1" style={{ color: "var(--text-muted)" }}>
             Matching Telemetry Nodes ({results.length})
           </div>
           
@@ -97,18 +111,18 @@ export default function Searchbar() {
               onClick={() => handleSelectResult(item.id)}
               className="flex items-center justify-between text-left w-full px-2 py-1.5 rounded-lg text-xs transition-colors hover:bg-(--bg-active) group"
             >
-              <div className="flex items-center gap-2 min-w-0">
-                {getLogIcon(item.label || "Pass")}
-                <span className="font-mono text-[11px] font-bold" style={{ color: "var(--text-secondary)" }}>
-                  #{item.id}
-                </span>
-                <span className="truncate max-w-30 font-medium" style={{ color: "var(--text-primary)" }}>
-                  {item.label || "Pass"}
-                </span>
-              </div>
+                <div className="flex items-center gap-2 min-w-0">
+                  {getLogIcon(item.prediction || "Pass")}
+                  <span className="font-mono text-[11px] font-bold" style={{ color: "var(--text-secondary)" }}>
+                    #{item.id}
+                  </span>
+                  <span className="truncate max-w-30 font-medium" style={{ color: "var(--text-primary)" }}>
+                    {item.prediction || "Pass"}
+                  </span>
+                </div>
               
               <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                <span className="text-[9px] font-mono" style={{ color: "var(--text-muted)" }}>Go to</span>
+                <span className="text-[11px] font-mono" style={{ color: "var(--text-muted)" }}>Go to</span>
                 <CornerDownLeft size={10} style={{ color: "var(--text-muted)" }} />
               </div>
             </button>

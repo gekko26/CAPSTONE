@@ -6,7 +6,7 @@ import {
   Square, Eye, Hourglass, Sliders, Thermometer, Gauge
 } from "lucide-react";
 
-const BASE    = "http://localhost:8000";
+import { API_BASE as BASE } from "../api";
 const FRAME_MS    = 200;   
 const ANALYZE_MS  = 800;   
 
@@ -75,7 +75,7 @@ function LabelBadge({ label, subLabel }) {
         {LABEL_NAMES[label] ?? "Unknown"}
       </span>
       {subLabel && (
-        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium"
           style={{ background: "var(--bg-active)", color: "var(--text-muted)" }}>
           {SUB_NAMES[subLabel] ?? subLabel}
         </span>
@@ -134,7 +134,7 @@ function EventCard({ active, color, icon: Icon, label, hint, badge, onClick }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium" style={{ color: active ? color : "var(--text-primary)" }}>{label}</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+          <span className="text-[11px] px-1.5 py-0.5 rounded font-medium"
             style={{ background: "var(--bg-active)", color: "var(--text-muted)" }}>{badge}</span>
         </div>
         <div className="text-xs mt-0.5 leading-relaxed" style={{ color: "var(--text-muted)" }}>{hint}</div>
@@ -185,7 +185,7 @@ function SensorPatternVisualizer({ row }) {
         {/* Topology Heatmap */}
         <div className="p-3 rounded-lg border flex flex-col justify-between" style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
           <div>
-            <span className="text-[10px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Spatial Array Topology</span>
+            <span className="text-[11px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Spatial Array Topology</span>
             <p className="text-xs font-semibold mt-0.5 mb-3" style={{ color: "var(--text-primary)" }}>Chamber Intake Load</p>
           </div>
           <div className="flex justify-around items-end gap-2 h-16 px-2">
@@ -195,7 +195,7 @@ function SensorPatternVisualizer({ row }) {
               { id: "MQ3 #3", val: s3, pct: getPct(s3) },
             ].map((sensor) => (
               <div key={sensor.id} className="flex flex-col items-center flex-1 group relative">
-                <span className="text-[9px] mb-1 font-mono" style={{ color: "var(--text-secondary)" }}>{Math.round(sensor.val)}</span>
+                <span className="text-[11px] mb-1 font-mono" style={{ color: "var(--text-secondary)" }}>{Math.round(sensor.val)}</span>
                 <div className="w-full rounded-t" 
                      style={{ 
                        height: `${sensor.pct}%`, 
@@ -203,7 +203,7 @@ function SensorPatternVisualizer({ row }) {
                        background: `linear-gradient(to top, var(--bg-active), ${sensor.pct > 70 ? "var(--over)" : "var(--pass)"})`
                      }} 
                 />
-                <span className="text-[9px] mt-1 text-center scale-90" style={{ color: "var(--text-muted)" }}>{sensor.id}</span>
+                <span className="text-[11px] mt-1 text-center scale-90" style={{ color: "var(--text-muted)" }}>{sensor.id}</span>
               </div>
             ))}
           </div>
@@ -212,20 +212,20 @@ function SensorPatternVisualizer({ row }) {
         {/* Deviation Meter */}
         <div className="p-3 rounded-lg border flex flex-col justify-between" style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
           <div>
-            <span className="text-[10px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Mathematical Deviation</span>
+            <span className="text-[11px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Mathematical Deviation</span>
             <p className="text-xs font-semibold mt-0.5 mb-1" style={{ color: "var(--text-primary)" }}>Spatial Variance Coefficient</p>
           </div>
           <div className="my-2">
             <div className="flex justify-between items-baseline mb-1">
               <span className="text-xl font-bold tabular-nums" style={{ color: varianceColor }}>{variance.toFixed(2)}</span>
-              <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>σ index</span>
+              <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>σ index</span>
             </div>
             <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "var(--bg-card)" }}>
               <div className="h-full rounded-full transition-all duration-500" 
                    style={{ width: `${Math.min((variance / 220) * 100, 100)}%`, background: varianceColor }}/>
             </div>
           </div>
-          <p className="text-[10px] font-medium leading-normal" style={{ color: "var(--text-muted)" }}>
+          <p className="text-[11px] font-medium leading-normal" style={{ color: "var(--text-muted)" }}>
             Verdict: <span style={{ color: varianceColor }}>{varianceAnalysis}</span>
           </p>
         </div>
@@ -233,12 +233,12 @@ function SensorPatternVisualizer({ row }) {
         {/* Waveform Kinetics */}
         <div className="p-3 rounded-lg border flex flex-col justify-between" style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
           <div>
-            <span className="text-[10px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Waveform Kinetics</span>
+            <span className="text-[11px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Waveform Kinetics</span>
             <p className="text-xs font-semibold mt-0.5 mb-2" style={{ color: "var(--text-primary)" }}>Intake Time Coefficients</p>
           </div>
           <div className="space-y-2.5">
             <div>
-              <div className="flex justify-between text-[9px] mb-0.5" style={{ color: "var(--text-secondary)" }}>
+              <div className="flex justify-between text-[11px] mb-0.5" style={{ color: "var(--text-secondary)" }}>
                 <span>Rise Profile (Slope Velocity)</span>
                 <span className="font-mono">{rise.toFixed(1)} samples</span>
               </div>
@@ -247,7 +247,7 @@ function SensorPatternVisualizer({ row }) {
               </div>
             </div>
             <div>
-              <div className="flex justify-between text-[9px] mb-0.5" style={{ color: "var(--text-secondary)" }}>
+              <div className="flex justify-between text-[11px] mb-0.5" style={{ color: "var(--text-secondary)" }}>
                 <span>Decay Profile (Desorption Rate)</span>
                 <span className="font-mono">{decay.toFixed(1)} samples</span>
               </div>
@@ -256,13 +256,13 @@ function SensorPatternVisualizer({ row }) {
               </div>
             </div>
           </div>
-          <div className="text-[9px] italic mt-1" style={{ color: "var(--text-muted)" }}>
+          <div className="text-[11px] italic mt-1" style={{ color: "var(--text-muted)" }}>
             *Sanitizers show steep rise / slow decay configurations.
           </div>
         </div>
       </div>
       {/* Atmospheric Compensation Status Footer */}
-      <div className="flex items-center gap-4 pt-2 border-t text-[10px]" style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
+      <div className="flex items-center gap-4 pt-2 border-t text-[11px]" style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
         <div className="flex items-center gap-1">
           <Thermometer size={12} className="text-orange-400"/>
           Ambient Temp: <span className="font-semibold text-mono" style={{ color: "var(--text-primary)" }}>{row.temperature ? `${row.temperature.toFixed(1)}°C` : "—"}</span>
@@ -335,7 +335,7 @@ export default function Training() {
   const [relabelSubLabel, setRelabelSubLabel] = useState("");
   const [relabelReason, setRelabelReason] = useState("");
 
-  const isCameraEvent = ["alcohol", "perfume", "sober", "drowsy"].includes(activeEvent);
+  const isCameraEvent = ["alcohol", "perfume", "sober", "drowsy", "yawning"].includes(activeEvent);
 
   // ── Data ──────────────────────────────────────────────────
   const loadSummary = useCallback(async () => {
@@ -382,7 +382,7 @@ export default function Training() {
   const fetchFrameLoop = async () => {
     if (!loopActiveRef.current) return;
     try {
-      const res = await fetch(`${BASE}/camera/stream/frame`, { cache: "no-store" });
+      const res = await fetch(`${BASE}/camera/stream/frame?overlay=0`, { cache: "no-store" });
       if (!res.ok) {
         frameErrCountRef.current++;
         if (frameErrCountRef.current >= 5) setCamError(true);
@@ -491,6 +491,11 @@ export default function Training() {
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail);
         toast(`Drowsy baseline logged — Row #${d.id}. Stream active.`);
+      } else if (liveEvent === "yawning") {
+        const r = await fetch(`${BASE}/training/collect/yawning`, { method: "POST", body: fd });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail);
+        toast(`Yawning baseline logged — Row #${d.id}. Stream active.`);
       }
       
       setTimeout(() => {
@@ -549,7 +554,8 @@ export default function Training() {
       alcohol: "Proximity pipeline armed — stand in front of lens",
       perfume: "Chemical evaluation armed — execute walkthrough",
       sober: "Baseline armed — Keep eyes open",
-      drowsy: "Baseline armed — Fake sleep (close eyes)"
+      drowsy: "Baseline armed — Fake sleep (close eyes, EAR)",
+      yawning: "Baseline armed — Mouth wide open (MAR yawning)",
     };
     
     toast(msgs[activeEventRef.current] || "Pipeline armed");
@@ -686,8 +692,9 @@ export default function Training() {
 
   const EVENT_CONFIG = {
     clear_air: { label: "Clear Air (Empty)", hint: "Manual trigger. Records clean room environment.", color: "#3b82f6", icon: Wind, badge: "Manual", camera: false },
-    sober: { label: "Sober Face", hint: "Camera auto-captures. Open eyes.", color: "var(--pass)", icon: Camera, badge: "Camera", camera: true },
-    drowsy: { label: "Drowsy (Fake Sleep)", hint: "Camera auto-captures. Close eyes.", color: "var(--near)", icon: Eye, badge: "Camera", camera: true },
+    sober: { label: "Sober Face", hint: "Camera auto-captures. Open eyes, mouth closed.", color: "var(--pass)", icon: Camera, badge: "Camera", camera: true },
+    drowsy: { label: "Drowsy (EAR)", hint: "Camera auto-captures. Eyes closed (EAR).", color: "var(--near)", icon: Eye, badge: "Camera", camera: true },
+    yawning: { label: "Yawning (MAR)", hint: "Camera auto-captures. Mouth open wide (MAR).", color: "#F59E0B", icon: Activity, badge: "Camera", camera: true },
     alcohol: { label: "Breath alcohol", hint: "Camera auto-captures. BAC required.", color: "var(--over)", icon: Wind, badge: "Camera + BAC", camera: true },
     sanitizer: { label: "Rubbing alcohol", hint: "Manual trigger. Spray near sensors.", color: "var(--text-secondary)", icon: Droplets, badge: "Manual", camera: false },
     perfume: { label: "Perfume / cologne", hint: "Camera auto-captures. Image discarded.", color: "var(--text-secondary)", icon: Camera, badge: "Camera", camera: true },
@@ -760,13 +767,13 @@ export default function Training() {
             {summary?.sanitizer_breakdown && (
               <div className="mt-3 pt-3 border-t flex gap-3" style={{ borderColor: "var(--border-subtle)" }}>
                 <div className="flex-1 text-center rounded-lg p-2" style={{ background: "var(--bg-active)" }}>
-                  <div className="text-[10px] mb-0.5" style={{ color: "var(--text-muted)" }}>Rubbing alcohol</div>
+                  <div className="text-[11px] mb-0.5" style={{ color: "var(--text-muted)" }}>Rubbing alcohol</div>
                   <div className="text-sm font-medium tabular-nums" style={{ color: "var(--text-primary)" }}>
                     {summary.sanitizer_breakdown.rubbing_alcohol}
                   </div>
                 </div>
                 <div className="flex-1 text-center rounded-lg p-2" style={{ background: "var(--bg-active)" }}>
-                  <div className="text-[10px] mb-0.5" style={{ color: "var(--text-muted)" }}>Perfume</div>
+                  <div className="text-[11px] mb-0.5" style={{ color: "var(--text-muted)" }}>Perfume</div>
                   <div className="text-sm font-medium tabular-nums" style={{ color: "var(--text-primary)" }}>
                     {summary.sanitizer_breakdown.perfume}
                   </div>
@@ -832,7 +839,7 @@ export default function Training() {
                style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
             
             <div className="flex flex-col gap-1">
-              <span style={{ color: "var(--text-muted)" }} className="text-[10px] uppercase font-medium">Tracking Proximity</span>
+              <span style={{ color: "var(--text-muted)" }} className="text-[11px] uppercase font-medium">Tracking Proximity</span>
               <div className="flex items-center gap-1.5 font-semibold text-sm capitalize"
                    style={{ color: isCameraEvent ? proximityColorMap[proximityStr] : "var(--text-muted)" }}>
                 <Eye size={14}/>
@@ -841,7 +848,7 @@ export default function Training() {
             </div>
 
             <div className="flex flex-col gap-1 border-l pl-3.5" style={{ borderColor: "var(--border-subtle)" }}>
-              <span style={{ color: "var(--text-muted)" }} className="text-[10px] uppercase font-medium">Hardware Bus State</span>
+              <span style={{ color: "var(--text-muted)" }} className="text-[11px] uppercase font-medium">Hardware Bus State</span>
               <div className="flex items-center gap-1.5 font-semibold text-xs"
                    style={{ color: currentHw.color }}>
                 <HwIcon size={14} className={hardwareState === "triggering" || hardwareState === "buffering" ? "animate-spin" : ""}/>
@@ -859,12 +866,12 @@ export default function Training() {
                   <img src={frameUrl} alt="C200C live" className="w-full h-full object-cover"/>
                   {analysis && (
                     <div className="absolute top-2 left-2 flex flex-col gap-1">
-                      <div className="text-[10px] font-medium px-2 py-0.5 rounded-full"
+                      <div className="text-[11px] font-medium px-2 py-0.5 rounded-full"
                         style={{ background: "rgba(0,0,0,0.6)", color: "#34d399" }}>
                         EAR {analysis.ear?.toFixed(3)} · {analysis.status?.toUpperCase()}
                       </div>
                       {analysis.identified && (
-                        <div className="text-[10px] font-medium px-2 py-0.5 rounded-full"
+                        <div className="text-[11px] font-medium px-2 py-0.5 rounded-full"
                           style={{ background: "rgba(0,0,0,0.6)", color: "var(--pass)" }}>
                           ✓ {analysis.name}
                         </div>
@@ -872,13 +879,13 @@ export default function Training() {
                     </div>
                   )}
                   {isClose && collecting && (
-                    <div className="absolute bottom-2 right-2 text-[10px] font-medium px-2 py-0.5 rounded-full animate-pulse"
+                    <div className="absolute bottom-2 right-2 text-[11px] font-medium px-2 py-0.5 rounded-full animate-pulse"
                       style={{ background: "rgba(220,38,38,0.85)", color: "#fff" }}>
                       ⚠ CLOSE — capturing in 2s
                     </div>
                   )}
                   {collecting && !isClose && (
-                    <div className="absolute bottom-2 left-2 text-[10px] font-medium px-2 py-0.5 rounded-full"
+                    <div className="absolute bottom-2 left-2 text-[11px] font-medium px-2 py-0.5 rounded-full"
                       style={{ background: "rgba(0,0,0,0.6)", color: "#fbbf24" }}>
                       Waiting for subject...
                     </div>
@@ -891,7 +898,7 @@ export default function Training() {
                   </p>
                 </div>
               )}
-              <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium"
+              <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium"
                 style={{ background: "rgba(0,0,0,0.6)", color: streaming && !camError ? "#34d399" : "#ef4444" }}>
                 <span className={`w-1.5 h-1.5 rounded-full ${streaming && !camError ? "bg-emerald-400 animate-pulse" : "bg-red-500"}`}/>
                 {streaming && !camError ? "Live · CAM-01" : "Offline"}

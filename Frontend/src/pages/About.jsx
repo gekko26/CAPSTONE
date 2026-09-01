@@ -1,161 +1,128 @@
-import picture from "../assets/pic.jpg"
-import { Radar, Sparkles, AlertTriangle, Camera, ActivityIcon} from "lucide-react";
-import { useTheme } from "../context/THEME_CONTEXT";
+// File: Frontend/src/pages/About.jsx
+import picture from "../assets/pic.jpg";
+import { Activity, Camera, Radar, Sparkles, AlertTriangle } from "lucide-react";
+import { Card } from "../components/ui/primitives";
 
+const TEAM = [
+  { name: "Jayme, Nino Charles", role: "Full Stack & ML", img: picture },
+  { name: "Gonzaga, Edrian P", role: "Backend & Database", img: picture },
+  { name: "Cabahug, Jommel P", role: "Hardware & Firmware", img: picture },
+];
 
-function About(){
-  const {theme, setTheme} = useTheme()
-  const cardBg = theme?"text-white":"bg-white";
+const STACK = [
+  { label: "Frontend", items: ["React", "Vite", "Tailwind CSS"] },
+  { label: "Backend", items: ["Python · FastAPI", "OpenCV", "TensorFlow"] },
+  { label: "Hardware", items: ["ESP32", "MQ-3 Sensors", "CCTV Camera"] },
+  { label: "Connection", items: ["WiFi · HTTP"] },
+];
 
+const STEPS = [
+  { icon: Camera, color: "var(--accent)", title: "Capture", desc: "Camera detects the subject's face" },
+  { icon: Radar, color: "var(--near)", title: "Sense", desc: "ESP32 reads MQ-3 sensor output" },
+  { icon: Sparkles, color: "var(--accent)", title: "Predict", desc: "ML models classify the result" },
+  { icon: AlertTriangle, color: "var(--over)", title: "Decide", desc: "Pass / Near Limit / Over Limit" },
+];
 
-    return (
-        <div className="flex flex-col gap-5 h-full ">
+function About() {
+  return (
+    <div className="flex flex-col gap-4 h-full overflow-auto pr-1">
 
-            <div className="flex  items-center flex-1 w-full bg-[#0f1a2e] rounded-2xl p-2 gap-9">
-                 
-                 <div className="w-1/14 border h-2/3 rounded-2xl ml-12 flex items-center justify-center border-red-300"><ActivityIcon color="red" size={100}/></div>
-                 <div className=" flex flex-col h-3/4  gap-2 justify-center"> 
-                     <h2  className="text-4xl tracking-tighter text-green-500">AlcoDetect <span className="ml-2">System</span> </h2>
-                     <p className="text-xl tracking-tight text-gray-400">ESP32-based alcohol detection with ML-powered BAC estimation · Version 2.0</p>
-                     <div className="flex gap-5 text-md h-1/4 items-center">
-                        <p className=" h-3/4 flex items-center p-4 rounded-4xl bg-blue-200 text-blue-800">Computer Engineering</p>
-                        <p className=" h-3/4 flex items-center p-4 rounded-4xl bg-green-100 text-green-600">Capstone Project</p>
-                     </div>
-                     
-                 </div>
- 
-            </div>
-
-
-            <div className="flex h-[40%] w-full  gap-4">
-                  
-                  <div  className={`flex flex-col border border-white w-1/2 rounded-2xl text-black p-5 bg-white`}>
-                     <p className="text-xls">Development Team</p>
-
-                     <div className="flex flex-col flex-1 p-4">
-                         
-                       {/* dslfkdskf */}
-                        <div className= {`grid grid-cols-2 grid-rows-2 text-white flex-1 border `}>
-
-                            <div className="bg-white flex items-center justify-center gap-3">
-
-                              <div className=" border  rounded-full h-25  w-25 bg-blue-200 overflow-clip "> <img src={picture} alt="" /> </div> 
-                            <div className="flex flex-col text-black">
-                            <p className="font-bold text-xl tracking-tighter">Jayme, Nino Charles</p>
-                              <p>Paperrrrrrrrrrrrrrs</p>
-                             </div>
-                                 
-                            </div>
-
-                            <div className="bg-white flex items-center justify-center gap-3">
-
-                                <div className=" border rounded-full h-25  w-25 bg-blue-200 overflow-clip "> <img src={picture} alt="" /> </div> 
-                                <div className="flex flex-col text-black">
-                                <p className="font-bold text-xl tracking-tighter">Gonzaga, Edrian P</p>
-                                <p>Sicret..</p>
-                                </div>
-
-                            </div>
-
-                          <div className="bg-white flex items-center justify-center gap-3">
-
-                                  <div className=" border rounded-full h-25  w-25 bg-blue-200 overflow-clip "> <img src={picture} alt="" /> </div> 
-                                    <div className="flex flex-col text-black">
-                                    <p className="font-bold text-xl tracking-tighter">Cabahug, Jommel P</p>
-                                    <p>Hardware Ultra spesyal</p>
-                                    </div>
-
-                          </div>
-
-                        </div>
-
-                     </div>
-                  </div>
-
-
-                  <div className="border border-white w-1/2 bg-white rounded-2xl text-black p-5">
-                  <p className="mb-4">Tech Stack</p>
-                   <div className="p-6 flex  justify-evenly items-center h-60">
-                       
-                     <div className="flex flex-col h-full gap-3  ">
-                       <p className="text-xl font-bold tracking-wider">Front End</p>
-                       <div className="flex flex-col gap-3">
-                       <p>⚛️ React</p>
-                       <p>⚡ Vite</p>
-                       <p>🎨 Tailwind CSS</p>
-                       </div>
-                       
-                     </div>
-
-                     <div className="flex flex-col h-full gap-3">
-                       <p className="text-xl font-bold tracking-wider">Back End</p>
-                       <div className="flex flex-col gap-3">
-                       <p>🐍 Python</p>
-                       <p>👁️ OpenCV</p>
-                       <p>🧠 Machine Learning</p>
-                       </div>
-                       
-                     </div>
-
-                     <div className="flex flex-col h-full gap-3">
-                       <p className="text-xl font-bold tracking-wider">Hardware</p>
-                       <div className="flex flex-col gap-3">
-                       <p>ESP32</p>
-                       <p>MQ-3 Sensors</p>
-                       <p>CCTV Camera</p>
-                       </div>
-                     </div>
-
-                     <div className="flex flex-col h-full gap-3">
-                      <p className="text-xl font-bold tracking-wider">Communication</p>
-                      <p>WIFI</p>
-                     </div>
-
-                   </div>
-       
-                  
-                  </div>
-
-
-            </div>
-
-   {/* How it works */}
-            <div className=   {`"flex-1 w-full rounded-2xl text-black p-6" ${cardBg}`}>
-               <p className="m-4">How it works</p>
-                
-               <div className="flex p-8 items-center justify-center gap-30">
-
-                  <div>
-                     <div className="rounded-full bg-blue-300 h-15 w-15 flex items-center justify-center mb-2"><Camera color="blue"/></div>
-                    <p>1. Capture</p>
-                    <p>Camera Detects subjects face</p>
-                  </div>
-
-                  <div>
-                    <div className="rounded-full bg-yellow-200 h-15 w-15 flex items-center justify-center mb-2"><Radar color="" strokeWidth={2} className="text-yellow-700 stroke-current"/></div>
-                    <p>2. Sense</p>
-                    <p>ESP32 reads MQ-3 sensor output</p>
-                  </div>
-
-                  <div>
-                   <div className="rounded-full bg-green-300 h-15 w-15 flex items-center justify-center mb-2"><Sparkles color="green"/></div>
-                    <p>3. Predict</p>
-                    <p>ML model estimates BAC level</p>
-                  </div>
-
-                  <div >
-                   <div className="rounded-full bg-red-300 h-15 w-15 flex items-center justify-center mb-2"><AlertTriangle color="red"/></div>
-                    <p>4. Alert</p>
-                    <p>Pass/fail result displayed</p>
-                  </div>
-
-               </div>
-            </div>
-
-
+      {/* Hero */}
+      <div
+        className="rounded-xl p-8 flex items-center gap-8"
+        style={{ background: "var(--bg-hero)" }}
+      >
+        <div
+          className="w-20 h-20 rounded-xl flex items-center justify-center shrink-0"
+          style={{ background: "rgba(255,255,255,0.08)" }}
+        >
+          <Activity size={44} strokeWidth={1.2} style={{ color: "var(--accent)" }} />
         </div>
-    )
-}
+        <div className="flex flex-col gap-2">
+          <h2 className="text-3xl font-bold tracking-tight" style={{ color: "var(--text-on-dark)" }}>
+            AlcoDetect System
+          </h2>
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+            ESP32-based alcohol detection with ML-powered classification · Version 2.0
+          </p>
+          <div className="flex gap-2 mt-1">
+            <span className="text-xs px-3 py-1 rounded-full" style={{ background: "rgba(255,255,255,0.08)", color: "var(--text-on-dark)" }}>
+              Computer Engineering
+            </span>
+            <span className="text-xs px-3 py-1 rounded-full" style={{ background: "var(--accent)", color: "#fff" }}>
+              Capstone Project
+            </span>
+          </div>
+        </div>
+      </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        {/* Team */}
+        <Card>
+          <p className="text-sm font-semibold mb-3" style={{ color: "var(--text-primary)" }}>Development Team</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {TEAM.map((m) => (
+              <div key={m.name} className="flex flex-col items-center text-center gap-2 p-3 rounded-lg" style={{ background: "var(--bg-card-alt)" }}>
+                <img
+                  src={m.img}
+                  alt={m.name}
+                  className="h-16 w-16 rounded-full object-cover"
+                  style={{ border: "2px solid var(--border)" }}
+                />
+                <div>
+                  <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{m.name}</p>
+                  <p className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>{m.role}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* Tech stack */}
+        <Card>
+          <p className="text-sm font-semibold mb-3" style={{ color: "var(--text-primary)" }}>Tech Stack</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {STACK.map((s) => (
+              <div key={s.label}>
+                <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "var(--text-muted)" }}>{s.label}</p>
+                <ul className="space-y-1">
+                  {s.items.map((it) => (
+                    <li key={it} className="text-xs" style={{ color: "var(--text-secondary)" }}>{it}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      {/* How it works */}
+      <Card>
+        <p className="text-sm font-semibold mb-4" style={{ color: "var(--text-primary)" }}>How it works</p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+          {STEPS.map((s, i) => (
+            <div key={s.title} className="flex flex-col items-start gap-2">
+              <div className="relative">
+                <div className="h-11 w-11 rounded-full flex items-center justify-center" style={{ background: "var(--bg-card-alt)" }}>
+                  <s.icon size={20} style={{ color: s.color }} />
+                </div>
+                <span
+                  className="absolute -top-1 -left-1 h-5 w-5 rounded-full text-[10px] font-bold flex items-center justify-center"
+                  style={{ background: "var(--accent)", color: "#fff" }}
+                >
+                  {i + 1}
+                </span>
+              </div>
+              <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{s.title}</p>
+              <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-muted)" }}>{s.desc}</p>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+    </div>
+  );
+}
 
 export default About;

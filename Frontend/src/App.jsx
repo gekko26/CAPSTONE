@@ -1,72 +1,60 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { useState } from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 import Homes from "./pages/Home";
 import Dashboard from "./pages/Dashboard";
 import Camera from "./pages/Camera";
+import Deployment from "./pages/Deployment";
 import Model from "./pages/Models";
 import About from "./pages/About";
 import Report from "./pages/Report";
 import Training from "./pages/Training";
 
-import Sidebar from "./components/Sidebar";
-import Topbar from "./components/Topbar";
+// ALCOGATE terminal pages (new IA) — re-use existing logic initially
+import LiveFlow from "./pages/LiveFlow";
+import Events from "./pages/Events";
+import People from "./pages/People";
+import Insights from "./pages/Insights";
+import Settings from "./pages/Settings";
 
-import { ActivityIcon } from "lucide-react";
+import AlcoGateHeader from "./components/AlcoGateHeader";
+
+const SHOW_TRAINING = import.meta.env.VITE_SHOW_TRAINING !== "false";
 
 function App() {
-  const [open, setOpen] = useState(false);
-
   return (
     <BrowserRouter>
-      <div className="flex h-screen w-screen overflow-hidden">
+      <div className="flex flex-col h-screen w-screen overflow-hidden" style={{ background: "var(--bg-page)" }}>
+        <AlcoGateHeader />
 
-        <div
-           onMouseEnter={() => setOpen(!open) } 
-          className="w-1 h-50 bg-slate-800 hover:bg-slate-700 flex items-center justify-center cursor-pointer transition rounded-md"
-        >
-          {/* <ActivityIcon className="w-3 h-6 text-red-500" /> */}
-        </div>
+        <main className="flex-1 overflow-auto">
+          <Routes>
+            {/* ── ALCOGATE primary IA (reference image) ── */}
+            <Route path="/" element={<LiveFlow />} />
+            <Route path="/live-flow" element={<Navigate to="/" replace />} />
+            <Route path="/events" element={<Events />} />
+            <Route path="/people" element={<People />} />
+            <Route path="/insights" element={<Insights />} />
+            <Route path="/settings" element={<Settings />} />
 
-        <div
-        
-        
-        
-          className={`flex flex-col h-full bg-[#0f1a2e] border border-slate-400 rounded-md transition-all duration-300 overflow-hidden ${
-            open ? "w-60" : "w-0"
-          }`}
-        >
-          <div className="flex items-center justify-center gap-3 p-6">
-            <ActivityIcon size={40} strokeWidth={1} color="red" />
-            <div className="flex flex-col">
-              <h2 className="font-bold text-white tracking-tighter text-2xl">
-                AlcoDetect
-              </h2>
-              <span className="text-xs text-gray-300">
-                Palahubog Detector
-              </span>
-            </div>
-          </div>
+            {/* ── Legacy routes — keep working (preserve functionality) ── */}
+            <Route path="/home" element={<Homes />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/camera" element={<Camera />} />
+            <Route path="/deployment" element={<Deployment />} />
+            <Route path="/models" element={<Model />} />
+            <Route path="/about" element={<About />} />
+            <Route path="/report" element={<Report />} />
 
-          <Sidebar />
-        </div>
-
-        <div className="flex flex-col flex-1 overflow-hidden p-2 gap-2">
-          <Topbar />
-
-          <main className="flex-1 overflow-auto">
-            <Routes>
-              <Route path="/" element={<Homes />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/camera" element={<Camera />} />
-              <Route path="/models" element={<Model />} />
-              <Route path="/about" element={<About />} />
-              <Route path="/report" element={<Report />} />
+            {/* ── Training — preserved, hideable via env ── */}
+            {SHOW_TRAINING ? (
               <Route path="/training" element={<Training />} />
-            </Routes>
-          </main>
-        </div>
+            ) : (
+              <Route path="/training" element={<Navigate to="/" replace />} />
+            )}
 
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </main>
       </div>
     </BrowserRouter>
   );

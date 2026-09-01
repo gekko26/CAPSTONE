@@ -2,12 +2,13 @@
 import { Link, useLocation } from "react-router-dom";
 import {
   HomeIcon, LayoutDashboard, CameraIcon,
-  Cpu, InfoIcon, Activity, BarChart3, FlaskConical
+  Cpu, InfoIcon, Activity, BarChart3, FlaskConical, ShieldAlert
 } from "lucide-react";
 
 function Sidebar() {
   const location = useLocation();
-
+  const SHOW_TRAINNG = import.meta.env.VITE_SHOW_TRAINING !== "false";
+  {SHOW_TRAINING &&navItem()}
   const navItem = (to, Icon, label) => {
     const active = location.pathname === to;
     return (
@@ -51,6 +52,7 @@ function Sidebar() {
 
       {sectionLabel("Analysis")}
       {navItem("/camera", CameraIcon, "Camera")}
+      {navItem("/deployment", ShieldAlert, "Deployment Gate")}
       {navItem("/models", Cpu, "Models")}
       {navItem("/training", FlaskConical, "Training")}
 

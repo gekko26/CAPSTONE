@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { 
   ShieldCheck, ShieldAlert, ScanFace, Activity, 
   CheckCircle, XCircle, Camera, Lock, Unlock 
 } from "lucide-react";
 
-const BASE = "http://localhost:8000";
+import { API_BASE as BASE } from "../api";
 const FRAME_MS = 200;
 const ANALYZE_MS = 800;
 
@@ -29,7 +29,7 @@ export default function Deployment() {
   const fetchFrameLoop = async () => {
     if (!loopActiveRef.current) return;
     try {
-      const res = await fetch(`${BASE}/camera/stream/frame`, { cache: "no-store" });
+      const res = await fetch(`${BASE}/camera/stream/frame?overlay=0`, { cache: "no-store" });
       if (res.ok) {
         setCamError(false);
         const blob = await res.blob();
@@ -105,31 +105,40 @@ export default function Deployment() {
       });
       
       const prediction = await result.json();
-      
-      // 4. Decision Engine
-      const isImpaired = prediction.final_label === "Over Limit" || prediction.final_label === "Near Limit";
-      const isDrowsy = prediction.impaired || prediction.eye_status === "Drowsy";
 
-      if (isImpaired || isDrowsy) {
+      // 4. Decision Engine — FAIL-CLOSED: any missing/error payload denies access
+      if (!result.ok || prediction.error || !prediction.final_label) {
         setSystemState("DENIED");
         setLastResult({
           name: cvData.identified ? cvData.name : "Unknown",
-          reason: isImpaired ? "Alcohol Detected" : "Fatigue Detected",
-          color: "text-red-500",
-          bg: "bg-red-500/10",
-          border: "border-red-500/30"
+          reason: "Evaluation Failed — Access Withheld",
+          color: "var(--over)",
+          bg: "var(--over-bg)"
         });
-        addLog(`Access Denied: ${cvData.name || "Subject"} (${isImpaired ? "Alcohol" : "Fatigue"})`, "error");
+        addLog(`Checkpoint error: ${prediction.error || `HTTP ${result.status}`} — denied by fail-closed policy`, "error");
       } else {
-        setSystemState("PASSED");
-        setLastResult({
-          name: cvData.identified ? cvData.name : "Unknown",
-          reason: "Clear to Enter",
-          color: "text-emerald-400",
-          bg: "bg-emerald-400/10",
-          border: "border-emerald-400/30"
-        });
-        addLog(`Access Granted: ${cvData.name || "Subject"}`, "success");
+        const isImpaired = prediction.final_label === "Over Limit" || prediction.final_label === "Near Limit";
+        const isDrowsy = prediction.impaired || prediction.eye_status === "drowsy";
+
+        if (isImpaired || isDrowsy) {
+          setSystemState("DENIED");
+          setLastResult({
+            name: cvData.identified ? cvData.name : "Unknown",
+            reason: isImpaired ? "Alcohol Detected" : "Fatigue Detected",
+            color: "var(--over)",
+            bg: "var(--over-bg)"
+          });
+          addLog(`Access Denied: ${cvData.name || "Subject"} (${isImpaired ? "Alcohol" : "Fatigue"})`, "error");
+        } else {
+          setSystemState("PASSED");
+          setLastResult({
+            name: cvData.identified ? cvData.name : "Unknown",
+            reason: "Clear to Enter",
+            color: "var(--pass)",
+            bg: "var(--pass-bg)"
+          });
+          addLog(`Access Granted: ${cvData.name || "Subject"}`, "success");
+        }
       }
 
       // 5. Reset system for the next person after 5 seconds
@@ -140,116 +149,138 @@ export default function Deployment() {
       }, 5000);
 
     } catch (error) {
-      setSystemState("IDLE");
-      isScanningRef.current = false;
-      addLog("Checkpoint evaluation failed", "error");
+      setSystemState("DENIED");
+      setLastResult({
+        name: "Unknown",
+        reason: "System Fault — Access Withheld",
+        color: "var(--over)",
+        bg: "var(--over-bg)"
+      });
+      addLog("Checkpoint evaluation failed — denied by fail-closed policy", "error");
+
+      setTimeout(() => {
+        setSystemState("IDLE");
+        setLastResult(null);
+        isScanningRef.current = false;
+      }, 5000);
     }
   };
 
   // ── UI Helpers ──────────────────────────────────────────────
   const statusConfig = {
-    IDLE: { text: "SYSTEM ARMED", sub: "Waiting for subject...", color: "text-emerald-400", Icon: ShieldCheck, ring: "ring-emerald-400/20" },
-    SCANNING: { text: "ANALYZING BIOMETRICS", sub: "Please stand still...", color: "text-amber-400", Icon: ScanFace, ring: "ring-amber-400/50 animate-pulse" },
-    PASSED: { text: "ACCESS GRANTED", sub: "Door Unlocked", color: "text-emerald-400", Icon: Unlock, ring: "ring-emerald-400/50" },
-    DENIED: { text: "ACCESS DENIED", sub: "Security Notified", color: "text-red-500", Icon: Lock, ring: "ring-red-500/50 shadow-[0_0_50px_rgba(239,68,68,0.2)]" }
+    IDLE:     { text: "System armed",      sub: "Waiting for a subject…", color: "var(--pass)", Icon: ShieldCheck, glow: "0 0 0 3px var(--pass-bg)" },
+    SCANNING: { text: "Analyzing…",         sub: "Please stand still",     color: "var(--near)", Icon: ScanFace,   glow: "0 0 0 3px var(--near-bg)" },
+    PASSED:   { text: "Access granted",     sub: "Door unlocked",          color: "var(--pass)", Icon: Unlock,     glow: "0 0 0 3px var(--pass-bg)" },
+    DENIED:   { text: "Access denied",      sub: "Security notified",      color: "var(--over)", Icon: Lock,       glow: "0 0 0 3px var(--over-bg)" },
   };
 
   const CurrentStatus = statusConfig[systemState];
   const StatusIcon = CurrentStatus.Icon;
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-slate-200 p-6 font-mono flex flex-col items-center">
-      
+    <div className="flex flex-col items-center p-4 gap-6">
+
       {/* Header */}
-      <div className="w-full max-w-5xl flex justify-between items-center mb-8 pb-4 border-b border-slate-800">
+      <div className="w-full max-w-5xl flex justify-between items-center">
         <div className="flex items-center gap-3">
-          <Activity size={24} className="text-emerald-400" />
-          <h1 className="text-2xl font-bold tracking-widest text-white">ALCODETECT <span className="font-light text-slate-500">GATEWAY</span></h1>
+          <Activity size={22} style={{ color: "var(--accent)" }} />
+          <h1 className="text-xl font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>
+            Deployment Gate
+          </h1>
         </div>
-        <div className="flex items-center gap-2 text-xs font-bold tracking-widest px-3 py-1 rounded bg-slate-900 border border-slate-800">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          LIVE NODE 01
+        <div
+          className="flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg"
+          style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }}
+        >
+          <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: "var(--pass)" }}></span>
+          Live · Node 01
         </div>
       </div>
 
-      <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Left Col: Camera Feed */}
-        <div className="lg:col-span-2 flex flex-col gap-4">
-          <div className={`relative w-full aspect-video bg-black rounded-xl border border-slate-800 overflow-hidden ring-4 transition-all duration-500 ${CurrentStatus.ring}`}>
-            
+      <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+        {/* Left: camera feed */}
+        <div className="lg:col-span-2">
+          <div
+            className="relative w-full aspect-video rounded-xl overflow-hidden transition-all duration-500"
+            style={{ background: "#101418", boxShadow: CurrentStatus.glow }}
+          >
             {frameUrl && !camError ? (
-              <img src={frameUrl} alt="Live Security Feed" className="w-full h-full object-cover opacity-80" />
+              <img src={frameUrl} alt="Live feed" className="w-full h-full object-cover" />
             ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center text-slate-600 gap-3">
-                <Camera size={40} />
-                <p className="tracking-widest uppercase text-sm">Camera Feed Offline</p>
+              <div className="w-full h-full flex flex-col items-center justify-center gap-3" style={{ color: "var(--text-muted)" }}>
+                <Camera size={36} strokeWidth={1.5} />
+                <p className="text-sm">Camera feed offline</p>
               </div>
             )}
 
-            {/* Overlays */}
-            <div className="absolute top-4 left-4 flex gap-2">
-              <span className="px-2 py-1 bg-black/60 text-[10px] uppercase tracking-widest rounded text-slate-300 backdrop-blur-sm border border-white/10">
-                1080P HD
-              </span>
-              <span className="px-2 py-1 bg-black/60 text-[10px] uppercase tracking-widest rounded text-emerald-400 backdrop-blur-sm border border-white/10">
-                AI ACTIVE
-              </span>
+            {/* Status chip */}
+            <div className="absolute top-3 left-3 flex items-center gap-2 px-2.5 py-1 rounded-lg backdrop-blur-sm"
+                 style={{ background: "rgba(0,0,0,0.55)" }}>
+              <StatusIcon size={13} style={{ color: CurrentStatus.color }} />
+              <span className="text-xs font-medium" style={{ color: "#fff" }}>{CurrentStatus.text}</span>
             </div>
 
-            {/* Crosshairs when idle */}
+            {/* Crosshair when idle */}
             {systemState === "IDLE" && (
                <div className="absolute inset-0 flex items-center justify-center opacity-30 pointer-events-none">
-                 <div className="w-48 h-48 border border-emerald-400/50 rounded-lg"></div>
+                 <div className="w-48 h-48 rounded-lg" style={{ border: `1px solid ${CurrentStatus.color}` }}></div>
                </div>
             )}
-            
           </div>
         </div>
 
-        {/* Right Col: Status & Logs */}
-        <div className="flex flex-col gap-6">
-          
-          {/* Big Status Box */}
-          <div className={`p-6 rounded-xl border flex flex-col items-center justify-center text-center transition-all duration-500 bg-slate-900 border-slate-800 h-48`}>
-            <StatusIcon size={48} className={`mb-4 ${CurrentStatus.color}`} />
-            <h2 className={`text-xl font-bold tracking-widest uppercase ${CurrentStatus.color}`}>
+        {/* Right: status + logs */}
+        <div className="flex flex-col gap-4">
+
+          {/* Big status card */}
+          <div
+            className="rounded-xl p-5 flex flex-col items-center justify-center text-center transition-all duration-500 min-h-[11rem]"
+            style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}
+          >
+            <StatusIcon size={40} strokeWidth={1.5} style={{ color: CurrentStatus.color }} className="mb-3" />
+            <h2 className="text-lg font-bold tracking-tight capitalize" style={{ color: CurrentStatus.color }}>
               {CurrentStatus.text}
             </h2>
-            <p className="text-xs tracking-widest uppercase text-slate-500 mt-2">
+            <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
               {CurrentStatus.sub}
             </p>
           </div>
 
-          {/* Result Card (Pops up on Pass/Fail) */}
+          {/* Result card */}
           {lastResult && (
-            <div className={`p-4 rounded-xl border ${lastResult.bg} ${lastResult.border} animate-in fade-in slide-in-from-bottom-4`}>
-              <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">Last Scan Result</div>
-              <div className={`text-lg font-bold tracking-wider ${lastResult.color}`}>{lastResult.name}</div>
-              <div className="text-sm font-medium mt-1 text-slate-300">{lastResult.reason}</div>
+            <div className="rounded-xl p-4 animate-in fade-in slide-in-from-bottom-2"
+                 style={{ background: lastResult.bg, border: `1px solid ${lastResult.color}33` }}>
+              <div className="text-[11px] uppercase tracking-wide mb-1" style={{ color: "var(--text-muted)" }}>Last scan</div>
+              <div className="text-base font-bold" style={{ color: lastResult.color }}>{lastResult.name}</div>
+              <div className="text-xs font-medium mt-0.5" style={{ color: "var(--text-secondary)" }}>{lastResult.reason}</div>
             </div>
           )}
 
-          {/* Security Log */}
-          <div className="flex-1 bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col overflow-hidden">
-            <h3 className="text-xs uppercase tracking-widest text-slate-500 mb-4 flex items-center justify-between">
-              Event Log
+          {/* Event log */}
+          <div
+            className="flex-1 rounded-xl p-4 flex flex-col overflow-hidden"
+            style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}
+          >
+            <h3 className="text-xs uppercase tracking-wider mb-3 flex items-center justify-between" style={{ color: "var(--text-muted)" }}>
+              Event log
               <ShieldCheck size={12} />
             </h3>
-            <div className="flex flex-col gap-3 overflow-y-auto">
+            <div className="flex flex-col gap-2.5 overflow-y-auto max-h-64">
               {logs.map((log, i) => (
-                <div key={i} className="flex gap-3 text-[11px]">
-                  <span className="text-slate-600 shrink-0">{log.time}</span>
-                  <span className={
-                    log.type === "error" ? "text-red-400" :
-                    log.type === "success" ? "text-emerald-400" : "text-slate-300"
-                  }>
+                <div key={i} className="flex gap-3 text-xs">
+                  <span className="shrink-0 font-mono" style={{ color: "var(--text-muted)" }}>{log.time}</span>
+                  <span style={{
+                    color:
+                      log.type === "error" ? "var(--over)" :
+                      log.type === "success" ? "var(--pass)" : "var(--text-secondary)",
+                  }}>
                     {log.msg}
                   </span>
                 </div>
               ))}
               {logs.length === 0 && (
-                <div className="text-center text-slate-700 text-xs italic mt-4">No recent activity</div>
+                <div className="text-center text-xs py-4" style={{ color: "var(--text-muted)" }}>No recent activity</div>
               )}
             </div>
           </div>

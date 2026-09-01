@@ -12,23 +12,27 @@ function Topbar() {
     switch (location.pathname) {
       case "/":           return "Home";
       case "/dashboard":  return "Dashboard";
-      case "/camera":     return "Camera Live Stream";
-      case "/models":     return "Model Topologies";
-      case "/about":      return "About Project";
-      case "/report":     return "Audit Logs & Reports";
-      default:            return "Console Page";
+      case "/camera":     return "Camera";
+      case "/deployment": return "Deployment Gate";
+      case "/models":     return "Models";
+      case "/about":      return "About";
+      case "/report":     return "Reports";
+      case "/training":   return "Training";
+      default:            return "AlcoDetect";
     }
   };
 
   const getDescription = () => {
     switch (location.pathname) {
-      case "/":           return "Welcome — core services initialized";
-      case "/dashboard":  return "Live decision fusion monitoring stream";
-      case "/camera":     return "Proximity gating array stream active";
-      case "/models":     return "4 machine learning nodes loaded and operational";
-      case "/about":      return "System overview architecture definitions";
-      case "/report":     return "Compiled institutional compliance tracking logs";
-      default:            return "Telemetry service active";
+      case "/":           return "Overview of your alcohol detection system";
+      case "/dashboard":  return "Live results from the deployment gate";
+      case "/camera":     return "Live camera feed and face analysis";
+      case "/deployment": return "Automatic access control checkpoint";
+      case "/models":     return "Trained models and their real accuracy";
+      case "/about":      return "About the project and the team";
+      case "/report":     return "Scan history and monthly summaries";
+      case "/training":   return "Collect data and train the models";
+      default:            return "";
     }
   };
 

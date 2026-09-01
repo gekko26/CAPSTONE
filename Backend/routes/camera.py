@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 from database.db import get_db
 from database.models import Reading, Subject
-from models.train.cv_model import analyze_frame
+from models.train.cv_model import analyze_frame, draw_overlay
 from models.train.face_recognition import identify, enroll
 import numpy as np
 import cv2
@@ -111,8 +111,29 @@ _last_analysis = None
 
 
 # ── Stream frame endpoint ─────────────────────────────────────
+_overlay_cache = {"result": None, "ts": 0.0}
+_OVERLAY_INTERVAL = 0.1  # max CV analyses per second for the live HUD
+
+
+def _analysis_for_overlay(frame):
+    """Throttled analyze_frame — reuses the /analyze lock non-blocking
+    so the stream and the analyze endpoint never block each other."""
+    now = time.time()
+    if now - _overlay_cache["ts"] >= _OVERLAY_INTERVAL:
+        if _analyze_lock.acquire(blocking=False):
+            try:
+                _overlay_cache["result"] = analyze_frame(frame)
+                _overlay_cache["ts"] = time.time()
+            except Exception as exc:
+                logger.error(f"[OVERLAY] analysis failed: {exc}")
+                _overlay_cache["ts"] = now
+            finally:
+                _analyze_lock.release()
+    return _overlay_cache["result"]
+
+
 @router.get("/stream/frame")
-def stream_frame():
+def stream_frame(overlay: str = "1"):
     frame = get_rtsp_frame()
 
     if frame is None:
@@ -120,6 +141,11 @@ def stream_frame():
             status_code=503,
             detail="Camera unavailable — connecting in background"
         )
+
+    if overlay.lower() not in ("0", "false", "off"):
+        result = _analysis_for_overlay(frame)
+        if result:
+            draw_overlay(frame, result)
 
     _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
     return Response(
@@ -163,6 +189,12 @@ def analyze(file: UploadFile = File(None), db: Session = Depends(get_db)):
             "proximity":  ear_result["proximity"],
             "is_close":   ear_result["is_close"],
             "ear":        ear_result["ear"],
+            "mar":        ear_result.get("mar"),
+            "yawning":    ear_result.get("yawning", False),
+            "head_down":  ear_result.get("head_down", False),
+            "pitch":      ear_result.get("pitch"),
+            "yaw":        ear_result.get("yaw"),
+            "roll":       ear_result.get("roll"),
             "status":     ear_result["status"],
             "impaired":   ear_result["impaired"],
             "left_ear":   ear_result["left_ear"],

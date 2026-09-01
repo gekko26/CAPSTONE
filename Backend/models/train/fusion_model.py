@@ -71,12 +71,22 @@ def train(X, y):
     acc    = accuracy_score(y_test, preds)
     report = classification_report(
         y_test, preds,
-        target_names=["Pass", "Near limit", "Over limit"]
+        target_names=["Pass", "Near limit", "Over limit"],
+        output_dict=True,
     )
 
     joblib.dump(model, os.path.join(SAVE_DIR, "fusion_model.pkl"))
     print(f"✅ Fusion model saved — accuracy: {round(acc * 100, 2)}%")
-    print(report)
+
+    # Persist REAL evaluation metrics for the frontend
+    from models.train.metrics_store import save_metrics
+    save_metrics("fusion", {
+        "accuracy":  round(acc * 100, 2),
+        "precision": round(report["macro avg"]["precision"] * 100, 2),
+        "recall":    round(report["macro avg"]["recall"] * 100, 2),
+        "f1":        round(report["macro avg"]["f1-score"] * 100, 2),
+        "samples":   len(y),
+    })
 
     return {"accuracy": round(acc * 100, 2)}
 

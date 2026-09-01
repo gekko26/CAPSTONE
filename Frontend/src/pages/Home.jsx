@@ -1,14 +1,44 @@
 // Home.jsx
-import { useBAC } from "../context/BAC_CONTEXT";
+import { useState, useEffect } from "react";
+import { API_BASE } from "../api";
 import { CameraIcon, BarChart3, Cpu, InfoIcon } from "lucide-react";
 import { Link } from "react-router-dom";
 
 function Homes() {
-  const LIMIT = 0.08;
-  const { readings } = useBAC();
-  const total = readings.length;
-  const above = readings.filter((r) => r.bac >= LIMIT).length;
-  const passRate = total ? (((total - above) / total) * 100).toFixed(1) + "%" : "-";
+  const [stats, setStats] = useState(null);
+  const [latest, setLatest] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const [s, l] = await Promise.all([
+          fetch(`${API_BASE}/readings/stats`),
+          fetch(`${API_BASE}/readings/latest`),
+        ]);
+        if (s.ok && active) setStats(await s.json());
+        if (l.ok && active) {
+          const data = await l.json();
+          setLatest(data && data.id ? data : null);
+        }
+      } catch { /* backend offline — keep last known values */ }
+    };
+    load();
+    const interval = setInterval(load, 10000);
+    return () => { active = false; clearInterval(interval); };
+  }, []);
+
+  const total    = stats?.total ?? 0;
+  const above    = stats?.above_limit ?? 0;
+  const passRate = stats?.pass_rate ?? "-";
+  const latestSub =
+    latest?.label
+      ? `Last: ${latest.label} · ${
+          latest.date
+            ? new Date(latest.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
+            : "--"
+        }`
+      : "No readings yet";
 
   const navCard = (to, Icon, label, sub) => (
     <Link
@@ -106,15 +136,15 @@ function Homes() {
       <div className="flex gap-3 w-full" style={{ minHeight: "120px" }}>
         {navCard("/camera",    CameraIcon, "Live Camera",  "Start Detection")}
         {navCard("/dashboard", BarChart3,  "Dashboard",    "Live analytics")}
-        {navCard("/models",    Cpu,        "ML models",    "3 models loaded")}
+        {navCard("/models",    Cpu,        "ML models",    "Fusion engine ready")}
         {navCard("/about",     InfoIcon,   "About us",     "Team & tech stack")}
       </div>
 
       {/* Stat cards */}
       <div className="flex gap-3 w-full" style={{ minHeight: "140px" }}>
-        {statCard("Today's readings", "Live", total, "var(--text-primary)", `▲ ${total} from yesterday`)}
-        {statCard("Pass Rate", "Today", passRate, "var(--pass)", `${total - above} passed · ${above} flagged`)}
-        {statCard("Avg response", "System", "1.2s", "var(--text-primary)", "Detection Latency")}
+        {statCard("Total readings", stats ? "Live" : "Offline", total, "var(--text-primary)", latestSub)}
+        {statCard("Pass Rate", "All time", passRate, "var(--pass)", `${total - above} passed · ${above} flagged`)}
+        {statCard("Avg BAC", "System", stats?.avg_bac ?? "---", "var(--text-primary)", "Mean blood alcohol content")}
       </div>
 
     </div>

@@ -115,6 +115,18 @@ def train():
     )
 
     print(f"✅ MobileNetV2 trained and saved to models/saved/mobilenet.h5")
+
+    # Persist REAL evaluation metrics for the frontend
+    val_accs = history.history.get("val_accuracy", [])
+    if val_accs:
+        from models.train.metrics_store import save_metrics
+        save_metrics("mobilenet", {
+            "accuracy":  round(max(val_accs) * 100, 2),
+            "val_loss":  round(min(history.history.get("val_loss", [0])), 4),
+            "epochs":    len(val_accs),
+            "classes":   list(train_data.class_indices.keys()),
+        })
+
     return history
 
 def load():

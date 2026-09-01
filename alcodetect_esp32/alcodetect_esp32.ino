@@ -2,7 +2,7 @@
  * AlcoDetect — ESP32-WROOM-32 Firmware
  * =====================================
  * Board:    ESP32-WROOM-32 (use "ESP32 Dev Module" in Arduino IDE)
- * Sensors:  MQ3 x3 (analog ADC), DHT22 (digital)
+ * Sensors:  MQ3 x3 (analog ADC), DHT11 (digital)
  * Trigger:  HTTP POST /trigger from backend (Option B — middleman)
  * Posts to: POST http://{BACKEND_IP}:8000/training/collect/sensor-data
  *
@@ -23,7 +23,7 @@
  * │    GND  → GND                                       │
  * │    AOUT → GPIO 32  (ADC1_CH4)                      │
  * │                                                     │
- * │  DHT22                                              │
+ * │  DHT11                                              │
  * │    VCC  → 3.3V                                      │
  * │    GND  → GND                                       │
  * │    DATA → GPIO 4                                    │
@@ -42,7 +42,7 @@
  * WHY THESE PINS:
  * GPIO 34, 35 are input-only pins — perfect for analog sensors
  * GPIO 32 is ADC1 — safe to use with WiFi (ADC2 conflicts with WiFi)
- * GPIO 4 is a safe general-purpose digital pin for DHT22
+ * GPIO 4 is a safe general-purpose digital pin for DHT11
  * AVOID GPIO 36, 39 (input only, no pull-up/down support)
  * AVOID ADC2 pins (GPIO 0,2,4,12,13,14,15,25,26,27) when WiFi is active
  *
@@ -79,7 +79,7 @@ const char* DEPLOYMENT_ENDPOINT = "/sensor";
 #define MQ3_PIN_1    34    // ADC1_CH6 — sensor 1 (top-left in enclosure)
 #define MQ3_PIN_2    35    // ADC1_CH7 — sensor 2 (top-right in enclosure)
 #define MQ3_PIN_3    32    // ADC1_CH4 — sensor 3 (bottom-center in enclosure)
-#define DHT_PIN       4    // DHT22 data pin
+#define DHT_PIN       4    // DHT11 data pin
 #define DHT_TYPE    DHT11 
 #define LED_PIN       2    // Built-in LED — status indicator
 
@@ -240,12 +240,12 @@ void postSensorData() {
     return;
   }
 
-  // Read DHT22
+  // Read DHT11
   float temperature = dht.readTemperature();
   float humidity    = dht.readHumidity();
 
   if (isnan(temperature) || isnan(humidity)) {
-    Serial.println("⚠ DHT22 read failed — using fallback values");
+    Serial.println("⚠ DHT11 read failed — using fallback values");
     temperature = 25.0;
     humidity    = 60.0;
   }
@@ -325,17 +325,17 @@ void setup() {
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);  // full range 0-3.3V
 
-  // DHT22
+  // DHT11
   dht.begin();
-  delay(2000);  // DHT22 needs 2s to stabilize
+  delay(2000);  // DHT11 needs 2s to stabilize
 
-  // Test DHT22
+  // Test DHT11
   float t = dht.readTemperature();
   float h = dht.readHumidity();
   if (isnan(t) || isnan(h)) {
-    Serial.println("⚠ DHT22 not responding — check wiring on GPIO " + String(DHT_PIN));
+    Serial.println("⚠ DHT11 not responding — check wiring on GPIO " + String(DHT_PIN));
   } else {
-    Serial.println("✓ DHT22: " + String(t, 1) + "°C  " + String(h, 1) + "%");
+    Serial.println("✓ DHT11: " + String(t, 1) + "°C  " + String(h, 1) + "%");
   }
 
   // WiFi

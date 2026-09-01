@@ -5,22 +5,12 @@ import {
   Tooltip, ReferenceLine, ResponsiveContainer, BarChart, Bar, Cell
 } from "recharts";
 import { ShieldCheck, ShieldAlert, Eye, Cpu } from "lucide-react";
-
-// Mock data reflecting real deployment logs from the Fusion Model
-const MOCK_DEPLOYMENT_HISTORY = [
-  { id: 101, time: "08:15", label: "Pass", confidence: 0.94, ear: 0.28, type: "Sober Access" },
-  { id: 102, time: "09:30", label: "Pass", confidence: 0.89, ear: 0.26, type: "Sober Access" },
-  { id: 103, time: "10:45", label: "Sanitizer Filtered", confidence: 0.91, ear: 0.27, type: "Sanitizer Mist" },
-  { id: 104, time: "13:10", label: "Near Limit", confidence: 0.76, ear: 0.22, type: "Drowsy/Fragrance" },
-  { id: 105, time: "14:25", label: "Over Limit", confidence: 0.95, ear: 0.17, type: "Alcohol Event" },
-  { id: 106, time: "16:00", label: "Pass", confidence: 0.92, ear: 0.29, type: "Sober Access" },
-  { id: 107, time: "17:15", label: "Over Limit", confidence: 0.88, ear: 0.19, type: "Alcohol Event" }
-];
+import { API_BASE } from "../api";
 
 function getRiskStyles(label) {
   if (label === "Over Limit") return { text: "var(--over)", bg: "color-mix(in srgb, var(--over) 10%, transparent)", border: "var(--over)" };
   if (label === "Near Limit") return { text: "var(--near)", bg: "color-mix(in srgb, var(--near) 10%, transparent)", border: "var(--near)" };
-  if (label === "Sanitizer Filtered") return { text: "var(--text-secondary)", bg: "var(--bg-active)", border: "var(--border-subtle)" };
+  if (label === "Sanitizer" || label?.includes("Sanitizer")) return { text: "var(--text-secondary)", bg: "var(--bg-active)", border: "var(--border-subtle)" };
   return { text: "var(--pass)", bg: "color-mix(in srgb, var(--pass) 10%, transparent)", border: "var(--pass)" };
 }
 
@@ -29,61 +19,69 @@ const CustomTelemetryDot = (props) => {
   let color = "var(--pass)";
   if (payload.label === "Over Limit") color = "var(--over)";
   if (payload.label === "Near Limit") color = "var(--near)";
-  if (payload.label === "Sanitizer Filtered") color = "var(--text-secondary)";
+  if (payload.label === "Sanitizer" || payload.label?.includes("Sanitizer")) color = "var(--text-secondary)";
   return <circle cx={cx} cy={cy} r={5} fill={color} stroke="var(--bg-card)" strokeWidth={1.5} />;
 };
 
+// Maps a real deployment_logs row into the chart entry shape
+function mapLog(l) {
+  const time = l.date
+    ? new Date(l.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
+    : "--";
+  return {
+    id: l.id,
+    time,
+    label: l.prediction || "Pass",
+    confidence: l.confidence ?? 0,
+    type: l.risk_level || l.model_version || "Deployment",
+  };
+}
+
 export default function MockBACChart() {
-  const [history, setHistory] = useState(MOCK_DEPLOYMENT_HISTORY);
+  const [history, setHistory] = useState([]);
   const [isLive, setIsLive] = useState(true);
+  const [offline, setOffline] = useState(false);
 
   useEffect(() => {
-    if (!isLive) return;
-    const interval = setInterval(() => {
-      // Simulate real-time gate transaction updates pushing into history array
-      setHistory(prev => {
-        const nextId = prev[prev.length - 1].id + 1;
-        const now = new Date();
-        const timestamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-        const labels = ["Pass", "Pass", "Sanitizer Filtered", "Near Limit", "Over Limit"];
-        const chosenLabel = labels[Math.floor(Math.random() * labels.length)];
-        
-        let confidence = roundTo(0.75 + Math.random() * 0.22, 2);
-        let ear = roundTo(0.24 + Math.random() * 0.06, 2);
-        let type = "Sober Access";
-
-        if (chosenLabel === "Over Limit") {
-          ear = roundTo(0.15 + Math.random() * 0.05, 2);
-          type = "Alcohol Incident";
-        } else if (chosenLabel === "Near Limit") {
-          ear = roundTo(0.20 + Math.random() * 0.03, 2);
-          type = "Drowsy / Trace Gas";
-        } else if (chosenLabel === "Sanitizer Filtered") {
-          type = "Chemical Vapor Intercept";
-        }
-
-        const newEntry = { id: nextId, time: timestamp, label: chosenLabel, confidence, ear, type };
-        return [...prev.slice(1), newEntry];
-      });
-    }, 8000);
-
-    return () => clearInterval(interval);
+    let active = true;
+    const load = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/deployment-logs?limit=50`);
+        if (!res.ok) throw new Error(res.status);
+        const data = await res.json();
+        if (!active) return;
+        setOffline(false);
+        setHistory(
+          data.logs
+            .map(mapLog)
+            .reverse() // chronological order for the trend line
+        );
+      } catch {
+        if (active) setOffline(true);
+      }
+    };
+    load();
+    if (isLive) {
+      const interval = setInterval(load, 10000);
+      return () => { active = false; clearInterval(interval); };
+    }
+    return () => { active = false; };
   }, [isLive]);
 
-  const roundTo = (num, decimals) => Number(Math.round(num + "e" + decimals) + "e-" + decimals);
-
-  // Compute metric accumulations based on actual model outcomes
+  // Compute metric accumulations from real deployment logs
   const totalAttempts = history.length;
   const criticalViolations = history.filter(r => r.label === "Over Limit").length;
-  const sanitizersNeutralized = history.filter(r => r.label === "Sanitizer Filtered").length;
-  const avgAttentiveness = (history.reduce((acc, r) => acc + r.ear, 0) / totalAttempts).toFixed(3);
+  const sanitizersNeutralized = history.filter(r => r.label?.includes("Sanitizer")).length;
+  const avgConfidence = totalAttempts
+    ? (history.reduce((acc, r) => acc + (r.confidence || 0), 0) / totalAttempts).toFixed(2)
+    : "---";
 
   // Convert categorical variables into distribution matrices for bar rendering
   const distributionData = [
     { name: "Pass", count: history.filter(r => r.label === "Pass").length, color: "var(--pass)" },
     { name: "Near Limit", count: history.filter(r => r.label === "Near Limit").length, color: "var(--near)" },
     { name: "Over Limit", count: history.filter(r => r.label === "Over Limit").length, color: "var(--over)" },
-    { name: "Sanitizer", count: history.filter(r => r.label === "Sanitizer Filtered").length, color: "var(--text-secondary)" }
+    { name: "Sanitizer", count: history.filter(r => r.label?.includes("Sanitizer")).length, color: "var(--text-secondary)" }
   ];
 
   return (
@@ -92,34 +90,39 @@ export default function MockBACChart() {
       {/* Real telemetry cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="rounded-xl border p-4" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
-          <p className="text-xs mb-1 font-medium" style={{ color: "var(--text-muted)" }}>Gate Interrogations</p>
+          <p className="text-xs mb-1 font-medium" style={{ color: "var(--text-muted)" }}>Total scans</p>
           <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--text-primary)" }}>{totalAttempts}</p>
         </div>
         <div className="rounded-xl border p-4" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
           <p className="text-xs mb-1 font-medium flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
-            <ShieldAlert size={12} className="text-(--over)"/> Target Denials
+            <ShieldAlert size={12} style={{ color: "var(--over)" }}/> Denied
           </p>
           <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--over)" }}>{criticalViolations}</p>
         </div>
         <div className="rounded-xl border p-4" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
           <p className="text-xs mb-1 font-medium flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
-            <Cpu size={12} className="text-indigo-400"/> Sanitizers Neutralized
+            <Cpu size={12} style={{ color: "var(--text-muted)" }}/> Sanitizer events
           </p>
           <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--text-secondary)" }}>{sanitizersNeutralized}</p>
         </div>
         <div className="rounded-xl border p-4" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
           <p className="text-xs mb-1 font-medium flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
-            <Eye size={12} className="text-emerald-400"/> Attentiveness index (EAR)
+            <Eye size={12} style={{ color: "var(--pass)" }}/> Avg confidence
           </p>
-          <p className="text-2xl font-bold tabular-nums text-emerald-400">{avgAttentiveness}</p>
+          <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--pass)" }}>{avgConfidence}</p>
         </div>
       </div>
 
       {/* Control Header */}
       <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: "var(--border-subtle)" }}>
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Gate Decision Fusion Analysis Stream</h2>
-          <p className="text-xs" style={{ color: "var(--text-muted)" }}>Real-time verification timeline plotting neural model confidence scores</p>
+          <p className="text-xs text-muted" style={{ color: "var(--text-muted)" }}>Deployment Log Stream</p>
+          {offline && (
+            <p className="text-xs mt-1" style={{ color: "var(--over)" }}>⚠ Backend offline — showing no data</p>
+          )}
+          {!offline && history.length === 0 && (
+            <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>No deployment events recorded yet</p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs px-2 py-1 rounded font-medium border"
@@ -128,7 +131,7 @@ export default function MockBACChart() {
                   color: isLive ? "var(--pass)" : "var(--text-muted)",
                   borderColor: isLive ? "color-mix(in srgb, var(--pass) 30%, transparent)" : "var(--border-subtle)"
                 }}>
-            {isLive ? "● Ingestion Stream Active" : "◼ Diagnostics Suspended"}
+            {isLive ? "● Live" : "Paused"}
           </span>
           <button
             onClick={() => setIsLive(p => !p)}
@@ -147,7 +150,7 @@ export default function MockBACChart() {
         
         {/* Main Line Graph — Model confidence tracing */}
         <div className="lg:col-span-2 rounded-xl border p-4" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
-          <p className="text-xs font-semibold uppercase tracking-wider mb-4" style={{ color: "var(--text-muted)" }}>Fusion Class Confidence Trend</p>
+          <p className="text-xs font-semibold uppercase tracking-wider mb-4" style={{ color: "var(--text-muted)" }}>Confidence trend</p>
           <div className="w-full h-64">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={history} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
@@ -170,7 +173,7 @@ export default function MockBACChart() {
 
         {/* Categorical Distribution Chart */}
         <div className="rounded-xl border p-4" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
-          <p className="text-xs font-semibold uppercase tracking-wider mb-4" style={{ color: "var(--text-muted)" }}>Threat Categorization Profile</p>
+          <p className="text-xs font-semibold uppercase tracking-wider mb-4" style={{ color: "var(--text-muted)" }}>Outcomes</p>
           <div className="w-full h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={distributionData} margin={{ top: 10, right: 5, left: -30, bottom: 0 }}>
@@ -192,7 +195,7 @@ export default function MockBACChart() {
 
       {/* Real-time Incident Feed */}
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "var(--text-muted)" }}>Live Telemetry Log Stream</p>
+        <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "var(--text-muted)" }}>Recent activity</p>
         <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
           {[...history].reverse().map((log) => {
             const style = getRiskStyles(log.label);
@@ -204,7 +207,6 @@ export default function MockBACChart() {
                   <span className="font-medium" style={{ color: "var(--text-primary)" }}>{log.type}</span>
                 </div>
                 <div className="flex items-center gap-4">
-                  <span className="text-xs font-mono" style={{ color: "var(--text-secondary)" }}>EAR: {log.ear.toFixed(3)}</span>
                   <span className="text-xs font-semibold font-mono" style={{ color: "var(--text-primary)" }}>
                     Conf: {(log.confidence * 100).toFixed(0)}%
                   </span>
@@ -225,12 +227,55 @@ export default function MockBACChart() {
 }
 
 export function RecentDetections() {
-  // Static wrapper block preserved cleanly for layout registration consistency
+  const [logs, setLogs] = useState([]);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/deployment-logs?limit=6`);
+        if (!res.ok) throw new Error(res.status);
+        const data = await res.json();
+        if (active) setLogs(data.logs);
+      } catch { /* keep last known */ }
+    };
+    load();
+    const interval = setInterval(load, 10000);
+    return () => { active = false; clearInterval(interval); };
+  }, []);
+
   return (
     <div className="rounded-xl border p-4" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
-      <p className="text-xs font-semibold text-center uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
-        Telemetry Feed Active and Standardized
+      <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "var(--text-muted)" }}>
+        Recent Detections
       </p>
+      {logs.length === 0 ? (
+        <p className="text-xs text-center py-3" style={{ color: "var(--text-muted)" }}>
+          No deployment events recorded yet
+        </p>
+      ) : (
+        <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+          {logs.map((l) => {
+            const label = l.prediction || "Pass";
+            const style = getRiskStyles(label);
+            const time = l.date
+              ? new Date(l.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
+              : "--";
+            return (
+              <div key={l.id} className="flex items-center justify-between text-xs">
+                <span className="font-mono" style={{ color: "var(--text-muted)" }}>{time}</span>
+                <span className="font-medium" style={{ color: "var(--text-primary)" }}>
+                  {l.risk_level || label}
+                </span>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full font-semibold border"
+                      style={{ background: style.bg, color: style.text, borderColor: style.border }}>
+                  {label.toUpperCase()}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

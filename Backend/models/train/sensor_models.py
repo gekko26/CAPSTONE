@@ -201,14 +201,30 @@ def train(X, y):
         accuracy = accuracy_score(y_test, preds)
         report   = classification_report(
             y_test, preds,
-            target_names=["No alcohol", "Breath alcohol", "Sanitizer"]
+            target_names=["No alcohol", "Breath alcohol", "Sanitizer"],
+            output_dict=True,
         )
 
-        results[name] = {"accuracy": round(accuracy * 100, 2)}
+        results[name] = {
+            "accuracy":  round(accuracy * 100, 2),
+            "precision": round(report["macro avg"]["precision"] * 100, 2),
+            "recall":    round(report["macro avg"]["recall"] * 100, 2),
+            "f1":        round(report["macro avg"]["f1-score"] * 100, 2),
+            "samples":   len(y),
+            "per_class": {
+                cls: {k: round(v * 100, 1) if k != "support" else v for k, v in stats.items()}
+                for cls, stats in report.items()
+                if cls in ("No alcohol", "Breath alcohol", "Sanitizer")
+            },
+        }
 
         joblib.dump(model, os.path.join(SAVE_DIR, f"{name}.pkl"))
         print(f"✅ {name} saved — accuracy: {results[name]['accuracy']}%")
-        print(report)
+
+    # Persist REAL evaluation metrics for the frontend
+    from models.train.metrics_store import save_metrics
+    save_metrics("sensor", results)
+    print("✅ Metrics saved to metrics.json")
 
     return results
 

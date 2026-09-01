@@ -4,14 +4,15 @@ from sqlalchemy.ext.declarative  import declarative_base  #format sql tables
 from sqlalchemy.orm import sessionmaker  #session boys
 from dotenv import load_dotenv
 import os
+from urllib.parse import quote_plus
 
 
 load_dotenv()
 
-DATABASE_URL = ( 
+DATABASE_URL = (
 
-    f"mysql+pymysql://{os.getenv('DB_USER')}:{os.getenv("DB_PASSWORD")}"
-    f"@{os.getenv("DB_HOST")}:{os.getenv("DB_PORT")}/{os.getenv("DB_NAME")}"  
+    f"mysql+pymysql://{quote_plus(os.getenv('DB_USER', ''))}:{quote_plus(os.getenv('DB_PASSWORD', ''))}"
+    f"@{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '3306')}/{os.getenv('DB_NAME', '')}"
    #mysql+pymysql://user:password@host:port/database_name
 )
 

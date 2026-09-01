@@ -7,10 +7,12 @@ from database.db import Base
 class Subject(Base):
     __tablename__ = "subjects"
 
-    id         = Column(Integer, primary_key=True, index=True)
-    name       = Column(String(100), nullable=False)
-    face_id    = Column(String(255), nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
+    id          = Column(Integer, primary_key=True, index=True)
+    name        = Column(String(100), nullable=False)
+    face_id     = Column(String(255), nullable=True)  # ID Number (Card Number removed)
+    group       = Column(String(30), nullable=True, default="Staff")
+    avatar_path = Column(String(255), nullable=True)  # path to enrolled face image
+    created_at  = Column(DateTime, server_default=func.now())
 
     readings         = relationship("Reading",       back_populates="subject")
     training_data    = relationship("TrainingData",  back_populates="subject")
@@ -27,6 +29,7 @@ class Reading(Base):
     bac         = Column(Float)
     ear         = Column(Float)
     label       = Column(String(20))
+    fusion_label = Column(String(20))
     model_used  = Column(String(50))
     date        = Column(DateTime, server_default=func.now())
 
@@ -57,7 +60,11 @@ class TrainingData(Base):
     bac                  = Column(Float,        nullable=True)
     label                = Column(Integer,      nullable=True, default=-1)  # -1 = pending
     confidence           = Column(Float,        nullable=True)
-    sub_label            = Column(String(20),   nullable=True)  # 'sanitizer', 'perfume', or NULL
+    sub_label            = Column(String(20),   nullable=True)  # 'sanitizer', 'perfume', 'yawning', 'drowsy', 'clear_air' or NULL
+    image_path           = Column(String(255),  nullable=True)  # filesystem path to snapshot (path-based storage, not blob)
+    mar                  = Column(Float,        nullable=True)  # mouth aspect ratio at capture (for yawning)
+    ear                  = Column(Float,        nullable=True)  # eye aspect ratio at capture
+    head_pitch           = Column(Float,        nullable=True)  # head pitch at capture
 
     subject = relationship("Subject", back_populates="training_data")
 

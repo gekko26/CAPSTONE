@@ -27,10 +27,12 @@ SNAPSHOTS_DIR = os.path.join(BASE_DIR, "data", "snapshots")
 IMPAIRED_DIR  = os.path.join(SNAPSHOTS_DIR, "impaired")
 DROWSY_DIR    = os.path.join(SNAPSHOTS_DIR, "drowsy")
 SOBER_DIR     = os.path.join(SNAPSHOTS_DIR, "sober")
+YAWNING_DIR   = os.path.join(SNAPSHOTS_DIR, "yawning")
 
 os.makedirs(IMPAIRED_DIR, exist_ok=True)
 os.makedirs(DROWSY_DIR, exist_ok=True)
 os.makedirs(SOBER_DIR, exist_ok=True)
+os.makedirs(YAWNING_DIR, exist_ok=True)
 
 LABEL_NAMES = {-1: "Pending", 0: "No alcohol", 1: "Breath alcohol", 2: "Sanitizer"}
 
@@ -79,34 +81,74 @@ def collect_clear_air(db: Session = Depends(get_db)):
 async def collect_sober(background_tasks: BackgroundTasks, file: UploadFile = File(...), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = build_pending_row(label=0, sub_label=None, bac=0.00)
+    row = TrainingData(label=0, sub_label=None, bac=0.00)
+    try:
+        cv = analyze_frame(frame) if frame is not None else {}
+        row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
+    except: pass
     db.add(row); db.commit(); db.refresh(row)
     if frame is not None:
-        background_tasks.add_task(save_snapshot_task, os.path.join(SOBER_DIR, f"sober_{row.id}.jpg"), frame)
+        path = os.path.join(SOBER_DIR, f"sober_{row.id}.jpg")
+        row.image_path = path
+        db.commit()
+        background_tasks.add_task(save_snapshot_task, path, frame)
     trigger_result = await trigger_esp32_async()
-    return {"message": "Sober baseline captured", "id": row.id, "trigger": trigger_result}
+    return {"message": "Sober baseline captured", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
 
 @router.post("/collect/drowsy")
 async def collect_drowsy(background_tasks: BackgroundTasks, file: UploadFile = File(...), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = build_pending_row(label=0, sub_label="drowsy", bac=0.00)
+    row = TrainingData(label=0, sub_label="drowsy", bac=0.00)
+    # capture EAR at collection time for DB consistency
+    try:
+        cv = analyze_frame(frame) if frame is not None else {}
+        row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
+    except: pass
     db.add(row); db.commit(); db.refresh(row)
     if frame is not None:
-        background_tasks.add_task(save_snapshot_task, os.path.join(DROWSY_DIR, f"drowsy_{row.id}.jpg"), frame)
+        path = os.path.join(DROWSY_DIR, f"drowsy_{row.id}.jpg")
+        row.image_path = path
+        db.commit()
+        background_tasks.add_task(save_snapshot_task, path, frame)
     trigger_result = await trigger_esp32_async()
-    return {"message": "Drowsy baseline captured", "id": row.id, "trigger": trigger_result}
+    return {"message": "Drowsy baseline captured", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
+
+@router.post("/collect/yawning")
+async def collect_yawning(background_tasks: BackgroundTasks, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    contents = await file.read()
+    frame = decode_frame(contents)
+    row = TrainingData(label=0, sub_label="yawning", bac=0.00)
+    try:
+        cv = analyze_frame(frame) if frame is not None else {}
+        row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
+    except: pass
+    db.add(row); db.commit(); db.refresh(row)
+    if frame is not None:
+        path = os.path.join(YAWNING_DIR, f"yawning_{row.id}.jpg")
+        row.image_path = path
+        db.commit()
+        background_tasks.add_task(save_snapshot_task, path, frame)
+    trigger_result = await trigger_esp32_async()
+    return {"message": "Yawning baseline captured", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
 
 @router.post("/collect/alcohol")
 async def collect_alcohol(background_tasks: BackgroundTasks, file: UploadFile = File(...), bac: float = Form(...), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = build_pending_row(label=1, sub_label=None, bac=bac)
+    row = TrainingData(label=1, sub_label=None, bac=bac)
+    try:
+        cv = analyze_frame(frame) if frame is not None else {}
+        row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
+    except: pass
     db.add(row); db.commit(); db.refresh(row)
     if frame is not None:
-        background_tasks.add_task(save_snapshot_task, os.path.join(IMPAIRED_DIR, f"impaired_{row.id}.jpg"), frame)
+        path = os.path.join(IMPAIRED_DIR, f"impaired_{row.id}.jpg")
+        row.image_path = path
+        db.commit()
+        background_tasks.add_task(save_snapshot_task, path, frame)
     trigger_result = await trigger_esp32_async()
-    return {"message": "Alcohol captured", "id": row.id, "trigger": trigger_result}
+    return {"message": "Alcohol captured", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
 
 @router.post("/collect/sanitizer")
 def collect_sanitizer(db: Session = Depends(get_db)):
@@ -119,12 +161,19 @@ def collect_sanitizer(db: Session = Depends(get_db)):
 async def collect_perfume(background_tasks: BackgroundTasks, file: UploadFile = File(...), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = build_pending_row(label=2, sub_label="perfume", bac=0.00)
+    row = TrainingData(label=2, sub_label="perfume", bac=0.00)
+    try:
+        cv = analyze_frame(frame) if frame is not None else {}
+        row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
+    except: pass
     db.add(row); db.commit(); db.refresh(row)
     if frame is not None:
-        background_tasks.add_task(save_snapshot_task, os.path.join(IMPAIRED_DIR, f"impaired_perfume_{row.id}.jpg"), frame)
+        path = os.path.join(IMPAIRED_DIR, f"impaired_perfume_{row.id}.jpg")
+        row.image_path = path
+        db.commit()
+        background_tasks.add_task(save_snapshot_task, path, frame)
     trigger_result = await trigger_esp32_async()
-    return {"message": "Perfume vapor captured", "id": row.id, "trigger": trigger_result}
+    return {"message": "Perfume vapor captured", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
 
 class SensorPayload(BaseModel):
     temperature: float; humidity: float; mq3_1: List[float]; mq3_2: List[float]; mq3_3: List[float]; row_id: Optional[int] = None

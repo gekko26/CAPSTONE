@@ -1,7 +1,12 @@
 @import "tailwindcss";
 
+/* ════════════════════════════════════════════════════════════
+   ALCOGATE — AI Gate Monitoring Terminal
+   near-black · charcoal · subtle borders · compact
+   ════════════════════════════════════════════════════════════ */
+
 :root {
-  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
   line-height: 1.5;
   font-weight: 400;
   font-synthesis: none;
@@ -9,103 +14,166 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* ── Light mode tokens ── */
-  --bg-page:        #F0F7F4;
-  --bg-sidebar:     #E8F4F0;
-  --bg-card:        #FFFFFF;
-  --bg-card-alt:    #F7FBFA;
-  --bg-active:      #D4F5E9;
-  --bg-hero:        #0B2D20;
+  /* ── Surfaces (dark default) ── */
+  --bg-page:        #080C10;
+  --bg-sidebar:     #0F141B;
+  --bg-card:        #13181F;
+  --bg-card-alt:    #1A212C;
+  --bg-active:      #13201A;
+  --bg-hero:        #0E131A;
 
-  --border:         #C2DDD5;
-  --border-subtle:  #DFF0EB;
+  /* ── Borders ── */
+  --border:         #1E2530;
+  --border-subtle:  #1A212C;
+  --border-strong:  #252E3C;
 
-  --text-primary:   #0B3D2E;
-  --text-secondary: #2E6B55;
-  --text-muted:     #5A9B84;
-  --text-on-dark:   #EEFAF6;
+  /* ── Text ── */
+  --text-primary:   #E8ECF0;
+  --text-secondary: #9AA3B2;
+  --text-muted:     #6B7588;
+  --text-on-dark:   #E8ECF0;
 
-  --accent:         #1A9B70;
-  --accent-hover:   #147A58;
+  /* ── Accent (terminal green) ── */
+  --accent:         #1FC184;
+  --accent-hover:   #2DD496;
+  --accent-soft:    #0F2A1E;
 
-  --pass:           #0A6645;
-  --pass-bg:        #D4F5E9;
-  --pass-text:      #0A6645;
+  /* ── Status — terminal palette ── */
+  --pass:           #1FC184;
+  --pass-bg:        #0F231B;
+  --pass-text:      #1FC184;
 
-  --alert:          #E8900A;
-  --alert-bg:       #FFF0D6;
-  --alert-text:     #7A4500;
+  --near:           #E6A020;   /* analyzing / warning */
+  --near-bg:        #231E0B;
+  --near-text:      #E6A020;
 
-  --danger:         #CC2B2B;
-  --danger-bg:      #FFDEDE;
-  --danger-text:    #7A1A1A;
+  --over:           #E85454;   /* flagged / danger */
+  --over-bg:        #241414;
+  --over-text:      #E85454;
 
-  --topbar-bg:      #FFFFFF;
-  --topbar-border:  #C2DDD5;
+  /* legacy aliases */
+  --alert:          #E6A020;
+  --alert-bg:       #231E0B;
+  --alert-text:     #E6A020;
+  --danger:         #E85454;
+  --danger-bg:      #241414;
+  --danger-text:    #E85454;
 
-  color-scheme: light;
-  color: var(--text-primary);
-  background-color: var(--bg-page);
-}
+  /* ── Chrome ── */
+  --topbar-bg:      #0F141B;
+  --topbar-border:  #1E2530;
 
-/* Dark mode — toggled via .dark class on <html> or <body> */
-.dark {
-  --bg-page:        #0F2235;
-  --bg-sidebar:     #0D1B2A;
-  --bg-card:        #142236;
-  --bg-card-alt:    #0F1D30;
-  --bg-active:      #1A4D3C;
-  --bg-hero:        #0D1B2A;
-
-  --border:         #1E3A5F;
-  --border-subtle:  #162D4A;
-
-  --text-primary:   #EEFAF6;
-  --text-secondary: #B8D8D0;
-  --text-muted:     #8ABFB0;
-  --text-on-dark:   #EEFAF6;
-
-  --accent:         #1A9B70;
-  --accent-hover:   #22C48E;
-
-  --pass:           #4DFFC3;
-  --pass-bg:        #0D3D2B;
-  --pass-text:      #4DFFC3;
-
-  --alert:          #FFB74D;
-  --alert-bg:       #3D2400;
-  --alert-text:     #FFB74D;
-
-  --danger:         #FF5C5C;
-  --danger-bg:      #3D0A0A;
-  --danger-text:    #FF5C5C;
-
-  --topbar-bg:      #0D1B2A;
-  --topbar-border:  #1E3A5F;
+  /* ── Elevation ── */
+  --shadow-card:    none;
+  --shadow-hover:   none;
 
   color-scheme: dark;
   color: var(--text-primary);
   background-color: var(--bg-page);
 }
 
-* {
-  box-sizing: border-box;
+/* Keep .dark identical — dark is the only theme for terminal */
+.dark {
+  --bg-page:        #080C10;
+  --bg-sidebar:     #0F141B;
+  --bg-card:        #13181F;
+  --bg-card-alt:    #1A212C;
+  --bg-active:      #13201A;
+  --bg-hero:        #0E131A;
+  --border:         #1E2530;
+  --border-subtle:  #1A212C;
+  --border-strong:  #252E3C;
+  --text-primary:   #E8ECF0;
+  --text-secondary: #9AA3B2;
+  --text-muted:     #6B7588;
+  --text-on-dark:   #E8ECF0;
+  --accent:         #1FC184;
+  --accent-hover:   #2DD496;
+  --accent-soft:    #0F2A1E;
+  --pass:           #1FC184;
+  --pass-bg:        #0F231B;
+  --pass-text:      #1FC184;
+  --near:           #E6A020;
+  --near-bg:        #231E0B;
+  --near-text:      #E6A020;
+  --over:           #E85454;
+  --over-bg:        #241414;
+  --over-text:      #E85454;
+  --alert:          #E6A020;
+  --alert-bg:       #231E0B;
+  --alert-text:     #E6A020;
+  --danger:         #E85454;
+  --danger-bg:      #241414;
+  --danger-text:    #E85454;
+  --shadow-card:    none;
+  --shadow-hover:   none;
+  color-scheme: dark;
 }
 
-body {
+* {
+  box-sizing: border-box;
+  letter-spacing: -0.01em;
+}
+
+html, body {
   margin: 0;
   background-color: var(--bg-page);
   color: var(--text-primary);
-  transition: background-color 0.2s ease, color 0.2s ease;
 }
+
+body {
+  font-size: 13px;
+  line-height: 1.5;
+  transition: font-size 0.15s ease;
+}
+html.scale-sm body { font-size: 12px; }
+html.scale-md body { font-size: 13px; }
+html.scale-lg body { font-size: 14px; }
+html.scale-sm { --density: 0.92; }
+html.scale-md { --density: 1; }
+html.scale-lg { --density: 1.08; }
 
 a {
   font-weight: 500;
   color: var(--accent);
-  text-decoration: inherit;
+  text-decoration: none;
 }
-a:hover {
-  color: var(--accent-hover);
+a:hover { color: var(--accent-hover); }
+
+/* compact headings — terminal doesn't use 3.2em heroes */
+h1 { font-size: 15px; line-height: 1.2; font-weight: 600; }
+h2 { font-size: 13px; font-weight: 600; }
+h3 { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 
-h1 { font-size: 3.2em; line-height: 1.1; }
+/* scrollbars — minimal terminal */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--bg-page); }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* interactive sizing — subtle hover + clickable feedback on all cards/rows */
+[data-interactive] { transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease; }
+[data-interactive]:hover { border-color: var(--border) !important; background: var(--bg-card-alt) !important; }
+[data-interactive]:active { transform: scale(0.99); }
+
+@keyframes shimmer {
+  0%   { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+.skeleton {
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-card-alt) 25%,
+    var(--border-subtle) 50%,
+    var(--bg-card-alt) 75%
+  );
+  background-size: 200px 100%;
+  animation: shimmer 1.4s infinite linear;
+}

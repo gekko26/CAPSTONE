@@ -66,7 +66,8 @@ async def full_predict(background_tasks: BackgroundTasks, file: UploadFile = Fil
     except FileNotFoundError:
         fusion_result = {"class": 0, "label": "no_model", "risk": "unknown", "action": "unknown", "confidence": 0.0}
 
-    reading.ear, reading.label = ear, fusion_result["label"]
+    reading.ear = ear
+    reading.fusion_label = fusion_result["label"]
     db.commit()
 
     is_impaired = fusion_result["label"] in ["Over Limit", "Near Limit"]
@@ -103,7 +104,7 @@ async def live_predict(background_tasks: BackgroundTasks, file: UploadFile = Fil
     except FileNotFoundError:
         fusion_result = {"class": 0, "label": "no_model", "risk": "unknown", "action": "unknown", "confidence": 0.0}
 
-    new_reading = Reading(temperature=temperature, humidity=humidity, bac=None, ear=ear, label=fusion_result["label"], model_used="ensemble_v1")
+    new_reading = Reading(temperature=temperature, humidity=humidity, bac=None, ear=ear, label=None, fusion_label=fusion_result["label"], model_used="ensemble_v1")
     db.add(new_reading)
     db.commit()
     db.refresh(new_reading)

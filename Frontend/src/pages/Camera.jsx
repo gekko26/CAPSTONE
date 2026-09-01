@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { RecentDetections } from "../assets/graph";
 
-const BASE = "http://localhost:8000";
+import { API_BASE as BASE } from "../api";
 const POLL_INTERVAL = 200; // ms — wait margin between sequential loop steps
 
 // ── Status helpers ────────────────────────────────────────────
@@ -147,12 +147,12 @@ export default function Camera() {
           style={{ borderColor: "var(--border-subtle)", background: "var(--bg-card)" }}
         >
           {/* Top bar */}
-          <div className="flex items-center justify-between px-4 py-2.5 bg-[#0c1f14]">
+          <div className="flex items-center justify-between px-4 py-2.5" style={{ background: "var(--bg-card)", borderBottom: "1px solid var(--border-subtle)" }}>
             <div className="flex items-center gap-2">
               <span
                 className={`w-2 h-2 rounded-full ${streaming && !camError ? "bg-emerald-400 animate-pulse" : "bg-red-500"}`}
               />
-              <span className="text-xs text-white/60 font-medium">
+              <span className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
                 {camError ? "Camera unavailable" : "Live · CAM-01"}
               </span>
             </div>
@@ -181,7 +181,8 @@ export default function Camera() {
           </div>
 
           {/* Viewfinder */}
-          <div className="relative bg-[#0c1f14] aspect-video flex items-center justify-center">
+          {/* Media surface stays dark in both themes for video contrast */}
+            <div className="relative aspect-video flex items-center justify-center" style={{ background: "#101418" }}>
             {frameUrl && !camError ? (
               <>
                 <img
@@ -203,6 +204,17 @@ export default function Camera() {
                     >
                       EAR {ear} · {earStatus.toUpperCase()}
                     </div>
+                    {analysis?.mar != null && (
+                      <div
+                        className="text-[10px] font-medium px-2 py-0.5 rounded-full"
+                        style={{
+                          background: "rgba(0,0,0,0.6)",
+                          color: analysis.yawning ? "#f87171" : "rgba(255,255,255,0.85)",
+                        }}
+                      >
+                        MAR {analysis.mar.toFixed(2)}{analysis.yawning ? " · YAWNING" : ""}
+                      </div>
+                    )}
                     {identified && (
                       <div
                         className="text-[10px] font-medium px-2 py-0.5 rounded-full"
@@ -285,6 +297,42 @@ export default function Camera() {
                 label="Right EAR"
                 value={analysis?.right_ear != null ? analysis.right_ear.toFixed(3) : "---"}
                 valueColor="var(--text-secondary)"
+              />
+            </div>
+
+            {/* MAR + yawn */}
+            <div className="grid grid-cols-2 gap-2">
+              <StatBox
+                label="MAR"
+                value={analysis?.mar != null ? analysis.mar.toFixed(3) : "---"}
+                sub={analysis?.yawning ? "Yawning" : analysis ? "Normal" : undefined}
+                valueColor={
+                  !analysis || analysis.mar == null
+                    ? "var(--text-primary)"
+                    : analysis.yawning
+                    ? "var(--over)"
+                    : analysis.mar > 0.4
+                    ? "var(--near)"
+                    : "var(--pass)"
+                }
+              />
+              <StatBox
+                label="Head pose"
+                value={
+                  analysis?.pitch != null
+                    ? `P ${Math.round(analysis.pitch)}°`
+                    : "---"
+                }
+                sub={
+                  analysis?.head_down
+                    ? "Head down"
+                    : analysis?.yaw != null
+                    ? `Y ${Math.round(analysis.yaw)}° · R ${Math.round(analysis.roll ?? 0)}°`
+                    : undefined
+                }
+                valueColor={
+                  analysis?.head_down ? "var(--over)" : "var(--text-secondary)"
+                }
               />
             </div>
 
