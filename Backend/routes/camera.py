@@ -5,7 +5,7 @@ import os
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay"
 
 from fastapi import APIRouter, Depends, File, UploadFile, Form, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 from database.db import get_db
@@ -54,6 +54,7 @@ class RTSPStream:
 
     def _capture(self):
         cap = None
+        fail_count = 0  # granularity: retry immediately for transient hiccups, sleep 2 only on genuine drop
         logger.info("[RTSP THREAD] Capture loop initiated.")
         while self.active:
             try:
@@ -62,11 +63,12 @@ class RTSPStream:
                     cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
                     # Force OpenCV to hold only the absolute newest frame in memory
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    fail_count = 0
 
                 # Use standard read() instead of grab/retrieve to prevent H.264 header corruption
                 ret, frame = cap.read()
                 if ret and frame is not None:
-                    
+                    fail_count = 0
                     # 2. Downscale instantly to 360p (640x360) to keep AI processing lightning fast
                     frame = cv2.resize(frame, (640, 360), interpolation=cv2.INTER_AREA)
 
@@ -74,8 +76,13 @@ class RTSPStream:
                         self.frame = frame
                         self.connected = True
                 else:
-                    logger.warning("[RTSP THREAD] Frame dropped. Reconnecting...")
+                    fail_count += 1
+                    if fail_count < 5:
+                        # transient hiccup (WiFi retry, brief stall) — retry immediately, no blackout
+                        continue
+                    logger.warning(f"[RTSP THREAD] Frame dropped {fail_count}×. Reconnecting...")
                     self.connected = False
+                    fail_count = 0
                     if cap:
                         cap.release()
                     cap = None
@@ -84,6 +91,7 @@ class RTSPStream:
             except Exception as e:
                 logger.error(f"[RTSP THREAD] Critical capture error: {e}")
                 self.connected = False
+                fail_count = 0
                 if cap:
                     cap.release()
                 cap = None
@@ -110,30 +118,106 @@ _analyze_lock = threading.Lock()
 _last_analysis = None
 
 
-# ── Stream frame endpoint ─────────────────────────────────────
+# ── Quality knob (D) — FINAL: 82 as sweet spot before 85→88 inflection
+# Sweep: 60(29KB) 70(36KB) 78(45KB) 82(51KB) 85(57KB) 88(65KB) 92(74KB) BW@15 3.5→8.9 Mbps
+# 82 gives +14% sharpness over 78 for +0.77 Mbps, still <9% of 72 Mbps AP, imencode ~1.8ms
+# 85→88 is inflection (+15% size for +3 quality, diminishing). Keep override via ?quality= for sweep.
+# Env var remains for tuning without redeploy; default now 82 (validated headroom).
+JPEG_QUALITY = int(os.getenv("JPEG_QUALITY", "82"))
+JPEG_QUALITY = max(50, min(JPEG_QUALITY, 85))
+
+# ── Overlay cache — decoupled from per-request analysis (C) ─────
+# Background thread calls analyze_frame() at fixed 100-150ms and caches landmarks.
+# GET /stream/frame and /stream/mjpeg read from this cache via lock, so
+# per-request handlers never contend with POST /camera/analyze's _analyze_lock.
 _overlay_cache = {"result": None, "ts": 0.0}
-_OVERLAY_INTERVAL = 0.1  # max CV analyses per second for the live HUD
+_overlay_lock = threading.Lock()
+_OVERLAY_INTERVAL = 0.12  # 120ms ≈ 8 Hz
+_overlay_thread = None
+_overlay_active = False
+
+
+def _overlay_cache_updater():
+    while _overlay_active:
+        frame = get_rtsp_frame()
+        if frame is not None:
+            try:
+                result = analyze_frame(frame)
+                with _overlay_lock:
+                    _overlay_cache["result"] = result
+                    _overlay_cache["ts"] = time.time()
+            except Exception as exc:
+                logger.error(f"[OVERLAY CACHE] analyze_frame failed: {exc}")
+        time.sleep(_OVERLAY_INTERVAL)
+
+
+def _start_overlay_cache():
+    global _overlay_thread, _overlay_active
+    if _overlay_active:
+        return
+    _overlay_active = True
+    _overlay_thread = threading.Thread(target=_overlay_cache_updater, daemon=True)
+    _overlay_thread.start()
+    logger.info(f"[OVERLAY CACHE] started interval={_OVERLAY_INTERVAL}s quality={JPEG_QUALITY}")
+
+
+def _get_cached_overlay():
+    with _overlay_lock:
+        return _overlay_cache["result"]
+
+
+# Start cache on import (after RTSP thread)
+_start_overlay_cache()
 
 
 def _analysis_for_overlay(frame):
-    """Throttled analyze_frame — reuses the /analyze lock non-blocking
-    so the stream and the analyze endpoint never block each other."""
-    now = time.time()
-    if now - _overlay_cache["ts"] >= _OVERLAY_INTERVAL:
-        if _analyze_lock.acquire(blocking=False):
-            try:
-                _overlay_cache["result"] = analyze_frame(frame)
-                _overlay_cache["ts"] = time.time()
-            except Exception as exc:
-                logger.error(f"[OVERLAY] analysis failed: {exc}")
-                _overlay_cache["ts"] = now
-            finally:
-                _analyze_lock.release()
-    return _overlay_cache["result"]
+    """Legacy throttled path kept for backward compat but now delegates to cache.
+    No longer calls analyze_frame() per-request — reads cached result only."""
+    return _get_cached_overlay()
+
+
+@router.get("/stream/mjpeg")
+def stream_mjpeg(overlay: str = "0", fps: int = 15, quality: int | None = None):
+    """
+    MJPEG multipart stream — single persistent TCP, browser-native smooth (B).
+    Reuses get_rtsp_frame() and same resize path (640x360) and JPEG encode.
+    Overlay reads from cached analysis only (C), never calls analyze_frame() per-request,
+    so it does not contend with POST /camera/analyze's _analyze_lock.
+    Keeps GET /stream/frame intact for backward compat.
+    """
+    fps = max(5, min(int(fps), 25))
+    q = int(quality) if quality is not None else JPEG_QUALITY
+    q = max(50, min(q, 85))
+    interval = 1.0 / fps
+
+    def gen():
+        while True:
+            frame = get_rtsp_frame()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+            if overlay.lower() not in ("0", "false", "off"):
+                result = _get_cached_overlay()
+                if result:
+                    draw_overlay(frame, result)
+            _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, q])
+            yield (b"--frame\r\n"
+                   b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n")
+            time.sleep(interval)
+
+    return StreamingResponse(
+        gen(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 @router.get("/stream/frame")
-def stream_frame(overlay: str = "1"):
+def stream_frame(overlay: str = "1", quality: int | None = None):
     frame = get_rtsp_frame()
 
     if frame is None:
@@ -143,11 +227,13 @@ def stream_frame(overlay: str = "1"):
         )
 
     if overlay.lower() not in ("0", "false", "off"):
-        result = _analysis_for_overlay(frame)
+        result = _get_cached_overlay()
         if result:
             draw_overlay(frame, result)
 
-    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    q = int(quality) if quality is not None else JPEG_QUALITY
+    q = max(50, min(q, 95))
+    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, q])
     return Response(
         content=buffer.tobytes(),
         media_type="image/jpeg",
@@ -177,9 +263,7 @@ def analyze(file: UploadFile = File(None), db: Session = Depends(get_db)):
 
     acquired = _analyze_lock.acquire(blocking=False)
     if not acquired:
-        if _last_analysis:
-            return _last_analysis
-        return {"error": "Analysis busy — try again"}
+        return {"error": "Analysis busy — try again", "busy": True}
 
     try:
         ear_result = analyze_frame(frame)
@@ -187,6 +271,7 @@ def analyze(file: UploadFile = File(None), db: Session = Depends(get_db)):
 
         result = {
             "proximity":  ear_result["proximity"],
+            "face_width": ear_result.get("face_width", 0.0),
             "is_close":   ear_result["is_close"],
             "ear":        ear_result["ear"],
             "mar":        ear_result.get("mar"),

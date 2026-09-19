@@ -9,12 +9,21 @@ const SHOW_TRAINING = import.meta.env.VITE_SHOW_TRAINING !== "false";
 
 function Clock() {
   const [now, setNow] = useState(() => new Date());
+  const [fmt, setFmt] = useState(() => {
+    try { return { timeFormat: JSON.parse(localStorage.getItem("alcogate-time-format")) ?? "12h", dateFormat: JSON.parse(localStorage.getItem("alcogate-date-format")) ?? "MM/DD/YYYY" }; } catch { return { timeFormat: "12h", dateFormat: "MM/DD/YYYY" }; }
+  });
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
+    const onChange = () => {
+      try { setFmt({ timeFormat: JSON.parse(localStorage.getItem("alcogate-time-format")) ?? "12h", dateFormat: JSON.parse(localStorage.getItem("alcogate-date-format")) ?? "MM/DD/YYYY" }); } catch {}
+    };
+    window.addEventListener("alcogate-settings-changed", onChange);
+    window.addEventListener("storage", onChange);
+    return () => { clearInterval(t); window.removeEventListener("alcogate-settings-changed", onChange); window.removeEventListener("storage", onChange); };
   }, []);
-  const time = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
-  return <span className="text-[11px] font-mono tabular-nums" style={{ color: "var(--text-secondary)" }}>{time}</span>;
+  const hour12 = fmt.timeFormat !== "24h";
+  const time = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12 });
+  return <span className="text-[11px] font-mono tabular-nums" title={`Date format: ${fmt.dateFormat}`} style={{ color: "var(--text-secondary)" }}>{time}</span>;
 }
 
 function NavItem({ to, label, end = false }) {
@@ -95,11 +104,13 @@ export default function AlcoGateHeader() {
 
         <button
           onClick={() => setTheme(!theme)}
+          aria-pressed={theme}
+          aria-label={theme ? "Switch to light mode" : "Switch to dark mode"}
           className="w-6 h-6 rounded-[4px] flex items-center justify-center transition-colors"
           style={{ color: "var(--text-muted)", border: "1px solid transparent" }}
           onMouseEnter={e => e.currentTarget.style.background = "var(--bg-active)"}
           onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-          title="Toggle theme"
+          title={theme ? "Switch to light mode" : "Switch to dark mode"}
         >
           {theme ? <Moon size={11} /> : <Sun size={11} />}
         </button>

@@ -47,15 +47,7 @@ export default function Events() {
   // useEffect pagination reset on filter change
   useEffect(() => { setPage(1); }, [f, gate, day, q]);
 
-  const mock = [
-    { id: "184", date: new Date().toISOString(), prediction: "Analyzing", confidence: 0.964, bac: 0.13, name: "Unknown", gate: "WAITING" },
-    { id: "183", date: new Date(Date.now() - 100000).toISOString(), prediction: "Over Limit", confidence: 0.782, bac: 0.45, name: "Mark Solis" },
-    { id: "182", date: new Date(Date.now() - 200000).toISOString(), prediction: "Pass", confidence: 0.978, bac: 0.10, name: "Jane Dela Cruz" },
-    { id: "181", date: new Date(Date.now() - 300000).toISOString(), prediction: "Pass", confidence: 0.971, bac: 0.10, name: "Juan Dela Cruz" },
-    { id: "180", date: new Date(Date.now() - 400000).toISOString(), prediction: "Pass", confidence: 0.965, bac: 0.11, name: "Ken Alvarez" },
-  ];
-
-  const raw = logs.length ? logs : mock;
+  const raw = logs;
 
   const subjectMap = useMemo(() => {
     const m = new Map();
@@ -79,7 +71,7 @@ export default function Events() {
       color: t.color, bg: t.bg, dot: t.dot,
       name,
       isUnknown,
-      ppm: l.bac != null ? Number(l.bac).toFixed(2) : l.mq3_avg != null ? Number(l.mq3_avg).toFixed(2) : "0.10",
+      ppm: l.bac != null ? Number(l.bac).toFixed(2) : l.mq3_avg != null ? Number(l.mq3_avg).toFixed(2) : "—",
       conf: l.confidence != null ? `${(Number(l.confidence) * 100).toFixed(1)}%` : "—",
       gate: l.gate || t.gate,
       gateTone: t.color,
@@ -94,14 +86,14 @@ export default function Events() {
     if (gate !== "All Gates") d = d.filter(() => true); // single gate for now
     if (day === "Today") {
       const today = new Date().toDateString();
-      d = d.filter((x) => !x.rawDate || new Date(x.rawDate).toDateString() === today || !logs.length); // keep mock
+      d = d.filter((x) => x.rawDate && new Date(x.rawDate).toDateString() === today);
     }
     if (q.trim()) {
       const s = q.toLowerCase();
       d = d.filter((x) => x.id.toLowerCase().includes(s) || x.name.toLowerCase().includes(s) || x.label.toLowerCase().includes(s));
     }
     return d;
-  }, [data, f, gate, day, q, logs.length]);
+  }, [data, f, gate, day, q]);
 
   const pages = Math.max(1, Math.ceil(filtered.length / perPage));
   const paged = filtered.slice((page - 1) * perPage, page * perPage);
@@ -156,7 +148,10 @@ export default function Events() {
               {[...Array(6)].map((_, i) => <div key={i} className="skeleton h-11" />)}
             </div>
           ) : paged.length === 0 ? (
-            <div className="p-8 text-center text-[11px]" style={{ color: "var(--text-muted)" }}>No events match filters</div>
+            <div className="p-8 text-center flex flex-col items-center gap-2">
+              <div className="text-[11px] font-medium" style={{ color: "var(--text-primary)" }}>{logs.length === 0 ? "No events recorded yet" : "No events match filters"}</div>
+              <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>{logs.length === 0 ? "Events will appear here after the first gate passage. No mock data." : "Try adjusting filters."}</div>
+            </div>
           ) : (
             <div className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
               {paged.map((r) => (

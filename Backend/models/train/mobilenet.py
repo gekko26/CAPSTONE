@@ -17,7 +17,7 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 IMG_SIZE   = (224, 224)    # MobileNetV2 input size
 BATCH_SIZE = 16
 EPOCHS     = 20
-CLASSES    = ["sober", "drowsy", "impaired"]  # must match folder names
+CLASSES    = ["sober", "drowsy", "yawning", "impaired"]  # must match folder names — Plan: 200 each (800 total), yawning separate from drowsy (EAR vs MAR)
 
 def build_model():
     """
@@ -54,11 +54,12 @@ def train():
     """
     Train MobileNetV2 on your face dataset.
 
-    Expected folder structure:
+    Expected folder structure (Plan: 200 each, yawning separate):
         data/faces/
-            sober/      ← images of sober people
-            drowsy/     ← images of drowsy people
-            impaired/   ← images of impaired people
+            sober/      ← images of sober people (200)
+            drowsy/     ← images of drowsy people eyes closed EAR (200)
+            yawning/    ← images of yawning people mouth open MAR (200) — separate class
+            impaired/   ← images of impaired people (200)
 
     Call this when you have collected face images.
     """
@@ -144,9 +145,9 @@ def predict_frame(frame):
 
     Returns:
         {
-            "label": "sober" / "drowsy" / "impaired",
+            "label": "sober" / "drowsy" / "yawning" / "impaired",
             "confidence": 0.94,
-            "class_index": 0 / 1 / 2
+            "class_index": 0 / 1 / 2 / 3
         }
 
     Usage:
@@ -175,6 +176,6 @@ def predict_frame(frame):
     }
 
 if __name__ == "__main__":
-    print("MobileNetV2 ready to be trained.")
-    print("Add face images to data/faces/sober, data/faces/drowsy, data/faces/impaired")
+    print("MobileNetV2 ready to be trained. Plan: 4 classes 200 each (sober/drowsy/yawning/impaired =800)")
+    print("Add face images to data/faces/sober, data/faces/drowsy, data/faces/yawning, data/faces/impaired")
     print("Then call train() to start training.")

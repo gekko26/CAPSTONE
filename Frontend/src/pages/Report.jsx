@@ -32,18 +32,19 @@ function Report() {
   const totalInterrogations = stats?.total ?? 0;
   const aboveLimitBreaches  = stats?.over_limit ?? 0;
   const traceAlerts         = stats?.near_limit ?? 0;
-  const sanitizersBlocked   = stats?.sanitizer ?? 0;
+  const sanitizersBlocked   = stats?.sanitizer ?? stats?.others ?? 0;
 
   const passRatePct = totalInterrogations
     ? (((totalInterrogations - aboveLimitBreaches - traceAlerts) / totalInterrogations) * 100).toFixed(1) + "%"
     : "—";
 
   // Categorical classification buckets mapping back to the Fusion Model endpoints
+  // Backend renamed Sanitizer -> Others (label 2) — handle both for backward compat with old logs
   const decisionMatrixBuckets = [
     { label: "Pass", color: "var(--pass)", count: Math.max(totalInterrogations - aboveLimitBreaches - traceAlerts - sanitizersBlocked, 0) },
     { label: "Near Limit", color: "var(--near)", count: traceAlerts },
     { label: "Over Limit", color: "var(--over)", count: aboveLimitBreaches },
-    { label: "Sanitizer", color: "var(--text-muted)", count: sanitizersBlocked },
+    { label: "Others", color: "var(--text-muted)", count: sanitizersBlocked },
   ];
 
   // Real verification event feed from deployment_logs
@@ -84,7 +85,7 @@ function Report() {
                 <Bar name="Clear pass" dataKey="clear" stackId="a" fill="#27ae60" radius={[0, 0, 0, 0]} />
                 <Bar name="Near limit" dataKey="alert" stackId="a" fill="#f1c40f" />
                 <Bar name="Over limit" dataKey="breach" stackId="a" fill="#e74c3c" />
-                <Bar name="Sanitizer" dataKey="intercepted" stackId="a" fill="#95a5a6" radius={[2, 2, 0, 0]} />
+                <Bar name="Others" dataKey="intercepted" stackId="a" fill="#95a5a6" radius={[2, 2, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

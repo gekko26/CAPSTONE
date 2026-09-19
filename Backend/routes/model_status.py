@@ -11,6 +11,8 @@ ARTIFACTS = {
     "random_forest":  ("random_forest.pkl",  "Sensor ensemble — MQ3 features"),
     "xgboost":        ("xgboost.pkl",        "Sensor ensemble — MQ3 features"),
     "scaler":         ("scaler.pkl",         "Sensor feature scaler"),
+    "bac_regressor":  ("bac_regressor.pkl",  "BAC regressor — estimated %BAC inside Breath (PH 0.05)"),
+    "bac_scaler":     ("bac_scaler.pkl",     "BAC scaler"),
     "fusion":         ("fusion_model.pkl",   "Fusion classifier — sensor + visual"),
     "fusion_scaler":  ("fusion_scaler.pkl",  "Fusion feature scaler"),
     "mobilenet":      ("mobilenet.h5",       "Visual classifier — impaired vs sober (MobileNetV2)"),

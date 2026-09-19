@@ -7,10 +7,10 @@ import {
 } from "lucide-react";
 
 import { API_BASE as BASE } from "../api";
-const FRAME_MS    = 200;   
-const ANALYZE_MS  = 800;   
+const FRAME_MS    = 60;   // 15 FPS max for stream1 — max fps without affecting other functionalities, quality 78
+const ANALYZE_MS  = 380;  // decoupled analysis — keeps autocapture responsive   
 
-const LABEL_NAMES = { "-1": "Pending", 0: "No alcohol", 1: "Breath alcohol", 2: "Sanitizer" };
+const LABEL_NAMES = { "-1": "Pending", 0: "No alcohol", 1: "Breath alcohol", 2: "Others" };
 const SUB_NAMES   = { sanitizer: "Rubbing alcohol", perfume: "Perfume / cologne", drowsy: "Drowsy (Fake Sleep)", clear_air: "Clear Air (Empty)" };
 
 // ── Toast ─────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ function Toasts({ toasts }) {
   );
 }
 
-function ProgressBar({ value, target = 50, color = "var(--pass)" }) {
+function ProgressBar({ value, target = 1000, color = "var(--pass)" }) {
   const pct = Math.min(Math.round((value / target) * 100), 100);
   return (
     <div className="flex items-center gap-3">
@@ -56,7 +56,7 @@ function ProgressBar({ value, target = 50, color = "var(--pass)" }) {
   );
 }
 
-function LabelBadge({ label, subLabel }) {
+function LabelBadge({ label, subLabel, bac }) {
   const styles = {
     "-1": { bg: "var(--near)", text: "var(--near)" },
     0:    { bg: "var(--pass)", text: "var(--pass)" },
@@ -64,6 +64,14 @@ function LabelBadge({ label, subLabel }) {
     2:    { bg: "var(--text-secondary)", text: "var(--text-secondary)" },
   };
   const s = styles[label] ?? styles["-1"];
+  // PH tier badge inside label 1 only
+  const tierInfo = (() => {
+    if (label != 1 || bac == null) return null;
+    const b = Number(bac);
+    if (b < 0.02) return { t: "Trace", c: "var(--near)", bg: "var(--near-bg)" };
+    if (b < 0.05) return { t: "Light", c: "var(--near)", bg: "var(--near-bg)" };
+    return { t: "Over PH", c: "var(--over)", bg: "var(--over-bg)" };
+  })();
   return (
     <div className="flex items-center gap-1 flex-wrap">
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border"
@@ -74,6 +82,12 @@ function LabelBadge({ label, subLabel }) {
         }}>
         {LABEL_NAMES[label] ?? "Unknown"}
       </span>
+      {tierInfo && (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold border"
+          style={{ background: tierInfo.bg, color: tierInfo.c, borderColor: tierInfo.c }}>
+          {tierInfo.t} {Number(bac).toFixed(2)}%
+        </span>
+      )}
       {subLabel && (
         <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium"
           style={{ background: "var(--bg-active)", color: "var(--text-muted)" }}>
@@ -307,6 +321,9 @@ export default function Training() {
   const [analysis, setAnalysis]   = useState(null);
   const [camError, setCamError]   = useState(false);
   const [streaming, setStreaming] = useState(false);
+  const [overlayOn, setOverlayOn] = useState(false);
+  const overlayRef                = useRef(false);
+  useEffect(() => { overlayRef.current = overlayOn; }, [overlayOn]);
 
   const frameTimeoutRef     = useRef(null);
   const analyzeTimeoutRef   = useRef(null);
@@ -314,6 +331,7 @@ export default function Training() {
   const latestBlobRef       = useRef(null);
   const capturedRef         = useRef(false);
   const loopActiveRef       = useRef(false);
+  const fetchingRef         = useRef(false);
 
   const collectingRef = useRef(false);
   const [collecting, setCollecting] = useState(false);
@@ -378,11 +396,14 @@ export default function Training() {
     return () => clearTimeout(timer);
   }, [countdown]);
 
-  // ── Safe Non-Overlapping Loops ────────────────────────────
+  // ── Stable max 60ms — self-scheduling recursion + single-flight guard (A) — camera-only
   const fetchFrameLoop = async () => {
     if (!loopActiveRef.current) return;
+    if (fetchingRef.current) { frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS); return; }
+    fetchingRef.current = true;
     try {
-      const res = await fetch(`${BASE}/camera/stream/frame?overlay=0`, { cache: "no-store" });
+      const overlayParam = overlayRef.current ? "1" : "0";
+      const res = await fetch(`${BASE}/camera/stream/frame?overlay=${overlayParam}`, { cache: "no-store" });
       if (!res.ok) {
         frameErrCountRef.current++;
         if (frameErrCountRef.current >= 5) setCamError(true);
@@ -397,37 +418,44 @@ export default function Training() {
     } catch {
       frameErrCountRef.current++;
       if (frameErrCountRef.current >= 5) setCamError(true);
+    } finally {
+      fetchingRef.current = false;
+      frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS);
     }
-    frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS);
   };
 
-  const runAnalysisLoop = async () => {
+  // Analyze loop fetches own fresh frame — preserves Training capture
+  const runAnalyzeLoop = async () => {
     if (!loopActiveRef.current) return;
-    if (latestBlobRef.current) {
-      try {
-        const fd = new FormData();
-        fd.append("file", latestBlobRef.current, "frame.jpg");
-
-        const ar = await fetch(`${BASE}/camera/analyze`, { method: "POST", body: fd });
-        if (ar.ok) {
-          const data = await ar.json();
+    try {
+      const res = await fetch(`${BASE}/camera/stream/frame?overlay=0`, { cache: "no-store" });
+      if (!res.ok) throw new Error("frame");
+      const blob = await res.blob();
+      latestBlobRef.current = blob;
+      const fd = new FormData();
+      fd.append("file", blob, "frame.jpg");
+      const ar = await fetch(`${BASE}/camera/analyze`, { method: "POST", body: fd });
+      if (ar.ok) {
+        const data = await ar.json();
+        if (data.busy) {
+          // keep last good
+        } else if (!data.error) {
           setAnalysis(data);
-
-          if (data.is_close && !capturedRef.current && collectingRef.current) {
+          // AUTO is primary — medium/close with a real face, Force is secondary/debug
+          const ready = (data.is_close || data.proximity === "medium") && data.status !== "no_face" && !data.busy;
+          if (ready && !capturedRef.current && collectingRef.current) {
             capturedRef.current = true;
-            toast("Subject detected! Capturing in 2 seconds...", "success");
-            
+            toast(`Subject detected (${data.proximity})! Capturing in 2 seconds...`, "success");
+            const captureBlob = blob;
             setTimeout(async () => {
-              await handleCameraCapture(latestBlobRef.current);
+              await handleCameraCapture(captureBlob);
             }, 2000);
           }
-          if (!data.is_close) capturedRef.current = false;
+          if (!ready) capturedRef.current = false;
         }
-      } catch (e) {
-        // Suppress analysis network failures gracefully
       }
-    }
-    analyzeTimeoutRef.current = setTimeout(runAnalysisLoop, ANALYZE_MS);
+    } catch {}
+    analyzeTimeoutRef.current = setTimeout(runAnalyzeLoop, ANALYZE_MS);
   };
 
   const startStream = useCallback(() => {
@@ -435,14 +463,14 @@ export default function Training() {
     loopActiveRef.current = true;
     setStreaming(true);
     fetchFrameLoop();
-    runAnalysisLoop();
+    runAnalyzeLoop();
   }, []);
 
   const stopStream = useCallback(() => {
     loopActiveRef.current = false;
     clearTimeout(frameTimeoutRef.current);
     clearTimeout(analyzeTimeoutRef.current);
-    frameTimeoutRef.current   = null;
+    frameTimeoutRef.current = null;
     analyzeTimeoutRef.current = null;
     latestBlobRef.current      = null;
     capturedRef.current        = false;
@@ -468,37 +496,59 @@ export default function Training() {
       
       const liveEvent = activeEventRef.current;
 
+      const checkTrigger = (d, rowId) => {
+        if (d.trigger && d.trigger.triggered === false) {
+          toast(`Row #${rowId} saved but ESP32 not triggered: ${d.trigger.error || d.trigger.message || "offline"} — check ESP32_URL and WiFi`, "error");
+        } else if (d.trigger && d.trigger.status === 409) {
+          toast(`Row #${rowId} saved — ESP32 was already buffering (409), will attach next window`, "success");
+        }
+      };
       if (liveEvent === "alcohol") {
         fd.append("bac", "0");
         const r = await fetch(`${BASE}/training/collect/alcohol`, { method: "POST", body: fd });
         const d = await r.json();
-        if (!r.ok) throw new Error(d.detail);
+        if (!r.ok) throw new Error(d.detail || d.error);
         setBacModal({ id: d.id });
         setBacValue("");
         toast(`Face layout captured! Row #${d.id} waiting for gas matrix.`);
+        checkTrigger(d, d.id);
       } else if (liveEvent === "perfume") {
         const r = await fetch(`${BASE}/training/collect/perfume`, { method: "POST", body: fd });
         const d = await r.json();
-        if (!r.ok) throw new Error(d.detail);
+        if (!r.ok) throw new Error(d.detail || d.error);
         toast(`Perfume exposure logged — Row #${d.id}. Stream active.`);
+        checkTrigger(d, d.id);
       } else if (liveEvent === "sober") {
         const r = await fetch(`${BASE}/training/collect/sober`, { method: "POST", body: fd });
         const d = await r.json();
-        if (!r.ok) throw new Error(d.detail);
+        if (!r.ok) throw new Error(d.detail || d.error);
         toast(`Sober baseline logged — Row #${d.id}. Stream active.`);
+        checkTrigger(d, d.id);
       } else if (liveEvent === "drowsy") {
         const r = await fetch(`${BASE}/training/collect/drowsy`, { method: "POST", body: fd });
         const d = await r.json();
-        if (!r.ok) throw new Error(d.detail);
+        if (!r.ok) throw new Error(d.detail || d.error);
         toast(`Drowsy baseline logged — Row #${d.id}. Stream active.`);
+        checkTrigger(d, d.id);
       } else if (liveEvent === "yawning") {
         const r = await fetch(`${BASE}/training/collect/yawning`, { method: "POST", body: fd });
         const d = await r.json();
-        if (!r.ok) throw new Error(d.detail);
+        if (!r.ok) throw new Error(d.detail || d.error);
         toast(`Yawning baseline logged — Row #${d.id}. Stream active.`);
+        checkTrigger(d, d.id);
       }
       
-      setTimeout(() => {
+      // If ESP32 failed, don't show "Matrix Synchronized" — show error state
+      setTimeout(async () => {
+        // Check if sensor data actually arrived
+        try {
+          const cr = await fetch(`${BASE}/training/data`);
+          if (cr.ok) {
+            const rows = await cr.json();
+            const row = rows.find((x) => x.id === (liveEvent === "alcohol" ? bacModal?.id : null)) || rows[rows.length - 1];
+            // just refresh summary; visualizer will show ⏳ if mq3 null
+          }
+        } catch {}
         setHardwareState("completed");
         loadAll();
         setTimeout(() => setHardwareState("idle"), 2000);
@@ -662,7 +712,8 @@ export default function Training() {
       const r = await fetch(`${BASE}/training/train`, { method: "POST" });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail);
-      toast(`Training complete — ${d.samples} samples`);
+      const bacMsg = d.bac_results && !d.bac_results.error ? ` · BAC MAE ${d.bac_results.mae} R² ${d.bac_results.r2}` : d.bac_results?.error ? ` · BAC ${d.bac_results.error}` : "";
+      toast(`Training complete — ${d.samples} samples${bacMsg}`);
       loadSummary();
     } catch (e) { toast(e.message || "Training failed", "error"); }
     finally { setTraining(false); }
@@ -672,6 +723,9 @@ export default function Training() {
   const filtered = filter === "all" ? rows : rows.filter(r => String(r.label) === filter);
   const fmt = (v, d = 0) => v != null ? (d === 0 ? Math.round(v) : Number(v).toFixed(d)) : "—";
   const isClose = analysis?.is_close ?? false;
+  const isMedium = analysis?.proximity === "medium";
+  const isIdentified = !!analysis?.identified;
+  const readyToCapture = (isClose || isMedium || isIdentified) && analysis?.status !== "no_face" || isIdentified;
   const proximityStr = analysis?.proximity ?? "far";
 
   const proximityColorMap = {
@@ -738,7 +792,7 @@ export default function Training() {
         <StatCard label="Pending"    value={summary?.pending}         color="var(--near)"/>
         <StatCard label="No alcohol" value={summary?.no_alcohol}      color="var(--pass)"/>
         <StatCard label="Breath"     value={summary?.breath_alcohol}  color="var(--over)"/>
-        <StatCard label="Sanitizer"  value={summary?.sanitizer}       color="var(--text-secondary)"/>
+        <StatCard label="Others"  value={summary?.sanitizer}       color="var(--text-secondary)"/>
         <StatCard label="Ready"      value={summary?.ready_to_train}  color="var(--text-primary)"/>
       </div>
 
@@ -756,14 +810,22 @@ export default function Training() {
               {[
                 { label: "No alcohol",     val: summary?.no_alcohol,    color: "var(--pass)" },
                 { label: "Breath alcohol", val: summary?.breath_alcohol, color: "var(--over)" },
-                { label: "Sanitizer",      val: summary?.sanitizer,     color: "var(--text-secondary)" },
+                { label: "Others",      val: summary?.sanitizer,     color: "var(--text-secondary)" },
               ].map(({ label, val, color }) => (
                 <div key={label}>
-                  <div className="text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>{label}</div>
-                  <ProgressBar value={val ?? 0} color={color}/>
+                  <div className="text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>{label} <span style={{ color: "var(--text-muted)" }} className="text-[10px]">({val ?? 0}/1000)</span></div>
+                  <ProgressBar value={val ?? 0} target={1000} color={color}/>
                 </div>
               ))}
             </div>
+            {summary?.trial_counts && (
+              <div className="text-[11px] mt-2 flex gap-3" style={{ color: "var(--text-muted)" }}>
+                <span>Trials: No {summary.trial_counts["0"] ?? 0}</span>
+                <span>Breath {summary.trial_counts["1"] ?? 0}</span>
+                <span>Others {summary.trial_counts["2"] ?? 0}</span>
+                <span className="ml-auto">Ready {summary.ready_to_train ?? 0} rows • {summary.ready_trials ?? 0} trials</span>
+              </div>
+            )}
             {summary?.sanitizer_breakdown && (
               <div className="mt-3 pt-3 border-t flex gap-3" style={{ borderColor: "var(--border-subtle)" }}>
                 <div className="flex-1 text-center rounded-lg p-2" style={{ background: "var(--bg-active)" }}>
@@ -789,11 +851,12 @@ export default function Training() {
               {[
                 { label: "Sober",    val: summary?.face_images?.sober,    color: "var(--pass)" },
                 { label: "Drowsy",   val: summary?.face_images?.drowsy,   color: "var(--near)" },
+                { label: "Yawning",  val: summary?.face_images?.yawning,  color: "#F59E0B" },
                 { label: "Impaired", val: summary?.face_images?.impaired, color: "var(--over)" },
               ].map(({ label, val, color }) => (
                 <div key={label}>
-                  <div className="text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>{label}</div>
-                  <ProgressBar value={val ?? 0} color={color}/>
+                  <div className="text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>{label} <span style={{ color: "var(--text-muted)" }} className="text-[10px]">({val ?? 0}/200)</span></div>
+                  <ProgressBar value={val ?? 0} target={200} color={color}/>
                 </div>
               ))}
             </div>
@@ -806,8 +869,8 @@ export default function Training() {
                 borderColor: summary.balanced ? "color-mix(in srgb, var(--pass) 30%, transparent)" : "color-mix(in srgb, var(--near) 30%, transparent)",
               }}>
               {summary.balanced
-                ? <><Check size={11}/> Balanced — ready to train</>
-                : <><AlertTriangle size={11}/> Unbalanced — collect more data</>}
+                ? <><Check size={11}/> Balanced — 3000 sensor + 800 faces ready</>
+                : <><AlertTriangle size={11}/> Unbalanced — need 1000/event (3000) + 200/face (800) • {summary?.ready_to_train ?? 0}/3000 rows</>}
             </div>
           )}
         </div>
@@ -858,7 +921,7 @@ export default function Training() {
 
           </div>          
           
-          {/* Camera feed */}
+          {/* Camera feed — debug when collecting */}
           {isCameraEvent && (
             <div className="relative rounded-lg overflow-hidden border" style={{ borderColor: "var(--border-subtle)", background: "#0c1f14", aspectRatio: "16/9" }}>
               {frameUrl && !camError ? (
@@ -867,8 +930,8 @@ export default function Training() {
                   {analysis && (
                     <div className="absolute top-2 left-2 flex flex-col gap-1">
                       <div className="text-[11px] font-medium px-2 py-0.5 rounded-full"
-                        style={{ background: "rgba(0,0,0,0.6)", color: "#34d399" }}>
-                        EAR {analysis.ear?.toFixed(3)} · {analysis.status?.toUpperCase()}
+                        style={{ background: "rgba(0,0,0,0.6)", color: readyToCapture ? "#34d399" : "rgba(255,255,255,0.7)" }}>
+                        EAR {analysis.ear?.toFixed(3) ?? "--"} · {analysis.status?.toUpperCase() ?? "--"} · {analysis.proximity ?? "--"} {readyToCapture ? "✓ READY" : ""}
                       </div>
                       {analysis.identified && (
                         <div className="text-[11px] font-medium px-2 py-0.5 rounded-full"
@@ -876,19 +939,35 @@ export default function Training() {
                           ✓ {analysis.name}
                         </div>
                       )}
+                      {analysis.status === "no_face" && !analysis.identified && (
+                        <div className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }}>
+                          No face — step into center
+                        </div>
+                      )}
                     </div>
                   )}
-                  {isClose && collecting && (
+                  {readyToCapture && collecting && (
                     <div className="absolute bottom-2 right-2 text-[11px] font-medium px-2 py-0.5 rounded-full animate-pulse"
                       style={{ background: "rgba(220,38,38,0.85)", color: "#fff" }}>
-                      ⚠ CLOSE — capturing in 2s
+                      ⚠ {isClose ? "CLOSE" : "MEDIUM"} — capturing in 2s
                     </div>
                   )}
-                  {collecting && !isClose && (
-                    <div className="absolute bottom-2 left-2 text-[11px] font-medium px-2 py-0.5 rounded-full"
+                  {collecting && !readyToCapture && (
+                    <div className="absolute bottom-2 left-2 text-[11px] font-medium px-2 py-0.5 rounded-full flex items-center gap-1"
                       style={{ background: "rgba(0,0,0,0.6)", color: "#fbbf24" }}>
-                      Waiting for subject...
+                      <span>Waiting for subject…</span>
+                      {analysis?.proximity && analysis.proximity !== "far" && analysis.proximity !== "none" && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: "rgba(251,191,36,0.2)", color: "#fbbf24" }}>{analysis.proximity}</span>
+                      )}
+                      {!analysis?.is_close && analysis?.proximity === "far" && <span className="text-[9px] opacity-70">— move closer (needs close/medium)</span>}
+                      {analysis?.status === "no_face" && !analysis?.identified && <span className="text-[9px] opacity-70">— no face</span>}
+                      {analysis?.identified && <span className="text-[9px] opacity-70">— {analysis.name} detected, will auto-capture</span>}
                     </div>
+                  )}
+                  {collecting && (
+                    <button onClick={() => { capturedRef.current = true; handleCameraCapture(latestBlobRef.current); }} className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] px-3 py-1 rounded-full font-medium" style={{ background: "var(--pass)", color: "#fff", boxShadow: "0 2px 8px rgba(0,0,0,0.4)" }}>
+                      Force Capture Now
+                    </button>
                   )}
                 </>
               ) : (
@@ -903,6 +982,15 @@ export default function Training() {
                 <span className={`w-1.5 h-1.5 rounded-full ${streaming && !camError ? "bg-emerald-400 animate-pulse" : "bg-red-500"}`}/>
                 {streaming && !camError ? "Live · CAM-01" : "Offline"}
               </div>
+              {/* Overlay toggle — top-left */}
+              <button
+                onClick={() => setOverlayOn(v => !v)}
+                title={overlayOn ? "HUD on — backend box (cost ~3 FPS)" : "HUD off — smooth 15 FPS"}
+                className="absolute top-2 left-2 text-[10px] px-2 py-0.5 rounded-full border font-medium transition-colors"
+                style={{ background: overlayOn ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.45)", color: overlayOn ? "#fff" : "rgba(255,255,255,0.7)", borderColor: overlayOn ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.12)" }}
+              >
+                {overlayOn ? "HUD ON" : "HUD OFF"}
+              </button>
             </div>
           )}
 
@@ -931,22 +1019,39 @@ export default function Training() {
         </div>
       </div>
 
-      {/* Train panel */}
-      <div className="flex items-center justify-between rounded-xl border p-4 mb-5 flex-wrap gap-3"
+      {/* Train panel — dual head */}
+      <div className="flex flex-col gap-3 rounded-xl border p-4 mb-5"
         style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
-        <div>
-          <div className="flex items-center gap-2 text-sm font-medium mb-1" style={{ color: "var(--text-primary)" }}>
-            <Cpu size={15}/> Train sensor models
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-medium mb-1" style={{ color: "var(--text-primary)" }}>
+              <Cpu size={15}/> Train sensor models
+            </div>
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+              Plan A: nose (mq1) + jaw mouth+neck (mq2) + upperChest clavicle (mq3) • 18D features (incl. breath/sanitizer ratios). Trains classifier (0/1/2) + BAC regressor inside <b>Breath</b> (PH 0.05). Needs <b>1000+ per event</b> (3000 total) + <b>200 per face</b> (800 total: sober/drowsy/yawning/impaired) + ≥100 alcohol rows with ≥3 BAC levels. EAR/MAR yawning is rule-based (no training).
+            </div>
+            {summary?.bac_stats && (
+              <div className="flex flex-wrap gap-2 mt-2 text-[11px]">
+                <span className="px-2 py-1 rounded-full border" style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)", background: "var(--bg-active)" }}>
+                  BAC rows: <b>{summary.bac_stats.count}</b> · levels: {summary.bac_stats.levels?.length ? summary.bac_stats.levels.join(", ") : "—"} · PH tiers trace {summary.bac_stats.by_tier?.trace ?? 0} / light {summary.bac_stats.by_tier?.light ?? 0} / over {summary.bac_stats.by_tier?.over ?? 0}
+                </span>
+                {summary.bac_stats.metrics && !summary.bac_stats.metrics.error && (
+                  <span className="px-2 py-1 rounded-full border font-mono" style={{ borderColor: "var(--pass)", color: "var(--pass)", background: "var(--pass-bg)" }}>
+                    BAC MAE {summary.bac_stats.metrics.mae} · R² {summary.bac_stats.metrics.r2} · tier {summary.bac_stats.metrics.tier_accuracy}%
+                  </span>
+                )}
+                {summary.bac_stats.metrics?.error && (
+                  <span className="px-2 py-1 rounded-full border" style={{ borderColor: "var(--near)", color: "var(--near)", background: "var(--near-bg)" }}>{summary.bac_stats.metrics.error}</span>
+                )}
+              </div>
+            )}
           </div>
-          <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Requires 20+ samples per class with complete sensor features (60 total minimum). Trains RF + XGBoost.
-          </div>
+          <button onClick={triggerTraining} disabled={training}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 self-start lg:self-center"
+            style={{ background: "var(--text-primary)", color: "var(--bg-card)" }}>
+            {training ? <><RefreshCw size={13} className="animate-spin"/> Training...</> : <><Play size={13}/> Run training</>}
+          </button>
         </div>
-        <button onClick={triggerTraining} disabled={training}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
-          style={{ background: "var(--text-primary)", color: "var(--bg-card)" }}>
-          {training ? <><RefreshCw size={13} className="animate-spin"/> Training...</> : <><Play size={13}/> Run training</>}
-        </button>
       </div>
 
       {/* ── RESTORED CLEAN LOGS TABLE ── */}
@@ -959,7 +1064,7 @@ export default function Training() {
           <div className="flex gap-1.5 flex-wrap">
             {[
               { f: "all", label: "All" }, { f: "-1", label: "Pending" },
-              { f: "0", label: "Sober" }, { f: "1", label: "Alcohol" }, { f: "2", label: "Sanitizer" },
+              { f: "0", label: "Sober" }, { f: "1", label: "Alcohol" }, { f: "2", label: "Others" },
             ].map(({ f, label }) => (
               <button key={f} onClick={() => setFilter(f)}
                 className="px-2.5 py-1 rounded-md text-xs border"
@@ -979,10 +1084,10 @@ export default function Training() {
             <thead>
               <tr style={{ borderBottom: "0.5px solid var(--border-subtle)" }}>
                 {[
-                  { h: "ID", w: 52 }, { h: "Date", w: 120 }, { h: "Label", w: 160 },
-                  { h: "BAC", w: 55 }, { h: "MQ3-1↑", w: 62 }, { h: "MQ3-2↑", w: 62 },
-                  { h: "MQ3-3↑", w: 62 }, { h: "SpVar", w: 60 }, { h: "°C", w: 50 },
-                  { h: "%RH", w: 50 }, { h: "Actions", w: 100 },
+                  { h: "ID", w: 52 }, { h: "Trial", w: 50 }, { h: "Date", w: 100 }, { h: "Label", w: 150 },
+                  { h: "BAC", w: 50 }, { h: "MQ3-1↑", w: 55 }, { h: "MQ3-2↑", w: 55 },
+                  { h: "MQ3-3↑", w: 55 }, { h: "SpVar", w: 55 }, { h: "°C", w: 45 },
+                  { h: "%RH", w: 45 }, { h: "Actions", w: 95 },
                 ].map(({ h, w }) => (
                   <th key={h} className="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wide"
                     style={{ color: "var(--text-muted)", width: w }}>{h}</th>
@@ -991,9 +1096,9 @@ export default function Training() {
             </thead>
             <tbody>
               {loadingData ? (
-                <tr><td colSpan={11} className="text-center py-10 text-xs" style={{ color: "var(--text-muted)" }}>Loading...</td></tr>
+                <tr><td colSpan={12} className="text-center py-10 text-xs" style={{ color: "var(--text-muted)" }}>Loading...</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={11} className="text-center py-10 text-xs" style={{ color: "var(--text-muted)" }}>No rows</td></tr>
+                <tr><td colSpan={12} className="text-center py-10 text-xs" style={{ color: "var(--text-muted)" }}>No rows</td></tr>
               ) : (
                 filtered.flatMap(row => {
                   const isExpanded  = expandedId === row.id;
@@ -1015,10 +1120,12 @@ export default function Training() {
                           <span className="ml-1 w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block animate-pulse" title="Waiting for ESP32"/>
                         )}
                       </td>
+                      <td className="px-3 py-2.5 text-xs font-mono" style={{ color: "var(--text-muted)" }} title={`Trial ${row.trial_id ?? "—"}`}>{row.trial_id ?? "—"}</td>
                       <td className="px-3 py-2.5 text-xs" style={{ color: "var(--text-secondary)" }}>{date}</td>
-                      <td className="px-3 py-2.5"><LabelBadge label={row.label} subLabel={row.sub_label}/></td>
-                      <td className="px-3 py-2.5 text-xs tabular-nums" style={{ color: "var(--text-primary)" }}>
-                        {row.bac != null ? Number(row.bac).toFixed(2) : "—"}
+                      <td className="px-3 py-2.5"><LabelBadge label={row.label} subLabel={row.sub_label} bac={row.bac}/></td>
+                      <td className="px-3 py-2.5 text-xs tabular-nums flex items-center gap-1" style={{ color: row.label==1 && row.bac!=null && row.bac>=0.05 ? "var(--over)" : "var(--text-primary)", fontWeight: row.label==1 && row.bac>=0.05 ? 700 : 400 }}>
+                        {row.bac != null ? Number(row.bac).toFixed(2) + "%" : "—"}
+                        {row.label==1 && row.bac!=null && <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: row.bac>=0.05 ? "var(--over-bg)" : row.bac>=0.02 ? "var(--near-bg)" : "var(--bg-active)", color: row.bac>=0.05 ? "var(--over)" : "var(--text-muted)", border: `1px solid ${row.bac>=0.05 ? "var(--over)" : "var(--border-subtle)"}` }}>{row.bac>=0.05 ? "PH FAIL" : row.bac>=0.02 ? "Light" : "Trace"}</span>}
                       </td>
                       <td className="px-3 py-2.5 text-xs tabular-nums" style={{ color: "var(--text-secondary)" }}>{fmt(row.mq3_1_max)}</td>
                       <td className="px-3 py-2.5 text-xs tabular-nums" style={{ color: "var(--text-secondary)" }}>{fmt(row.mq3_2_max)}</td>
@@ -1059,7 +1166,7 @@ export default function Training() {
                     </tr>,
                     isExpanded && (
                       <tr key={`exp-${row.id}`} style={{ borderBottom: "0.5px solid var(--border-subtle)" }}>
-                        <td colSpan={11} className="px-4 py-3" style={{ background: "var(--bg-active)" }}>
+                        <td colSpan={12} className="px-4 py-3" style={{ background: "var(--bg-active)" }}>
                           <SensorPatternVisualizer row={row} />
                         </td>
                       </tr>
@@ -1072,20 +1179,22 @@ export default function Training() {
         </div>
       </div>
 
-      {/* BAC modal */}
+      {/* BAC modal — PH tiers helper */}
       <Modal open={!!bacModal} onClose={() => setBacModal(null)}
         title={`Enter BAC — Row #${bacModal?.id}`} icon={Tag} iconColor="var(--over)">
         <div className="space-y-3">
-          <div className="text-xs px-3 py-2 rounded-lg"
+          <div className="text-xs px-3 py-2 rounded-lg flex flex-col gap-1"
             style={{ background: "color-mix(in srgb, var(--over) 8%, transparent)", color: "var(--over)" }}>
-            Person detected. Read the breathalyzer now and enter the BAC.
+            <span>Blow breathalyzer after sensor window, enter %BAC. PH limit 0.05%.</span>
+            <span className="text-[11px] font-mono" style={{ color: "var(--text-secondary)" }}>Trace 0.01-0.02 · Light 0.02-0.05 · Over ≥0.05 (PH FAIL)</span>
           </div>
           <div>
-            <label className="block text-xs mb-1.5" style={{ color: "var(--text-muted)" }}>BAC reading</label>
-            <input type="number" step="0.01" min="0" placeholder="e.g. 0.05"
+            <label className="block text-xs mb-1.5" style={{ color: "var(--text-muted)" }}>BAC % (0.00-0.40, e.g. 0.06 PH Over)</label>
+            <input type="number" step="0.01" min="0" max="0.40" placeholder="e.g. 0.05"
               value={bacValue} onChange={e => setBacValue(e.target.value)} autoFocus
               className="w-full rounded-lg px-3 py-2 text-sm border"
-              style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}/>
+              style={{ background: "var(--bg-active)", borderColor: bacValue && Number(bacValue)>=0.05 ? "var(--over)" : "var(--border-subtle)", color: bacValue && Number(bacValue)>=0.05 ? "var(--over)" : "var(--text-primary)", outline: "none" }}/>
+            {bacValue && <div className="text-[11px] mt-1 font-medium" style={{ color: Number(bacValue)>=0.05 ? "var(--over)" : Number(bacValue)>=0.02 ? "var(--near)" : "var(--text-muted)" }}>{Number(bacValue)>=0.05 ? "→ PH FAIL (≥0.05) will train Over tier" : Number(bacValue)>=0.02 ? "→ Light tier" : Number(bacValue)>0 ? "→ Trace tier" : ""}</div>}
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <button onClick={() => setBacModal(null)} className="px-3 py-1.5 rounded-lg text-sm border"

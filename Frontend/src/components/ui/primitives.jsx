@@ -59,7 +59,7 @@ function toneForLabel(label = "") {
   const l = label.toLowerCase();
   if (l.includes("over") || l.includes("denied") || l.includes("breach") || l.includes("impaired")) return "over";
   if (l.includes("near") || l.includes("warn") || l.includes("drowsy")) return "near";
-  if (l.includes("sanitizer") || l.includes("perfume") || l.includes("filtered")) return "neutral";
+  if (l.includes("sanitizer") || l.includes("perfume") || l.includes("others") || l.includes("filtered")) return "neutral";
   return "pass";
 }
 

@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 
 import { API_BASE as BASE } from "../api";
-const FRAME_MS = 200;
+const FRAME_MS = 60;  // 15 FPS max for stream1 — max fps, camera-only
 const ANALYZE_MS = 800;
 
 export default function Deployment() {
@@ -14,22 +14,29 @@ export default function Deployment() {
   const [systemState, setSystemState] = useState("IDLE"); // IDLE, SCANNING, PASSED, DENIED
   const [lastResult, setLastResult] = useState(null);
   const [logs, setLogs] = useState([]);
+  const [overlayOn, setOverlayOn] = useState(false);
+  const overlayRef = useRef(overlayOn);
+  useEffect(() => { overlayRef.current = overlayOn; }, [overlayOn]);
 
   const loopActiveRef = useRef(true);
   const isScanningRef = useRef(false);
   const latestBlobRef = useRef(null);
   const frameTimeoutRef = useRef(null);
   const analyzeTimeoutRef = useRef(null);
+  const fetchingRef = useRef(false);
 
   const addLog = (msg, type) => {
     setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg, type }, ...prev].slice(0, 8));
   };
 
-  // ── High-Speed Camera Feed ──────────────────────────────────
+  // ── Self-scheduling recursion + single-flight guard (A) — camera-only, FRAME_MS unchanged
   const fetchFrameLoop = async () => {
     if (!loopActiveRef.current) return;
+    if (fetchingRef.current) { frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS); return; }
+    fetchingRef.current = true;
     try {
-      const res = await fetch(`${BASE}/camera/stream/frame?overlay=0`, { cache: "no-store" });
+      const overlayParam = overlayRef.current ? "1" : "0";
+      const res = await fetch(`${BASE}/camera/stream/frame?overlay=${overlayParam}`, { cache: "no-store" });
       if (res.ok) {
         setCamError(false);
         const blob = await res.blob();
@@ -41,8 +48,10 @@ export default function Deployment() {
       }
     } catch {
       setCamError(true);
+    } finally {
+      fetchingRef.current = false;
+      frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS);
     }
-    frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS);
   };
 
   // ── The Automated Tripwire ──────────────────────────────────
@@ -220,6 +229,15 @@ export default function Deployment() {
               <StatusIcon size={13} style={{ color: CurrentStatus.color }} />
               <span className="text-xs font-medium" style={{ color: "#fff" }}>{CurrentStatus.text}</span>
             </div>
+            {/* Overlay toggle */}
+            <button
+              onClick={() => setOverlayOn(v => !v)}
+              title={overlayOn ? "HUD on — backend box (cost ~3 FPS)" : "HUD off — smooth 15 FPS"}
+              className="absolute top-3 right-3 text-[10px] px-2 py-0.5 rounded-full border font-medium transition-colors"
+              style={{ background: overlayOn ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.45)", color: overlayOn ? "#fff" : "rgba(255,255,255,0.7)", borderColor: overlayOn ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.12)" }}
+            >
+              {overlayOn ? "HUD ON" : "HUD OFF"}
+            </button>
 
             {/* Crosshair when idle */}
             {systemState === "IDLE" && (

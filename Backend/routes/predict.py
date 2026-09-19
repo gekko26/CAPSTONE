@@ -60,6 +60,7 @@ async def full_predict(background_tasks: BackgroundTasks, file: UploadFile = Fil
     if not reading: return {"error": "No sensor reading found"}
 
     sensor_class = {"No alcohol": 0, "Breath alcohol": 1, "Sanitizer": 2}.get(reading.label, 0)
+    bac_tier_stored = getattr(reading, "bac_tier", None)
     
     try:
         fusion_result = predict_single(sensor_class=sensor_class, sensor_confidence=0.5, visual_class=mobile_result["class_index"], visual_confidence=mobile_result["confidence"], ear=ear, blink_rate=0.0, temperature=reading.temperature or 0.0, humidity=reading.humidity or 0.0)
@@ -70,7 +71,7 @@ async def full_predict(background_tasks: BackgroundTasks, file: UploadFile = Fil
     reading.fusion_label = fusion_result["label"]
     db.commit()
 
-    is_impaired = fusion_result["label"] in ["Over Limit", "Near Limit"]
+    is_impaired = fusion_result["label"] in ["Over Limit", "Near Limit"] or (bac_tier_stored == "over")
     is_drowsy = ear_result.get("impaired", False) or ear_result.get("status") in ["Drowsy", "Sleeping"]
     
     if is_impaired or is_drowsy:
@@ -99,17 +100,28 @@ async def live_predict(background_tasks: BackgroundTasks, file: UploadFile = Fil
 
     sensor_result = run_sensor_ensemble(w1, w2, w3, temperature, humidity)
 
+    # PH BAC estimate inside breath alcohol only
+    bac_est = None
+    bac_tier = None
+    if sensor_result.get("class") == 1:
+        try:
+            est = sensor_models.predict_bac(w1, w2, w3, temperature, humidity)
+            bac_est = est.get("estimated_bac")
+            bac_tier = est.get("tier")
+        except Exception:
+            pass
+
     try:
         fusion_result = predict_single(sensor_class=sensor_result["class"], sensor_confidence=sensor_result["confidence"], visual_class=mobile_result["class_index"], visual_confidence=mobile_result["confidence"], ear=ear, blink_rate=0.0, temperature=temperature, humidity=humidity)
     except FileNotFoundError:
         fusion_result = {"class": 0, "label": "no_model", "risk": "unknown", "action": "unknown", "confidence": 0.0}
 
-    new_reading = Reading(temperature=temperature, humidity=humidity, bac=None, ear=ear, label=None, fusion_label=fusion_result["label"], model_used="ensemble_v1")
+    new_reading = Reading(temperature=temperature, humidity=humidity, bac=None, estimated_bac=bac_est, bac_tier=bac_tier, ear=ear, label=sensor_result.get("label"), fusion_label=fusion_result["label"], model_used="ensemble_v1")
     db.add(new_reading)
     db.commit()
     db.refresh(new_reading)
 
-    is_impaired = fusion_result["label"] in ["Over Limit", "Near Limit"]
+    is_impaired = fusion_result["label"] in ["Over Limit", "Near Limit"] or (bac_tier == "over")
     is_drowsy = ear_result.get("impaired", False) or ear_result.get("status") in ["Drowsy", "Sleeping"]
 
     if is_impaired or is_drowsy:
@@ -118,7 +130,7 @@ async def live_predict(background_tasks: BackgroundTasks, file: UploadFile = Fil
         file_path = os.path.join(target_dir, f"{prefix}_reading_{new_reading.id}.jpg")
         background_tasks.add_task(save_snapshot_task, file_path, frame)
 
-    return {"reading_id": new_reading.id, "sensor_label": sensor_result["label"], "ear": ear, "eye_status": ear_result["status"], "impaired": ear_result["impaired"], "final_label": fusion_result["label"], "final_risk": fusion_result["risk"]}
+    return {"reading_id": new_reading.id, "sensor_label": sensor_result["label"], "ear": ear, "eye_status": ear_result["status"], "impaired": ear_result["impaired"], "final_label": fusion_result["label"], "final_risk": fusion_result["risk"], "estimated_bac": bac_est, "bac_tier": bac_tier, "ph_verdict": "PH FAIL" if bac_tier=="over" else "PH PASS" if bac_tier else None}
 
 @router.get("/reading/{reading_id}")
 def predict_from_reading(reading_id: int, db: Session = Depends(get_db)):

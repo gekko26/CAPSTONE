@@ -5,6 +5,22 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>dashboard</title>
+    <script>
+      (function() {
+        try {
+          var t = localStorage.getItem("alcodetect-theme");
+          if (t === "dark" || (!t && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+            document.documentElement.classList.add("dark");
+          }
+          var s = localStorage.getItem("alcogate-scale");
+          if (s) {
+            document.documentElement.classList.add("scale-" + s);
+            var f = s === "sm" ? "12px" : s === "lg" ? "14px" : "13px";
+            document.documentElement.style.fontSize = f;
+          }
+        } catch(e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

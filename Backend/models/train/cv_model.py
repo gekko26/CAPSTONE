@@ -13,7 +13,7 @@ RIGHT_EYE = [33,  160, 158, 133, 153, 144]
 # Mouth landmarks: corners (61, 291), outer top/bottom (0, 17), inner top/bottom (13, 14)
 MOUTH = [61, 291, 0, 17, 13, 14]
 
-FACE_CLOSE_THRESHOLD = 0.18
+FACE_CLOSE_THRESHOLD = 0.09  # was 0.18/0.12 still too strict for your 1m demo → now medium at 0.058, close at 0.09
 
 # Overlay style constants (BGR)
 FONT       = cv2.FONT_HERSHEY_SIMPLEX
@@ -47,13 +47,19 @@ def _get_landmarker():
                     base_options=python.BaseOptions(model_asset_path=_MODEL_PATH),
                     running_mode=vision.RunningMode.IMAGE,
                     num_faces=1,
-                    min_face_detection_confidence=0.5,
-                    min_face_presence_confidence=0.5,
-                    min_tracking_confidence=0.5,
+                    min_face_detection_confidence=0.1,
+                    min_face_presence_confidence=0.1,
+                    min_tracking_confidence=0.1,
                     output_facial_transformation_matrixes=True,  # needed for head pose
                 )
                 _landmarker = vision.FaceLandmarker.create_from_options(options)
     return _landmarker
+
+def _detect_once(frame, landmarker):
+    h, w = frame.shape[:2]
+    rgb  = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    return landmarker.detect(mp_image)
 
 
 def eye_aspect_ratio(landmarks, eye_indices, w, h):
@@ -113,27 +119,66 @@ def rotation_matrix_to_euler(matrix):
 def estimate_proximity(landmarks, w, h):
     x_coords            = [lm.x for lm in landmarks]
     face_width_fraction = max(x_coords) - min(x_coords)
+    # also return raw width for debug/frontend (visible in HUD)
     if face_width_fraction >= FACE_CLOSE_THRESHOLD:
         return "close"
-    elif face_width_fraction >= FACE_CLOSE_THRESHOLD * 0.6:
+    elif face_width_fraction >= FACE_CLOSE_THRESHOLD * 0.65:
         return "medium"
     else:
         return "far"
+
+def estimate_face_width(landmarks):
+    x_coords = [lm.x for lm in landmarks]
+    return round(max(x_coords) - min(x_coords), 4)
 
 
 def analyze_frame(frame):
     """
     Analyzes a single camera frame.
-    Returns EAR + MAR + head pose + impairment status + proximity.
+    DeepFace already finds you (threshold 0.25) but MediaPipe was still no_face at 0.25.
+    Now tries 640 + 1280 + CLAHE enhanced — so your Edrian Gonzaga face in that dim room will not stay w=0.
     """
     h, w = frame.shape[:2]
-    rgb  = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-
     landmarker = _get_landmarker()
-    results  = landmarker.detect(mp_image)
 
-    if not results.face_landmarks:
+    candidates = [frame]
+    if w == 640:
+        try:
+            candidates.append(cv2.resize(frame, (1280, 720), interpolation=cv2.INTER_CUBIC))
+        except:
+            pass
+    elif w >= 1280:
+        try:
+            candidates.append(cv2.resize(frame, (640, 360), interpolation=cv2.INTER_AREA))
+        except:
+            pass
+    try:
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        l2 = clahe.apply(l)
+        enhanced = cv2.cvtColor(cv2.merge((l2,a,b)), cv2.COLOR_LAB2BGR)
+        candidates.append(enhanced)
+        if len(candidates) > 2:
+            candidates.append(cv2.resize(enhanced, (1280,720), interpolation=cv2.INTER_CUBIC))
+    except:
+        pass
+
+    results = None
+    used_frame = frame
+    used_w, used_h = w, h
+    for cand in candidates:
+        try:
+            r = _detect_once(cand, landmarker)
+            if r.face_landmarks:
+                results = r
+                used_frame = cand
+                used_h, used_w = cand.shape[:2]
+                break
+        except Exception:
+            continue
+
+    if not results or not results.face_landmarks:
         return {
             "ear":        None,
             "mar":        None,
@@ -147,21 +192,28 @@ def analyze_frame(frame):
             "yawning":    False,
             "head_down":  False,
             "proximity":  "none",
+            "face_width": 0.0,
             "is_close":   False,
             "face_bbox":     None,
             "eye_points_l":  [],
             "eye_points_r":  [],
             "mouth_points":  [],
+            "frame_w":    640,
+            "frame_h":    360,
         }
 
     landmarks = results.face_landmarks[0]
+    # use used_frame dims for correct scaling, but normalize bbox back to 640 for frontend
+    h, w = used_h, used_w
 
-    left_ear  = eye_aspect_ratio(landmarks, LEFT_EYE,  w, h)
-    right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE, w, h)
-    avg_ear   = round((left_ear + right_ear) / 2.0, 4)
+    left_ear  = float(eye_aspect_ratio(landmarks, LEFT_EYE,  w, h))
+    right_ear = float(eye_aspect_ratio(landmarks, RIGHT_EYE, w, h))
+    avg_ear   = float(round((left_ear + right_ear) / 2.0, 4))
+    left_ear = float(left_ear)
+    right_ear = float(right_ear)
 
-    mar = mouth_aspect_ratio(landmarks, MOUTH, w, h)
-    yawning = mar > MAR_YAWN_THRESHOLD
+    mar = float(mouth_aspect_ratio(landmarks, MOUTH, w, h))
+    yawning = bool(float(mar) > float(MAR_YAWN_THRESHOLD))
 
     pitch = yaw = roll = None
     head_down = False
@@ -169,9 +221,10 @@ def analyze_frame(frame):
         pitch, yaw, roll = rotation_matrix_to_euler(
             results.facial_transformation_matrixes[0]
         )
-        head_down = pitch > HEAD_DOWN_PITCH_DEG
+        head_down = bool(pitch > HEAD_DOWN_PITCH_DEG)
 
     proximity = estimate_proximity(landmarks, w, h)
+    face_width = float(estimate_face_width(landmarks))
 
     def px(i):
         return (int(landmarks[i].x * w), int(landmarks[i].y * h))
@@ -185,35 +238,55 @@ def analyze_frame(frame):
         min(int(max(xs) * w) + pad, w - 1),
         min(int(max(ys) * h) + pad, h - 1),
     )
+    # normalize to 640 if we detected on 1280
+    if w >= 1280:
+        s = 640 / w
+        face_bbox = (int(face_bbox[0]*s), int(face_bbox[1]*s), int(face_bbox[2]*s), int(face_bbox[3]*s))
+        w, h = 640, 360
 
     # Fusion of EAR + MAR + head pose into a single rule-based status.
     # This stays a lightweight pre-trigger heuristic — it does NOT touch
     # the trained fusion RF, which still only consumes sensor + MobileNetV2 outputs.
-    if avg_ear > EAR_NORMAL_THRESHOLD and not yawning and not head_down:
+    if avg_ear > float(EAR_NORMAL_THRESHOLD) and not yawning and not head_down:
         status, impaired = "normal", False
-    elif avg_ear > EAR_DROWSY_THRESHOLD or yawning or head_down:
+    elif avg_ear > float(EAR_DROWSY_THRESHOLD) or yawning or head_down:
         status, impaired = "drowsy", True
     else:
         status, impaired = "impaired", True
+    impaired = bool(impaired)
+    yawning = bool(yawning)
+    head_down = bool(head_down)
 
+    # scale eye/mouth points if needed (already using w=640 after normalize)
+    eye_l = [px(i) for i in LEFT_EYE]
+    eye_r = [px(i) for i in RIGHT_EYE]
+    mouth = [px(i) for i in MOUTH]
+    if used_w >= 1280:
+        s = 640 / used_w
+        eye_l = [(int(x*s), int(y*s)) for x,y in eye_l]
+        eye_r = [(int(x*s), int(y*s)) for x,y in eye_r]
+        mouth = [(int(x*s), int(y*s)) for x,y in mouth]
     return {
-        "ear":        avg_ear,
-        "mar":        mar,
-        "pitch":      pitch,
-        "yaw":        yaw,
-        "roll":       roll,
-        "status":     status,
-        "impaired":   impaired,
-        "left_ear":   left_ear,
-        "right_ear":  right_ear,
-        "yawning":    yawning,
-        "head_down":  head_down,
-        "proximity":  proximity,
-        "is_close":   proximity == "close",
+        "ear":        float(avg_ear) if avg_ear is not None else None,
+        "mar":        float(mar) if mar is not None else None,
+        "pitch":      float(pitch) if pitch is not None else None,
+        "yaw":        float(yaw) if yaw is not None else None,
+        "roll":       float(roll) if roll is not None else None,
+        "status":     str(status),
+        "impaired":   bool(impaired),
+        "left_ear":   float(left_ear) if left_ear is not None else None,
+        "right_ear":  float(right_ear) if right_ear is not None else None,
+        "yawning":    bool(yawning),
+        "head_down":  bool(head_down),
+        "proximity":  str(proximity),
+        "face_width": float(face_width),
+        "is_close":   bool(proximity == "close"),
         "face_bbox":     face_bbox,
-        "eye_points_l":  [px(i) for i in LEFT_EYE],
-        "eye_points_r":  [px(i) for i in RIGHT_EYE],
-        "mouth_points":  [px(i) for i in MOUTH],
+        "eye_points_l":  eye_l,
+        "eye_points_r":  eye_r,
+        "mouth_points":  mouth,
+        "frame_w":    int(640),
+        "frame_h":    int(360),
     }
 
 

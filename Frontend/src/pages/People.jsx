@@ -2,12 +2,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { API_BASE } from "../api";
 
-const MOCK = [
-  { id: 1, name: "Juan Dela Cruz", face_id: "2026-0001", group: "Staff", created_at: "2026-05-12T02:00:00", status: "Active", auth: "Authorized", accesses: [{ date: "May 20, 2026 10:38 AM", gate: "GATE 01", res: "Passed" }, { date: "May 19, 2026 08:12 AM", gate: "GATE 01", res: "Passed" }] },
-  { id: 2, name: "Jane Dela Cruz", face_id: "2026-0002", group: "Staff", created_at: "2026-05-11T02:00:00", status: "Active", auth: "Authorized", face_id: "2026-0002" },
-  { id: 3, name: "Mark Solis", face_id: "2026-0003", group: "Visitor", created_at: "2026-05-10T02:00:00", status: "Active", auth: "Authorized" },
-  { id: 4, name: "Ken Alvarez", face_id: "2026-0004", group: "Staff", created_at: "2026-05-09T02:00:00", status: "Active", auth: "Authorized" },
-];
+const GROUPS = ["Student", "Staff", "Visitor", "Security", "Admin"];
 
 export default function People() {
   const [q, setQ] = useState("");
@@ -18,12 +13,12 @@ export default function People() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [enrolling, setEnrolling] = useState(false);
-  const [form, setForm] = useState({ name: "", id_number: "", group: "Staff" });
+  const [form, setForm] = useState({ name: "", id_number: "", group: "Student" });
   const [files, setFiles] = useState(null);
   const [previews, setPreviews] = useState([]);
   const [toast, setToast] = useState("");
   const [showEdit, setShowEdit] = useState(false);
-  const [editForm, setEditForm] = useState({ name: "", id_number: "", group: "Staff" });
+  const [editForm, setEditForm] = useState({ name: "", id_number: "", group: "Student" });
   const [showDelete, setShowDelete] = useState(null);
 
   const load = async () => {
@@ -36,22 +31,21 @@ export default function People() {
           name: s.name,
           face_id: s.face_id,
           id_number: s.id_number || s.face_id,
-          group: s.group || "Staff",
+          group: s.group || "Student",
           avatar_path: s.avatar_path,
           created_at: s.created_at,
           status: "Active",
           auth: "Authorized",
         }));
-        const use = mapped.length ? mapped : MOCK;
-        setSubjects(use);
-        setSelected((prev) => use.find((x) => x.id === prev?.id) || use[0]);
+        setSubjects(mapped);
+        setSelected((prev) => mapped.find((x) => x.id === prev?.id) || mapped[0] || null);
       } else {
-        setSubjects(MOCK);
-        setSelected(MOCK[0]);
+        setSubjects([]);
+        setSelected(null);
       }
     } catch {
-      setSubjects(MOCK);
-      setSelected(MOCK[0]);
+      setSubjects([]);
+      setSelected(null);
     }
     setLoading(false);
   };
@@ -97,7 +91,7 @@ export default function People() {
       setToast(`${j.message} — ${j.images} photos`);
       setTimeout(() => setToast(""), 2500);
       setShowAdd(false);
-      setForm({ name: "", id_number: "", group: "Staff" });
+      setForm({ name: "", id_number: "", group: "Student" });
       setFiles(null);
       previews.forEach((u) => URL.revokeObjectURL(u));
       setPreviews([]);
@@ -142,7 +136,7 @@ export default function People() {
     } catch (e) { setToast(e.message || "Delete failed"); setTimeout(() => setToast(""), 2500); }
   };
 
-  const active = selected || filtered[0] || MOCK[0];
+  const active = selected || filtered[0] || null;
 
   return (
     <div className="p-2 flex flex-col gap-2 max-w-[1200px] mx-auto">
@@ -161,8 +155,7 @@ export default function People() {
         </select>
         <select value={groupF} onChange={(e) => setGroupF(e.target.value)} className="text-[11px] px-2 py-1.5 rounded-[4px] border" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
           <option>All Groups</option>
-          <option>Staff</option>
-          <option>Visitor</option>
+          {GROUPS.map((g) => <option key={g}>{g}</option>)}
         </select>
         <button onClick={() => setShowAdd(true)} className="text-[11px] px-3 py-1.5 rounded-[4px] font-medium" style={{ background: "var(--accent)", color: "#fff" }}>+ Add Person</button>
       </div>
@@ -189,10 +182,7 @@ export default function People() {
             <div className="flex flex-col gap-1">
               <label className="text-[10px]" style={{ color: "var(--text-muted)" }}>Group / Department</label>
               <select value={form.group} onChange={(e) => setForm((p) => ({ ...p, group: e.target.value }))} className="text-[11px] px-2.5 py-1.5 rounded-[4px] border" style={{ background: "var(--bg-card-alt)", borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}>
-                <option>Staff</option>
-                <option>Visitor</option>
-                <option>Security</option>
-                <option>Admin</option>
+                {GROUPS.map((g) => <option key={g}>{g}</option>)}
               </select>
             </div>
 
@@ -226,10 +216,18 @@ export default function People() {
         <div className="col-span-12 lg:col-span-4 rounded-[6px] flex flex-col overflow-hidden" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
           {loading ? (
             <div className="p-3 space-y-2">{[...Array(4)].map((_, i) => <div key={i} className="skeleton h-11" />)}</div>
+          ) : filtered.length === 0 ? (
+            <div className="p-10 text-center flex flex-col items-center gap-2">
+              <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "var(--bg-active)", border: "1px solid var(--border-subtle)" }}>
+                <span className="text-[14px]" style={{ color: "var(--text-muted)" }}>—</span>
+              </div>
+              <p className="text-[11px] font-medium" style={{ color: "var(--text-primary)" }}>{subjects.length === 0 ? "No people registered" : "No personnel match"}</p>
+              <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{subjects.length === 0 ? "Click + Add Person to register. Student, Staff, Visitor, Security, Admin supported." : "Try a different search or filter."}</p>
+            </div>
           ) : (
             <div className="divide-y overflow-auto max-h-[520px]" style={{ borderColor: "var(--border-subtle)" }}>
               {filtered.map((p) => (
-                <button key={p.id} data-interactive onClick={() => setSelected(p)} className="w-full text-left flex items-center gap-2.5 px-3 py-2.5 cursor-pointer" style={{ background: active.id === p.id ? "var(--bg-active)" : "transparent", borderLeft: active.id === p.id ? "2px solid var(--pass)" : "2px solid transparent" }}>
+                <button key={p.id} data-interactive onClick={() => setSelected(p)} className="w-full text-left flex items-center gap-2.5 px-3 py-2.5 cursor-pointer" style={{ background: active?.id === p.id ? "var(--bg-active)" : "transparent", borderLeft: active?.id === p.id ? "2px solid var(--pass)" : "2px solid transparent" }}>
                   <div className="w-8 h-8 rounded-full bg-[#080C10] shrink-0 flex items-center justify-center overflow-hidden" style={{ border: "1px solid var(--border-subtle)" }}>
                     {p.avatar_path ? <img src={`${API_BASE}/${p.avatar_path}`} alt={p.name} className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = "none"} /> : <span className="text-[9px] font-bold" style={{ color: "var(--text-muted)" }}>{p.name.slice(0, 2).toUpperCase()}</span>}
                   </div>
@@ -240,7 +238,6 @@ export default function People() {
                   <span className="text-[8px] px-1.5 py-0.5 rounded-full border font-medium shrink-0" style={{ color: "var(--pass)", borderColor: "var(--pass)", background: "var(--pass-bg)" }}>{p.auth}</span>
                 </button>
               ))}
-              {filtered.length === 0 && <div className="p-6 text-center text-[11px]" style={{ color: "var(--text-muted)" }}>No personnel match</div>}
             </div>
           )}
           <div className="mt-auto px-3 py-2 flex justify-between text-[10px] border-t shrink-0" style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)", background: "var(--bg-card)" }}>
@@ -249,27 +246,38 @@ export default function People() {
         </div>
 
         <div className="col-span-12 lg:col-span-8 rounded-[6px] p-3 flex flex-col gap-3" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
-          <div className="flex gap-3">
-            <div className="w-16 h-16 rounded-[6px] overflow-hidden bg-[#080C10] shrink-0 flex items-center justify-center" style={{ border: "1px solid var(--border-subtle)" }}>
-              {active.avatar_path ? <img src={`${API_BASE}/${active.avatar_path}`} alt={active.name} className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = "none"} /> : <span className="text-[11px] font-bold" style={{ color: "var(--text-muted)" }}>{active.name.slice(0, 2).toUpperCase()}</span>}
+          {!active ? (
+            <div className="flex-1 flex flex-col items-center justify-center py-16 gap-2">
+              <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ background: "var(--bg-active)", border: "1px dashed var(--border)" }}>
+                <span className="text-[16px]" style={{ color: "var(--text-muted)" }}>+</span>
+              </div>
+              <p className="text-[12px] font-medium" style={{ color: "var(--text-primary)" }}>No person selected</p>
+              <p className="text-[11px] text-center max-w-[260px]" style={{ color: "var(--text-muted)" }}>No people registered yet. Add a Student, Staff, Visitor, Security or Admin to get started.</p>
+              <button onClick={() => setShowAdd(true)} className="mt-2 text-[11px] px-3 py-1.5 rounded-[4px] font-medium" style={{ background: "var(--accent)", color: "#fff" }}>+ Add Person</button>
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[12px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>{active.name}</span>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button onClick={openEdit} className="text-[10px] px-2 py-1 rounded-[4px] border" style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>Edit</button>
-                  <button onClick={() => setShowDelete(active)} className="text-[10px] px-2 py-1 rounded-[4px] border" style={{ borderColor: "var(--over)", color: "var(--over)", background: "var(--over-bg)" }}>Delete</button>
-                  <span className="text-[8px] px-1.5 py-0.5 rounded-full font-bold" style={{ background: "var(--pass-bg)", color: "var(--pass)", border: "1px solid var(--pass)" }}>{active.auth}</span>
+          ) : (
+            <div className="flex gap-3">
+              <div className="w-16 h-16 rounded-[6px] overflow-hidden bg-[#080C10] shrink-0 flex items-center justify-center" style={{ border: "1px solid var(--border-subtle)" }}>
+                {active.avatar_path ? <img src={`${API_BASE}/${active.avatar_path}`} alt={active.name} className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = "none"} /> : <span className="text-[11px] font-bold" style={{ color: "var(--text-muted)" }}>{active.name.slice(0, 2).toUpperCase()}</span>}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[12px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>{active.name}</span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button onClick={openEdit} className="text-[10px] px-2 py-1 rounded-[4px] border" style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>Edit</button>
+                    <button onClick={() => setShowDelete(active)} className="text-[10px] px-2 py-1 rounded-[4px] border" style={{ borderColor: "var(--over)", color: "var(--over)", background: "var(--over-bg)" }}>Delete</button>
+                    <span className="text-[8px] px-1.5 py-0.5 rounded-full font-bold" style={{ background: "var(--pass-bg)", color: "var(--pass)", border: "1px solid var(--pass)" }}>{active.auth}</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-[10px]">
+                  <span style={{ color: "var(--text-muted)" }}>ID Number</span><span className="font-mono truncate" style={{ color: "var(--text-primary)" }}>{active.id_number || active.face_id}</span>
+                  <span style={{ color: "var(--text-muted)" }}>Group / Department</span><span style={{ color: "var(--text-primary)" }}>{active.group}</span>
+                  <span style={{ color: "var(--text-muted)" }}>Added On</span><span style={{ color: "var(--text-primary)" }}>{active.created_at ? new Date(active.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}</span>
+                  <span style={{ color: "var(--text-muted)" }}>Status</span><span style={{ color: "var(--pass)" }}>{active.status}</span>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-[10px]">
-                <span style={{ color: "var(--text-muted)" }}>ID Number</span><span className="font-mono truncate" style={{ color: "var(--text-primary)" }}>{active.id_number || active.face_id}</span>
-                <span style={{ color: "var(--text-muted)" }}>Group / Department</span><span style={{ color: "var(--text-primary)" }}>{active.group}</span>
-                <span style={{ color: "var(--text-muted)" }}>Added On</span><span style={{ color: "var(--text-primary)" }}>{active.created_at ? new Date(active.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}</span>
-                <span style={{ color: "var(--text-muted)" }}>Status</span><span style={{ color: "var(--pass)" }}>{active.status}</span>
-              </div>
             </div>
-          </div>
+          )}
 
           {showEdit && (
             <div className="fixed inset-0 z-30 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.55)" }} onClick={(e) => e.target === e.currentTarget && setShowEdit(false)}>
@@ -286,7 +294,7 @@ export default function People() {
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px]" style={{ color: "var(--text-muted)" }}>Group</label>
                   <select value={editForm.group} onChange={(e) => setEditForm((p) => ({ ...p, group: e.target.value }))} className="text-[11px] px-2.5 py-1.5 rounded-[4px] border" style={{ background: "var(--bg-card-alt)", borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}>
-                    <option>Staff</option><option>Visitor</option><option>Security</option><option>Admin</option>
+                    {GROUPS.map((g) => <option key={g}>{g}</option>)}
                   </select>
                 </div>
                 <div className="flex gap-2 justify-end">
@@ -309,22 +317,24 @@ export default function People() {
             </div>
           )}
 
-          <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "10px" }}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-semibold tracking-wide" style={{ color: "var(--text-primary)" }}>Recent Access</span>
-              <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>View all</span>
+          {!active ? null : (
+            <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "10px" }}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] font-semibold tracking-wide" style={{ color: "var(--text-primary)" }}>Recent Access</span>
+                <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>View all</span>
+              </div>
+              <div className="space-y-1">
+                {(active.accesses || []).map((a, i) => (
+                  <div key={i} className="flex items-center justify-between text-[10px] px-2.5 py-1.5 rounded-[4px]" style={{ background: "var(--bg-card-alt)" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>{a.date}</span>
+                    <span style={{ color: "var(--text-muted)" }}>{a.gate}</span>
+                    <span className="font-medium" style={{ color: a.res === "Flagged" ? "var(--over)" : "var(--pass)" }}>{a.res}</span>
+                  </div>
+                ))}
+                {!active.accesses && <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>No access history</span>}
+              </div>
             </div>
-            <div className="space-y-1">
-              {(active.accesses || []).map((a, i) => (
-                <div key={i} className="flex items-center justify-between text-[10px] px-2.5 py-1.5 rounded-[4px]" style={{ background: "var(--bg-card-alt)" }}>
-                  <span style={{ color: "var(--text-secondary)" }}>{a.date}</span>
-                  <span style={{ color: "var(--text-muted)" }}>{a.gate}</span>
-                  <span className="font-medium" style={{ color: a.res === "Flagged" ? "var(--over)" : "var(--pass)" }}>{a.res}</span>
-                </div>
-              ))}
-              {!active.accesses && <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>No access history</span>}
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

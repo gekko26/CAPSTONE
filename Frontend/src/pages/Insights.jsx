@@ -81,7 +81,7 @@ function BlockBar(props) {
 }
 
 export default function Insights() {
-  const [stats, setStats] = useState({ total: 247, passed: 231, flagged: 16, avg: 0.15 });
+  const [stats, setStats] = useState({ total: 0, passed: 0, flagged: 0, avg: 0 });
   const [weekly, setWeekly] = useState([]);
   const [logs, setLogs] = useState([]);
   const [range, setRange] = useState("Today");
@@ -95,12 +95,16 @@ export default function Insights() {
         const r = await fetch(`${API_BASE}/deployment-logs?limit=200`);
         if (r.ok && a) {
           const j = await r.json();
-          const total = j.stats?.total ?? j.logs?.length ?? 247;
+          const total = j.stats?.total ?? j.logs?.length ?? 0;
           const over = j.stats?.over_limit ?? 0;
           const near = j.stats?.near_limit ?? 0;
-          setStats({ total, passed: total - over - near, flagged: over + near, avg: 0.15 });
+          const logsArr = j.logs || [];
+          // avg estimated BAC over breath events only
+          const estVals = logsArr.map(l=> l.estimated_bac).filter(v=> v!=null);
+          const avgEst = estVals.length ? estVals.reduce((a,b)=>a+b,0)/estVals.length : 0;
+          setStats({ total, passed: total - over - near, flagged: over + near, avg: avgEst });
           setWeekly(j.weekly || []);
-          setLogs(j.logs || []);
+          setLogs(logsArr);
           setLivePulse(true);
           setTimeout(() => setLivePulse(false), 600);
         }
@@ -113,35 +117,36 @@ export default function Insights() {
 
   const trend = useMemo(() => {
     if (weekly.length) return weekly.map((w) => ({ t: w.day, v: w.clear + w.alert + w.breach + w.intercepted }));
-    return [
-      { t: "12 AM", v: 8 }, { t: "4 AM", v: 22 }, { t: "8 AM", v: 38 }, { t: "12 PM", v: 62 }, { t: "4 PM", v: 52 }, { t: "8 PM", v: 48 }, { t: "12 AM", v: 42 },
-    ];
+    return [];
   }, [weekly]);
 
-  const passPct = stats.total ? ((stats.passed / stats.total) * 100).toFixed(1) : "93.5";
+  const passPct = stats.total ? ((stats.passed / stats.total) * 100).toFixed(1) : "—";
   const distribution = [
     { name: "Passed", value: Number(passPct) },
     { name: "Flagged", value: Number((100 - Number(passPct)).toFixed(1)) },
   ];
 
   const alcoholDist = useMemo(() => {
-    if (!logs.length) return [
-      { label: "0.00–0.20", v: 212, pct: 85.8 },
-      { label: "0.21–0.50", v: 30, pct: 12.1 },
-      { label: "0.51+", v: 5, pct: 2.1 },
+    const empty = [
+      { label: "Trace 0.01-0.02", v: 0, pct: 0, color: "var(--near)" },
+      { label: "Light 0.02-0.05", v: 0, pct: 0, color: "var(--near)" },
+      { label: "Over PH ≥0.05", v: 0, pct: 0, color: "var(--over)" },
     ];
-    const buckets = { low: 0, mid: 0, high: 0 };
+    if (!logs.length) return empty;
+    const buckets = { trace: 0, light: 0, over: 0, sober: 0 };
     for (const l of logs) {
-      const b = l.bac ?? 0;
-      if (b <= 0.2) buckets.low++;
-      else if (b <= 0.5) buckets.mid++;
-      else buckets.high++;
+      const b = l.estimated_bac ?? l.bac ?? 0;
+      const tier = l.bac_tier || (b >= 0.05 ? "over" : b >= 0.02 ? "light" : b > 0.001 ? "trace" : "sober");
+      if (tier === "trace") buckets.trace++;
+      else if (tier === "light") buckets.light++;
+      else if (tier === "over") buckets.over++;
+      else buckets.sober++;
     }
-    const total = logs.length || 1;
+    const denom = buckets.trace + buckets.light + buckets.over || 1;
     return [
-      { label: "0.00–0.20", v: buckets.low, pct: ((buckets.low / total) * 100).toFixed(1) },
-      { label: "0.21–0.50", v: buckets.mid, pct: ((buckets.mid / total) * 100).toFixed(1) },
-      { label: "0.51+", v: buckets.high, pct: ((buckets.high / total) * 100).toFixed(1) },
+      { label: "Trace 0.01-0.02", v: buckets.trace, pct: ((buckets.trace / denom) * 100).toFixed(1), color: "var(--near)" },
+      { label: "Light 0.02-0.05", v: buckets.light, pct: ((buckets.light / denom) * 100).toFixed(1), color: "var(--near)" },
+      { label: "Over PH ≥0.05", v: buckets.over, pct: ((buckets.over / denom) * 100).toFixed(1), color: "var(--over)" },
     ];
   }, [logs]);
 
@@ -151,7 +156,7 @@ export default function Insights() {
       for (const l of logs) if (l.date) byHour[new Date(l.date).getHours()]++;
       return byHour.map((v, h) => ({ h, v }));
     }
-    return Array.from({ length: 24 }, (_, i) => ({ h: i, v: Math.floor(4 + Math.random() * 18 + (i > 7 && i < 13 ? 12 : 0)) }));
+    return Array.from({ length: 24 }, (_, i) => ({ h: i, v: 0 }));
   }, [logs]);
 
   const animPct = useAnimatedNumber(Number(passPct));
@@ -183,7 +188,7 @@ export default function Insights() {
         <StatCard label="TOTAL PASSAGES" value={stats.total} sub={range === "Today" ? "today • live" : "+ 12% vs yesterday"} color="var(--text-primary)" pulse />
         <StatCard label="PASSED" value={stats.passed} sub={`${passPct}% • cleared`} color="var(--pass)" pulse />
         <StatCard label="FLAGGED / DENIED" value={stats.flagged} sub={`${(100 - Number(passPct)).toFixed(1)}% • blocked`} color="var(--over)" pulse={stats.flagged > 0} />
-        <StatCard label="AVG ALCOHOL (PPM)" value={stats.avg.toFixed(2)} sub="LOW • calibrated" color="var(--text-primary)" />
+        <StatCard label="AVG EST. BAC" value={stats.avg != null ? Number(stats.avg).toFixed(3) : "—"} sub={`${stats.avg != null && stats.avg >=0.05 ? "PH FAIL • avg ≥0.05" : "LOW • calibrated (PH 0.05)"}`} color={stats.avg != null && stats.avg >=0.05 ? "var(--over)" : "var(--text-primary)"} />
       </div>
 
       <div className="grid grid-cols-12 gap-2">
@@ -249,13 +254,13 @@ export default function Insights() {
 
       <div className="grid grid-cols-12 gap-2">
         <div className="col-span-12 lg:col-span-6 rounded-[6px] p-3" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)", boxShadow: "0 8px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.03)" }}>
-          <div className="text-[9px] tracking-[0.08em] uppercase font-semibold mb-3" style={{ color: "var(--text-muted)" }}>Alcohol Level Distribution (PPM)</div>
+          <div className="text-[9px] tracking-[0.08em] uppercase font-semibold mb-3" style={{ color: "var(--text-muted)" }}>Est. BAC Distribution — PH Tiers (Inside Breath Alcohol)</div>
           <div className="space-y-2.5">
             {alcoholDist.map((d) => (
               <div key={d.label} className="flex items-center gap-2 group cursor-pointer" data-interactive>
                 <span className="text-[10px] w-16 shrink-0" style={{ color: "var(--text-secondary)" }}>{d.label}</span>
                 <div className="flex-1 h-2 rounded-full overflow-hidden relative" style={{ background: "var(--bg-card-alt)", boxShadow: "inset 0 1px 2px rgba(0,0,0,0.4)" }}>
-                  <div className="h-full rounded-full transition-all duration-700 ease-out relative" style={{ width: `${Math.min(Number(d.pct), 100)}%`, background: "linear-gradient(90deg, #0F231B, #1FC184)", boxShadow: "0 0 8px rgba(31,193,132,0.45)" }} />
+                  <div className="h-full rounded-full transition-all duration-700 ease-out relative" style={{ width: `${Math.min(Number(d.pct), 100)}%`, background: d.color === "var(--over)" ? "linear-gradient(90deg, #2a1414, #E85454)" : "linear-gradient(90deg, #0F231B, #1FC184)", boxShadow: d.color === "var(--over)" ? "0 0 8px rgba(232,84,84,0.45)" : "0 0 8px rgba(31,193,132,0.45)" }} />
                 </div>
                 <span className="text-[10px] font-mono w-20 text-right shrink-0" style={{ color: "var(--text-secondary)" }}>{d.v} ({d.pct}%)</span>
               </div>

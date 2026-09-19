@@ -3,7 +3,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { RecentDetections } from "../assets/graph";
 
 import { API_BASE as BASE } from "../api";
-const POLL_INTERVAL = 200; // ms — wait margin between sequential loop steps
+const FRAME_MS   = 60;  // 15 FPS max for stream1 — max fps, camera-only
+const ANALYZE_MS = 400; // decoupled analysis
 
 // ── Status helpers ────────────────────────────────────────────
 function proximityColor(proximity) {
@@ -38,81 +39,98 @@ export default function Camera() {
   const [frameUrl, setFrameUrl]       = useState(null);
   const [analysis, setAnalysis]       = useState(null);
   const [camError, setCamError]       = useState(false);
-  const [streaming, setStreaming]     = useState(false);
-  
-  const timeoutRef                    = useRef(null);
+  const [streaming, setStreaming]     = useState(true);
+  const [overlayOn, setOverlayOn]     = useState(false);
+  const overlayRef                    = useRef(false);
+  useEffect(() => { overlayRef.current = overlayOn; }, [overlayOn]);
+
+  const frameTimeoutRef               = useRef(null);
+  const analyzeTimeoutRef             = useRef(null);
   const latestBlobRef                 = useRef(null);
   const errorCountRef                 = useRef(0);
   const loopActiveRef                 = useRef(false);
+  const fetchingRef                   = useRef(false);
+
+  // MJPEG URL — single persistent connection, no per-frame fetch/GC (B)
+  // Camera uses MJPEG for smooth live view; Training/Deployment keep fetch loop (see note below)
+  const mjpegUrl = `${BASE}/camera/stream/mjpeg?overlay=${overlayOn ? "1" : "0"}&fps=15`;
 
   // FIX: Tracks hardware trigger lockouts to guarantee deployment calls fire exactly ONCE per approach
   const hasTriggeredSensorRef         = useRef(false);
 
-  // ── Safe Non-Overlapping Execution Pipeline ───────────────
-  const pollLoop = async () => {
+  // ── Self-scheduling recursion + single-flight guard (A) — kept for Training/Deployment
+  // Camera no longer uses fetchFrameLoop for display (uses MJPEG), but kept for backward compat
+  const fetchFrameLoop = async () => {
     if (!loopActiveRef.current) return;
-
+    if (fetchingRef.current) { frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS); return; }
+    fetchingRef.current = true;
     try {
-      const frameRes = await fetch(`${BASE}/camera/stream/frame`, { cache: "no-store" });
-
+      const overlayParam = overlayRef.current ? "1" : "0";
+      const frameRes = await fetch(`${BASE}/camera/stream/frame?overlay=${overlayParam}`, { cache: "no-store" });
       if (!frameRes.ok) {
         errorCountRef.current += 1;
         if (errorCountRef.current >= 5) setCamError(true);
       } else {
         errorCountRef.current = 0;
         setCamError(false);
-
         const blob = await frameRes.blob();
         latestBlobRef.current = blob;
-
         const url = URL.createObjectURL(blob);
         setFrameUrl((prev) => {
           if (prev) URL.revokeObjectURL(prev);
           return url;
         });
-
-        const fd = new FormData();
-        fd.append("file", blob, "frame.jpg");
-
-        const analyzeRes = await fetch(`${BASE}/camera/analyze`, { method: "POST", body: fd });
-
-        if (analyzeRes.ok) {
-          const data = await analyzeRes.json();
-          setAnalysis(data);
-
-          // FIX: Triggers deployment mode sensor logging via Option B middleman when proximity shifts
-          if (data.is_close) {
-            if (!hasTriggeredSensorRef.current) {
-              hasTriggeredSensorRef.current = true;
-              fetch(`${BASE}/sensor/trigger`, { method: "POST" }).catch(() => {});
-            }
-          } else {
-            // Unlocks trigger barrier only when subject moves clear of target zone
-            hasTriggeredSensorRef.current = false;
-          }
-        }
       }
     } catch {
       errorCountRef.current += 1;
       if (errorCountRef.current >= 5) setCamError(true);
+    } finally {
+      fetchingRef.current = false;
+      frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS);
     }
+  };
 
-    // Schedule next execution cycle only AFTER current processing pass has completed
-    timeoutRef.current = setTimeout(pollLoop, POLL_INTERVAL);
+  const runAnalyzeLoop = async () => {
+    if (!loopActiveRef.current) return;
+    try {
+      const frameRes = await fetch(`${BASE}/camera/stream/frame?overlay=0`, { cache: "no-store" });
+      if (!frameRes.ok) throw new Error("frame");
+      const blob = await frameRes.blob();
+      latestBlobRef.current = blob;
+      const fd = new FormData();
+      fd.append("file", blob, "frame.jpg");
+      const analyzeRes = await fetch(`${BASE}/camera/analyze`, { method: "POST", body: fd });
+      if (analyzeRes.ok) {
+        const data = await analyzeRes.json();
+        setAnalysis(data);
+        // FIX: Triggers deployment mode sensor logging via Option B middleman when proximity shifts
+        if (data.is_close) {
+          if (!hasTriggeredSensorRef.current) {
+            hasTriggeredSensorRef.current = true;
+            fetch(`${BASE}/sensor/trigger`, { method: "POST" }).catch(() => {});
+          }
+        } else {
+          // Unlocks trigger barrier only when subject moves clear of target zone
+          hasTriggeredSensorRef.current = false;
+        }
+      }
+    } catch {}
+    analyzeTimeoutRef.current = setTimeout(runAnalyzeLoop, ANALYZE_MS);
   };
 
   // ── Start / stop stream ────────────────────────────────────
+  // Camera uses MJPEG (B) — no fetchFrameLoop polling; analyze runs independently
   const startStream = useCallback(() => {
     if (loopActiveRef.current) return;
     loopActiveRef.current = true;
     setStreaming(true);
-    pollLoop();
+    runAnalyzeLoop();
   }, []);
 
   const stopStream = useCallback(() => {
     loopActiveRef.current = false;
-    clearTimeout(timeoutRef.current);
-    timeoutRef.current = null;
+    clearTimeout(analyzeTimeoutRef.current);
+    analyzeTimeoutRef.current = null;
     setStreaming(false);
   }, []);
 
@@ -120,7 +138,6 @@ export default function Camera() {
     startStream();
     return () => {
       stopStream();
-      if (frameUrl) URL.revokeObjectURL(frameUrl);
     };
   }, [startStream, stopStream]);
 
@@ -157,6 +174,19 @@ export default function Camera() {
               </span>
             </div>
             <div className="flex items-center gap-2">
+              {/* Overlay toggle */}
+              <button
+                onClick={() => setOverlayOn(v => !v)}
+                title={overlayOn ? "HUD on — backend box (cost ~3 FPS)" : "HUD off — smooth (15 FPS)"}
+                className="text-[10px] px-2 py-0.5 rounded-full border transition-colors"
+                style={{
+                  color: overlayOn ? "var(--text-primary)" : "var(--text-muted)",
+                  background: overlayOn ? "var(--bg-active)" : "transparent",
+                  borderColor: overlayOn ? "var(--border-strong)" : "var(--border-subtle)",
+                }}
+              >
+                {overlayOn ? "HUD ON" : "HUD OFF"}
+              </button>
               {/* Proximity badge */}
               {analysis && (
                 <span
@@ -180,15 +210,17 @@ export default function Camera() {
             </div>
           </div>
 
-          {/* Viewfinder */}
+          {/* Viewfinder — MJPEG single connection (B) */}
           {/* Media surface stays dark in both themes for video contrast */}
-            <div className="relative aspect-video flex items-center justify-center" style={{ background: "#101418" }}>
-            {frameUrl && !camError ? (
+            <div className="relative aspect-video flex items-center justify-center overflow-hidden" style={{ background: "#101418" }}>
+            {streaming && !camError ? (
               <>
                 <img
-                  src={frameUrl}
+                  src={mjpegUrl}
                   alt="C200C live feed"
                   className="w-full h-full object-cover"
+                  onLoad={() => { errorCountRef.current = 0; setCamError(false); }}
+                  onError={() => { errorCountRef.current += 1; if (errorCountRef.current >= 5) setCamError(true); }}
                 />
                 {/* EAR overlay — top left */}
                 {analysis && (

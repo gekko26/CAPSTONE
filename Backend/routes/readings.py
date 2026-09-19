@@ -20,7 +20,7 @@ def get_latest(db: Session = Depends(get_db)):
 def get_stats(db: Session = Depends(get_db)):
     readings = db.query(Reading).all()
     total = len(readings)
-    above = len([r for r in readings if r.bac and r.bac >= 0.08])
+    above = len([r for r in readings if r.bac and r.bac >= 0.05])  # PH limit 0.05 (was 0.08 US)
     avg_bac = round(sum(r.bac for r in readings if r.bac) / total, 3) if total else 0
     pass_rate = round(((total - above) / total) * 100, 1) if total else 0
 
@@ -63,7 +63,7 @@ def get_deployment_logs(
             bucket["breach"] += count
         elif prediction == "Near Limit":
             bucket["alert"] += count
-        elif prediction and "Sanitizer" in prediction:
+        elif prediction and ("Sanitizer" in prediction or "Others" in prediction):
             bucket["intercepted"] += count
         else:
             bucket["clear"] += count
@@ -120,6 +120,9 @@ def get_deployment_logs(
                 "prediction":  l.prediction,
                 "confidence":  l.confidence,
                 "risk_level":  l.risk_level,
+                "estimated_bac": getattr(l, "estimated_bac", None),
+                "bac_tier":      getattr(l, "bac_tier", None),
+                "ph_verdict":    "PH FAIL" if getattr(l, "bac_tier", None)=="over" else "PH PASS" if getattr(l, "bac_tier", None) else None,
                 "temperature": l.temperature,
                 "humidity":    l.humidity,
                 "model_version": l.model_version,
@@ -130,7 +133,8 @@ def get_deployment_logs(
             "total":      len(logs),
             "over_limit": over,
             "near_limit": near,
-            "sanitizer":  sum(1 for l in logs if l.prediction and "Sanitizer" in l.prediction),
+            "sanitizer":  sum(1 for l in logs if l.prediction and ("Sanitizer" in l.prediction or "Others" in l.prediction)),
+            "others":     sum(1 for l in logs if l.prediction and ("Others" in l.prediction or "Sanitizer" in l.prediction)),
             "pass_rate":  round(((len(logs) - over - near) / len(logs)) * 100, 1) if logs else 0,
         },
         "weekly": weekly,

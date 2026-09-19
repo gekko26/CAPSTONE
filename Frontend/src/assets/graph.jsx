@@ -10,7 +10,7 @@ import { API_BASE } from "../api";
 function getRiskStyles(label) {
   if (label === "Over Limit") return { text: "var(--over)", bg: "color-mix(in srgb, var(--over) 10%, transparent)", border: "var(--over)" };
   if (label === "Near Limit") return { text: "var(--near)", bg: "color-mix(in srgb, var(--near) 10%, transparent)", border: "var(--near)" };
-  if (label === "Sanitizer" || label?.includes("Sanitizer")) return { text: "var(--text-secondary)", bg: "var(--bg-active)", border: "var(--border-subtle)" };
+  if (label === "Others" || label === "Sanitizer" || label?.includes("Others") || label?.includes("Sanitizer")) return { text: "var(--text-secondary)", bg: "var(--bg-active)", border: "var(--border-subtle)" };
   return { text: "var(--pass)", bg: "color-mix(in srgb, var(--pass) 10%, transparent)", border: "var(--pass)" };
 }
 
@@ -19,7 +19,7 @@ const CustomTelemetryDot = (props) => {
   let color = "var(--pass)";
   if (payload.label === "Over Limit") color = "var(--over)";
   if (payload.label === "Near Limit") color = "var(--near)";
-  if (payload.label === "Sanitizer" || payload.label?.includes("Sanitizer")) color = "var(--text-secondary)";
+  if (payload.label === "Others" || payload.label === "Sanitizer" || payload.label?.includes("Others") || payload.label?.includes("Sanitizer")) color = "var(--text-secondary)";
   return <circle cx={cx} cy={cy} r={5} fill={color} stroke="var(--bg-card)" strokeWidth={1.5} />;
 };
 
@@ -71,7 +71,7 @@ export default function MockBACChart() {
   // Compute metric accumulations from real deployment logs
   const totalAttempts = history.length;
   const criticalViolations = history.filter(r => r.label === "Over Limit").length;
-  const sanitizersNeutralized = history.filter(r => r.label?.includes("Sanitizer")).length;
+  const sanitizersNeutralized = history.filter(r => r.label?.includes("Sanitizer") || r.label?.includes("Others")).length;
   const avgConfidence = totalAttempts
     ? (history.reduce((acc, r) => acc + (r.confidence || 0), 0) / totalAttempts).toFixed(2)
     : "---";
@@ -81,7 +81,7 @@ export default function MockBACChart() {
     { name: "Pass", count: history.filter(r => r.label === "Pass").length, color: "var(--pass)" },
     { name: "Near Limit", count: history.filter(r => r.label === "Near Limit").length, color: "var(--near)" },
     { name: "Over Limit", count: history.filter(r => r.label === "Over Limit").length, color: "var(--over)" },
-    { name: "Sanitizer", count: history.filter(r => r.label?.includes("Sanitizer")).length, color: "var(--text-secondary)" }
+    { name: "Others", count: history.filter(r => r.label?.includes("Others") || r.label?.includes("Sanitizer")).length, color: "var(--text-secondary)" }
   ];
 
   return (
@@ -101,7 +101,7 @@ export default function MockBACChart() {
         </div>
         <div className="rounded-xl border p-4" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
           <p className="text-xs mb-1 font-medium flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
-            <Cpu size={12} style={{ color: "var(--text-muted)" }}/> Sanitizer events
+            <Cpu size={12} style={{ color: "var(--text-muted)" }}/> Others events
           </p>
           <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--text-secondary)" }}>{sanitizersNeutralized}</p>
         </div>

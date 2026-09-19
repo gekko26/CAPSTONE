@@ -14,65 +14,64 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* ── Surfaces (dark default) ── */
-  --bg-page:        #080C10;
-  --bg-sidebar:     #0F141B;
-  --bg-card:        #13181F;
-  --bg-card-alt:    #1A212C;
-  --bg-active:      #13201A;
-  --bg-hero:        #0E131A;
+  /* ── Surfaces (light default) ── */
+  --bg-page:        #F0F2F5;
+  --bg-sidebar:     #FFFFFF;
+  --bg-card:        #FFFFFF;
+  --bg-card-alt:    #F1F5F9;
+  --bg-active:      #E6F4EC;
+  --bg-hero:        #F8FAFC;
 
   /* ── Borders ── */
-  --border:         #1E2530;
-  --border-subtle:  #1A212C;
-  --border-strong:  #252E3C;
+  --border:         #E2E8F0;
+  --border-subtle:  #E8EEF4;
+  --border-strong:  #CBD5E1;
 
   /* ── Text ── */
-  --text-primary:   #E8ECF0;
-  --text-secondary: #9AA3B2;
-  --text-muted:     #6B7588;
+  --text-primary:   #0F172A;
+  --text-secondary: #475569;
+  --text-muted:     #94A3B8;
   --text-on-dark:   #E8ECF0;
 
   /* ── Accent (terminal green) ── */
   --accent:         #1FC184;
-  --accent-hover:   #2DD496;
-  --accent-soft:    #0F2A1E;
+  --accent-hover:   #0FA66E;
+  --accent-soft:    #E6F4EC;
 
-  /* ── Status — terminal palette ── */
+  /* ── Status — terminal palette (light-adapted bg) ── */
   --pass:           #1FC184;
-  --pass-bg:        #0F231B;
-  --pass-text:      #1FC184;
+  --pass-bg:        #E6F4EC;
+  --pass-text:      #0E7A4F;
 
-  --near:           #E6A020;   /* analyzing / warning */
-  --near-bg:        #231E0B;
-  --near-text:      #E6A020;
+  --near:           #D48A00;
+  --near-bg:        #FFF7E6;
+  --near-text:      #92400E;
 
-  --over:           #E85454;   /* flagged / danger */
-  --over-bg:        #241414;
-  --over-text:      #E85454;
+  --over:           #DC2626;
+  --over-bg:        #FEF2F2;
+  --over-text:      #991B1B;
 
   /* legacy aliases */
-  --alert:          #E6A020;
-  --alert-bg:       #231E0B;
-  --alert-text:     #E6A020;
-  --danger:         #E85454;
-  --danger-bg:      #241414;
-  --danger-text:    #E85454;
+  --alert:          #D48A00;
+  --alert-bg:       #FFF7E6;
+  --alert-text:     #92400E;
+  --danger:         #DC2626;
+  --danger-bg:      #FEF2F2;
+  --danger-text:    #991B1B;
 
   /* ── Chrome ── */
-  --topbar-bg:      #0F141B;
-  --topbar-border:  #1E2530;
+  --topbar-bg:      #FFFFFF;
+  --topbar-border:  #E2E8F0;
 
   /* ── Elevation ── */
-  --shadow-card:    none;
-  --shadow-hover:   none;
+  --shadow-card:    0 1px 3px rgba(15,23,42,0.08), 0 1px 2px rgba(15,23,42,0.06);
+  --shadow-hover:   0 4px 12px rgba(15,23,42,0.1);
 
-  color-scheme: dark;
+  color-scheme: light;
   color: var(--text-primary);
   background-color: var(--bg-page);
 }
 
-/* Keep .dark identical — dark is the only theme for terminal */
 .dark {
   --bg-page:        #080C10;
   --bg-sidebar:     #0F141B;
@@ -108,6 +107,8 @@
   --shadow-card:    none;
   --shadow-hover:   none;
   color-scheme: dark;
+  color: var(--text-primary);
+  background-color: var(--bg-page);
 }
 
 * {

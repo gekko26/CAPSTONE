@@ -6,19 +6,20 @@
  * Trigger:  HTTP POST /trigger from backend (Option B — middleman)
  * Posts to: POST http://{BACKEND_IP}:8000/training/collect/sensor-data
  *
- * WIRING:
+ * WIRING — Plan A: nose + jaw (mouth+neck) + upperChest clavicle
  * ┌─────────────────────────────────────────────────────┐
- * │  MQ3 Sensor 1                                       │
+ * │  MQ3 Sensor 1 — NOSE (GPIO34, ~0-3cm from source)  │
  * │    VCC  → 3.3V (or 5V if your module has regulator)│
  * │    GND  → GND                                       │
  * │    AOUT → GPIO 34  (ADC1_CH6, input only)          │
  * │                                                     │
- * │  MQ3 Sensor 2                                       │
+ * │  MQ3 Sensor 2 — JAW / mouth+neck (GPIO35, mandible)│
  * │    VCC  → 3.3V                                      │
  * │    GND  → GND                                       │
  * │    AOUT → GPIO 35  (ADC1_CH7, input only)          │
  * │                                                     │
- * │  MQ3 Sensor 3                                       │
+ * │  MQ3 Sensor 3 — UpperChest clavicle (GPIO32,       │
+ * │               ~12-15cm below jaw, covers neck+chest)│
  * │    VCC  → 3.3V                                      │
  * │    GND  → GND                                       │
  * │    AOUT → GPIO 32  (ADC1_CH4)                      │
@@ -67,18 +68,18 @@ const char* WIFI_SSID     = "Bayot kaba?";
 const char* WIFI_PASSWORD = "bayotko123";
 
 // ── Backend URL ───────────────────────────────────────────────
-// Change to your laptop/Pi IP. Must be on same WiFi network.
+// Change to your laptop/Pi IP. Must be on same WiFi network. Keep in sync with Backend/.env ESP32_URL
 // Training:   http://192.168.x.x:8000/training/collect/sensor-data
 // Deployment: http://192.168.x.x:8000/sensor
-const char* BACKEND_IP      = "192.168.69.1";   // ← change this
+const char* BACKEND_IP      = "192.168.69.2";   // ← Backend/.env ESP32_URL, keep synced
 const int   BACKEND_PORT    = 8000;
 const char* TRAINING_ENDPOINT  = "/training/collect/sensor-data";
 const char* DEPLOYMENT_ENDPOINT = "/sensor";
 
-// ── Pin definitions ───────────────────────────────────────────
-#define MQ3_PIN_1    34    // ADC1_CH6 — sensor 1 (top-left in enclosure)
-#define MQ3_PIN_2    35    // ADC1_CH7 — sensor 2 (top-right in enclosure)
-#define MQ3_PIN_3    32    // ADC1_CH4 — sensor 3 (bottom-center in enclosure)
+// ── Pin definitions — Plan A ────────────────────────────────
+#define MQ3_PIN_1    34    // ADC1_CH6 — nose (~0-3cm)
+#define MQ3_PIN_2    35    // ADC1_CH7 — jaw mandible (mouth+neck, 5-7cm below nose)
+#define MQ3_PIN_3    32    // ADC1_CH4 — upperChest clavicle (12-15cm below jaw)
 #define DHT_PIN       4    // DHT11 data pin
 #define DHT_TYPE    DHT11 
 #define LED_PIN       2    // Built-in LED — status indicator

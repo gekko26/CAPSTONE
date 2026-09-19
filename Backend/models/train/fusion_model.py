@@ -9,7 +9,7 @@ from sklearn.metrics import accuracy_score, classification_report
 # ── Features ───────────────────────────────────────────────────
 # [0] sensor_class       — 0=no alcohol, 1=breath, 2=sanitizer
 # [1] sensor_confidence  — 0.0 to 1.0
-# [2] visual_class       — 0=sober, 1=drowsy, 2=impaired (from MobileNet)
+# [2] visual_class       — 0=sober, 1=drowsy, 2=yawning, 3=impaired (from MobileNet 4-class)
 # [3] visual_confidence  — 0.0 to 1.0
 # [4] ear                — eye aspect ratio from MediaPipe
 # [5] blink_rate         — blinks per second (0.0 if unavailable)
@@ -110,7 +110,7 @@ def predict_single(
     Parameters:
         sensor_class       — from RF/XGBoost ensemble (0, 1, or 2)
         sensor_confidence  — from RF/XGBoost ensemble (0.0 to 1.0)
-        visual_class       — from MobileNet (0=sober, 1=drowsy, 2=impaired)
+        visual_class       — from MobileNet (0=sober, 1=drowsy, 2=yawning, 3=impaired)
         visual_confidence  — from MobileNet (0.0 to 1.0)
         ear                — eye aspect ratio from MediaPipe
         blink_rate         — blinks per second (pass 0.0 if unavailable)
@@ -155,11 +155,11 @@ def predict_single(
 
 
 if __name__ == "__main__":
-    print("Fusion model ready.")
+    print("Fusion model ready. Visual now 4-class (yawning separate).")
     print("\nFeatures (8 total):")
     print("  [0] sensor_class       — 0=no alcohol, 1=breath, 2=sanitizer")
     print("  [1] sensor_confidence  — 0.0 to 1.0")
-    print("  [2] visual_class       — 0=sober, 1=drowsy, 2=impaired")
+    print("  [2] visual_class       — 0=sober, 1=drowsy, 2=yawning, 3=impaired")
     print("  [3] visual_confidence  — 0.0 to 1.0")
     print("  [4] ear                — eye aspect ratio")
     print("  [5] blink_rate         — blinks per second")

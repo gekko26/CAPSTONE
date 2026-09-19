@@ -10,7 +10,7 @@ class Subject(Base):
     id          = Column(Integer, primary_key=True, index=True)
     name        = Column(String(100), nullable=False)
     face_id     = Column(String(255), nullable=True)  # ID Number (Card Number removed)
-    group       = Column(String(30), nullable=True, default="Staff")
+    group       = Column(String(30), nullable=True, default="Student")
     avatar_path = Column(String(255), nullable=True)  # path to enrolled face image
     created_at  = Column(DateTime, server_default=func.now())
 
@@ -22,16 +22,18 @@ class Subject(Base):
 class Reading(Base):
     __tablename__ = "sensor_readings"
 
-    id          = Column(Integer, primary_key=True, index=True)
-    subject_id  = Column(Integer, ForeignKey("subjects.id"), nullable=True)
-    temperature = Column(Float)
-    humidity    = Column(Float)
-    bac         = Column(Float)
-    ear         = Column(Float)
-    label       = Column(String(20))
-    fusion_label = Column(String(20))
-    model_used  = Column(String(50))
-    date        = Column(DateTime, server_default=func.now())
+    id            = Column(Integer, primary_key=True, index=True)
+    subject_id    = Column(Integer, ForeignKey("subjects.id"), nullable=True)
+    temperature   = Column(Float)
+    humidity      = Column(Float)
+    bac           = Column(Float)
+    estimated_bac = Column(Float, nullable=True)  # PH regressor estimate (0.00-0.40)
+    bac_tier      = Column(String(20), nullable=True)  # sober/trace/light/over
+    ear           = Column(Float)
+    label         = Column(String(20))
+    fusion_label  = Column(String(20))
+    model_used    = Column(String(50))
+    date          = Column(DateTime, server_default=func.now())
 
     subject = relationship("Subject", back_populates="readings")
 
@@ -42,6 +44,7 @@ class TrainingData(Base):
     id                   = Column(Integer, primary_key=True, index=True)
     date                 = Column(DateTime, server_default=func.now())
     subject_id           = Column(Integer, ForeignKey("subjects.id"), nullable=True)
+    trial_id             = Column(Integer, nullable=True, index=True)  # physical trial grouping for GroupKFold (6-8 rows per trial)
     mq3_1_max            = Column(Float,        nullable=True)
     mq3_1_avg            = Column(Float,        nullable=True)
     mq3_1_std            = Column(Float,        nullable=True)
@@ -86,12 +89,18 @@ class DeploymentLog(Base):
     mq3_3_std        = Column(Float)
     rise_time        = Column(Float)
     decay_time       = Column(Float)
-    spatial_variance = Column(Float)
+    spatial_variance = Column(Float)  # spatial_variance_max
+    spatial_variance_avg = Column(Float, nullable=True)  # added: matches TrainingData & 18D features
+    breath_ratio     = Column(Float, nullable=True)  # Plan A: (nose+jaw)/2 / chest
+    sanitizer_ratio  = Column(Float, nullable=True)  # Plan A: (jaw+chest)/2 / nose
+    spatial_direction = Column(Float, nullable=True)  # Plan A: chest_max - nose_max
     temperature      = Column(Float)
     humidity         = Column(Float)
     prediction       = Column(String(20))
     confidence       = Column(Float)
     risk_level       = Column(String(20))
+    estimated_bac    = Column(Float, nullable=True)  # PH regressor 0.00-0.40
+    bac_tier         = Column(String(20), nullable=True)  # sober/trace/light/over
     model_version    = Column(String(50))
 
     subject = relationship("Subject", back_populates="deployment_logs")
