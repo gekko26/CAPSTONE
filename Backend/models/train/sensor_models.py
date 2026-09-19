@@ -303,7 +303,12 @@ def train(X, y, groups=None):
                     zero_division=0,
                 )
                 cm = confusion_matrix(y_test, preds, labels=[0,1,2])
-                results[name] = {
+                # feature importances transparent (reliability)
+        try:
+            fi = model.feature_importances_.tolist() if hasattr(model, 'feature_importances_') else None
+        except Exception:
+            fi = None
+        results[name] = {
                     "accuracy":  round(accuracy * 100, 2),
                     "precision": round(report["macro avg"]["precision"] * 100, 2),
                     "recall":    round(report["macro avg"]["recall"] * 100, 2),
@@ -316,10 +321,12 @@ def train(X, y, groups=None):
                         for cls, stats in report.items()
                 if cls in ("No alcohol", "Breath alcohol", "Others")
                     },
+                    "feature_importances": [round(float(x),4) for x in fi] if fi else None,
+                    "feature_names": ["mq1_max","mq1_avg","mq1_std","mq2_max","mq2_avg","mq2_std","mq3_max","mq3_avg","mq3_std","rise_time","decay_time","spatial_var_max","spatial_var_avg","temp","hum","breath_ratio","sanitizer_ratio","spatial_dir"][:len(fi)] if fi else None,
                 }
-                joblib.dump(model, os.path.join(SAVE_DIR, f"{name}.pkl"))
-                print(f"✅ {name} saved — accuracy: {results[name]['accuracy']}%")
-                continue
+        joblib.dump(model, os.path.join(SAVE_DIR, f"{name}.pkl"))
+        print(f"✅ {name} saved — accuracy: {results[name]['accuracy']}%")
+        continue
 
         model.fit(X_train, y_train)
 
@@ -332,6 +339,10 @@ def train(X, y, groups=None):
             zero_division=0,
         )
         cm = confusion_matrix(y_test, preds, labels=[0,1,2])
+        try:
+            fi2 = model.feature_importances_.tolist() if hasattr(model, 'feature_importances_') else None
+        except Exception:
+            fi2 = None
 
         results[name] = {
             "accuracy":  round(accuracy * 100, 2),
@@ -346,6 +357,8 @@ def train(X, y, groups=None):
                 for cls, stats in report.items()
                 if cls in ("No alcohol", "Breath alcohol", "Others")
             },
+            "feature_importances": [round(float(x),4) for x in fi2] if fi2 else None,
+            "feature_names": ["mq1_max","mq1_avg","mq1_std","mq2_max","mq2_avg","mq2_std","mq3_max","mq3_avg","mq3_std","rise_time","decay_time","spatial_var_max","spatial_var_avg","temp","hum","breath_ratio","sanitizer_ratio","spatial_dir"][:len(fi2)] if fi2 else None,
         }
 
         joblib.dump(model, os.path.join(SAVE_DIR, f"{name}.pkl"))

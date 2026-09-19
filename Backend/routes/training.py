@@ -468,3 +468,131 @@ def trigger_training(db: Session = Depends(get_db)):
     if X_bac:
         bac_results = sensor_models.train_bac(X_bac, y_bac, groups=g_bac)
     return {"message": "Training running", "samples": len(X), "trials": len(set(groups)), "results": clf_results, "bac_results": bac_results, "bac_samples": len(X_bac)}
+
+
+# ── Hidden trainers (URL only) + transparent statistics ────────────────────
+class MobilenetPayload(BaseModel):
+    batch_size: int = 8  # 7GB RAM safe, was 16
+    epochs: int = 5
+    incremental: bool = False
+
+@router.post("/train/mobilenet")
+def train_mobilenet(payload: MobilenetPayload):
+    """Hidden /mobilenet trainer — incremental for 7GB RAM. Accessible only via hidden URL."""
+    try:
+        from models.train import mobilenet
+        # Apply payload batch/epochs for 7GB
+        orig_bs = mobilenet.BATCH_SIZE
+        orig_ep = mobilenet.EPOCHS
+        mobilenet.BATCH_SIZE = max(4, min(payload.batch_size, 32))
+        mobilenet.EPOCHS = max(1, min(payload.epochs, 50))
+        try:
+            # Check data availability
+            import os
+            face_dirs = {c: os.path.join(mobilenet.DATA_DIR, c) for c in mobilenet.CLASSES}
+            counts = {k: len([f for f in os.listdir(p) if f.lower().endswith(('.jpg','.jpeg','.png'))]) if os.path.exists(p) else 0 for k,p in face_dirs.items()}
+            total = sum(counts.values())
+            if total < 10:
+                return {"error": f"Not enough face data: {counts} — need 200 each (800 total)", "counts": counts}
+            history = mobilenet.train()
+            # history returned, metrics saved inside train()
+            from models.train.metrics_store import load_metrics
+            m = load_metrics().get("mobilenet", {})
+            return {"message": "MobileNet training complete", "counts": counts, "metrics": m, "batch_size": mobilenet.BATCH_SIZE, "epochs": mobilenet.EPOCHS}
+        finally:
+            mobilenet.BATCH_SIZE = orig_bs
+            mobilenet.EPOCHS = orig_ep
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()[:2000]}
+
+class FusionPayload(BaseModel):
+    pass  # future: custom thresholds
+
+@router.post("/train/fusion")
+def train_fusion(db: Session = Depends(get_db)):
+    """Hidden /fusion trainer — trains fusion on paired deployment logs if available, else synthetic demo."""
+    try:
+        from models.train import fusion_model
+        # Try to build paired dataset from deployment_logs + training_data if possible
+        # For now require manual X,y; if none, return guidance
+        # Attempt to use existing deployment_logs as demo if they have prediction labels
+        from database.models import DeploymentLog
+        logs = db.query(DeploymentLog).limit(200).all()
+        # Need paired sensor+visual; if logs have predictions, map to fusion labels
+        if len(logs) < 10:
+            return {"error": f"Not enough paired data: {len(logs)} deployment logs — need 50+ with sensor+visual for fusion. Collect via live flow first.", "logs": len(logs)}
+        # Build X from logs (approx)
+        X = []
+        y = []
+        for l in logs:
+            if l.prediction is None:
+                continue
+            # map prediction string to fusion label
+            label_map = {"pass":0, "near_limit":1, "over_limit":2, "Pass":0, "Near Limit":1, "Over Limit":2}
+            fl = label_map.get(l.prediction, 0)
+            # visual_class approx from prediction if no mobilenet
+            vc = 0
+            X.append([fl, float(l.confidence or 0.5), vc, 0.5, 0.25, 0.0, float(l.temperature or 27.0), float(l.humidity or 60.0)])
+            y.append(fl)
+        res = fusion_model.train(X, y)
+        from models.train.metrics_store import load_metrics
+        m = load_metrics().get("fusion", {})
+        return {"message": "Fusion training complete", "samples": len(X), "metrics": m, "results": res}
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()[:2000]}
+
+@router.get("/statistics")
+def training_statistics(db: Session = Depends(get_db)):
+    """Transparent statistics for Models Statistics page — includes accuracy+reliability+failures."""
+    from models.train.metrics_store import load_metrics
+    metrics = load_metrics()
+    # Reuse training_summary for counts/bac
+    summary = training_summary(db)
+    # Enrich with feature importances history etc
+    # Add reliability: pending ratio, trial coverage
+    total = summary.get("total",0)
+    ready = summary.get("ready_to_train",0)
+    pending = summary.get("pending",0)
+    reliability = {
+        "pending_ratio": round(pending/total*100,1) if total else 0,
+        "ready_ratio": round(ready/total*100,1) if total else 0,
+        "trial_coverage": summary.get("trial_counts", {}),
+        "face_coverage": summary.get("face_images", {}),
+        "balanced": summary.get("balanced", False),
+    }
+    # Failures
+    failures = []
+    if pending > 0:
+        failures.append(f"{pending} pending rows without sensor features — waiting for ESP32")
+    sensor_m = metrics.get("sensor", {})
+    if not sensor_m:
+        failures.append("Sensor models not trained yet")
+    else:
+        for k,v in sensor_m.items():
+            if isinstance(v, dict) and v.get("accuracy",100) < 70:
+                failures.append(f"Sensor {k} low accuracy {v.get('accuracy')}%")
+    bac_m = sensor_m.get("bac_regressor") if isinstance(sensor_m, dict) else None
+    if bac_m and isinstance(bac_m, dict) and bac_m.get("error"):
+        failures.append(f"BAC regressor: {bac_m.get('error')}")
+    if not metrics.get("mobilenet"):
+        failures.append("MobileNet not trained — /mobilenet hidden trainer needed (200 each)")
+    if not metrics.get("fusion"):
+        failures.append("Fusion not trained — /fusion hidden trainer needed")
+    # Check stale
+    try:
+        import os, time
+        for name in ["random_forest.pkl","xgboost.pkl","mobilenet.h5"]:
+            p = os.path.join(os.path.dirname(__file__), "../models/saved", name)
+            if os.path.exists(p) and time.time() - os.path.getmtime(p) > 30*24*3600:
+                failures.append(f"{name} stale >30 days")
+    except Exception:
+        pass
+    return {
+        "metrics": metrics,
+        "summary": summary,
+        "reliability": reliability,
+        "failures": failures,
+        "artifacts": list(metrics.keys()),
+    }

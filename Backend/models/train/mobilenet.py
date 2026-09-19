@@ -117,15 +117,26 @@ def train():
 
     print(f"✅ MobileNetV2 trained and saved to models/saved/mobilenet.h5")
 
-    # Persist REAL evaluation metrics for the frontend
+    # Persist REAL evaluation metrics for the frontend (transparent — includes low scores too)
     val_accs = history.history.get("val_accuracy", [])
+    val_losses = history.history.get("val_loss", [])
+    accs = history.history.get("accuracy", [])
+    losses = history.history.get("loss", [])
     if val_accs:
         from models.train.metrics_store import save_metrics
+        best_acc = max(val_accs)
+        # reliability: per-epoch history
         save_metrics("mobilenet", {
-            "accuracy":  round(max(val_accs) * 100, 2),
-            "val_loss":  round(min(history.history.get("val_loss", [0])), 4),
+            "accuracy":  round(best_acc * 100, 2),
+            "val_loss":  round(min(val_losses) if val_losses else 0, 4),
             "epochs":    len(val_accs),
             "classes":   list(train_data.class_indices.keys()),
+            "history_val_accuracy": [round(float(x)*100,2) for x in val_accs],
+            "history_val_loss": [round(float(x),4) for x in val_losses] if val_losses else None,
+            "history_accuracy": [round(float(x)*100,2) for x in accs] if accs else None,
+            "history_loss": [round(float(x),4) for x in losses] if losses else None,
+            "final_val_accuracy": round(float(val_accs[-1])*100,2),
+            "best_epoch": int(int(__import__('numpy').argmax(val_accs)) + 1),
         })
 
     return history

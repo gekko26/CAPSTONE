@@ -75,10 +75,20 @@ def train(X, y):
         output_dict=True,
     )
 
+    cm = None
+    try:
+        from sklearn.metrics import confusion_matrix as _cm
+        cm = _cm(y_test, preds, labels=[0,1,2]).tolist()
+    except Exception:
+        cm = None
+    try:
+        fi = model.feature_importances_.tolist() if hasattr(model, 'feature_importances_') else None
+    except Exception:
+        fi = None
     joblib.dump(model, os.path.join(SAVE_DIR, "fusion_model.pkl"))
     print(f"✅ Fusion model saved — accuracy: {round(acc * 100, 2)}%")
 
-    # Persist REAL evaluation metrics for the frontend
+    # Persist REAL evaluation metrics for the frontend (transparent)
     from models.train.metrics_store import save_metrics
     save_metrics("fusion", {
         "accuracy":  round(acc * 100, 2),
@@ -86,9 +96,13 @@ def train(X, y):
         "recall":    round(report["macro avg"]["recall"] * 100, 2),
         "f1":        round(report["macro avg"]["f1-score"] * 100, 2),
         "samples":   len(y),
+        "confusion_matrix": cm,
+        "per_class": {k: {kk: round(vv*100,1) if kk!='support' else vv for kk,vv in vs.items()} for k,vs in report.items() if k in ("Pass","Near limit","Over limit")},
+        "feature_importances": [round(float(x),4) for x in fi] if fi else None,
+        "feature_names": ["sensor_class","sensor_conf","visual_class","visual_conf","ear","blink_rate","temp","hum"][:len(fi)] if fi else None,
     })
 
-    return {"accuracy": round(acc * 100, 2)}
+    return {"accuracy": round(acc * 100, 2), "confusion_matrix": cm}
 
 
 def load():
