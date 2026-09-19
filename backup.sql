@@ -1,9 +1,10 @@
+mysqldump: Deprecated program name. It will be removed in a future release, use '/usr/bin/mariadb-dump' instead
 /*M!999999\- enable the sandbox mode */ 
--- MariaDB dump 10.19-11.8.3-MariaDB, for debian-linux-gnu (x86_64)
+-- MariaDB dump 10.20-12.3.3-MariaDB, for Linux (x86_64)
 --
 -- Host: localhost    Database: Alcohol_System
 -- ------------------------------------------------------
--- Server version	11.8.3-MariaDB-1+b1 from Debian
+-- Server version	12.3.3-MariaDB
 
 /*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
 /*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
@@ -39,28 +40,36 @@ CREATE TABLE `deployment_logs` (
   `rise_time` float DEFAULT NULL,
   `decay_time` float DEFAULT NULL,
   `spatial_variance` float DEFAULT NULL,
+  `spatial_variance_avg` float DEFAULT NULL,
+  `breath_ratio` float DEFAULT NULL,
+  `sanitizer_ratio` float DEFAULT NULL,
+  `spatial_direction` float DEFAULT NULL,
   `temperature` float DEFAULT NULL,
   `humidity` float DEFAULT NULL,
   `prediction` varchar(20) DEFAULT NULL,
   `confidence` float DEFAULT NULL,
   `risk_level` varchar(20) DEFAULT NULL,
   `model_version` varchar(50) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+  `estimated_bac` float DEFAULT NULL,
+  `bac_tier` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `fk_deployment_logs_subject` (`subject_id`),
+  KEY `ix_deployment_logs_date` (`date`),
+  CONSTRAINT `fk_deployment_logs_subject` FOREIGN KEY (`subject_id`) REFERENCES `subjects` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
 -- Dumping data for table `deployment_logs`
 --
 
+SET @OLD_AUTOCOMMIT=@@AUTOCOMMIT, @@AUTOCOMMIT=0;
 LOCK TABLES `deployment_logs` WRITE;
 /*!40000 ALTER TABLE `deployment_logs` DISABLE KEYS */;
-set autocommit=0;
-INSERT INTO `deployment_logs` VALUES
-(1,'2026-05-15 01:29:13',NULL,0,0,0,0,0,0,0,0,0,0,1,0,0,0,'No model',0,'unknown','random_forest_v1');
 /*!40000 ALTER TABLE `deployment_logs` ENABLE KEYS */;
 UNLOCK TABLES;
-commit;
+COMMIT;
+SET AUTOCOMMIT=@OLD_AUTOCOMMIT;
 
 --
 -- Table structure for table `sensor_readings`
@@ -77,25 +86,30 @@ CREATE TABLE `sensor_readings` (
   `bac` float DEFAULT NULL,
   `ear` float DEFAULT NULL,
   `label` varchar(20) DEFAULT NULL,
+  `fusion_label` varchar(20) DEFAULT NULL,
   `model_used` varchar(50) DEFAULT NULL,
   `date` datetime DEFAULT current_timestamp(),
+  `estimated_bac` float DEFAULT NULL,
+  `bac_tier` varchar(20) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `subject_id` (`subject_id`),
   KEY `ix_sensor_readings_id` (`id`),
+  KEY `ix_sensor_readings_date` (`date`),
   CONSTRAINT `sensor_readings_ibfk_1` FOREIGN KEY (`subject_id`) REFERENCES `subjects` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
 -- Dumping data for table `sensor_readings`
 --
 
+SET @OLD_AUTOCOMMIT=@@AUTOCOMMIT, @@AUTOCOMMIT=0;
 LOCK TABLES `sensor_readings` WRITE;
 /*!40000 ALTER TABLE `sensor_readings` DISABLE KEYS */;
-set autocommit=0;
 /*!40000 ALTER TABLE `sensor_readings` ENABLE KEYS */;
 UNLOCK TABLES;
-commit;
+COMMIT;
+SET AUTOCOMMIT=@OLD_AUTOCOMMIT;
 
 --
 -- Table structure for table `subjects`
@@ -109,7 +123,10 @@ CREATE TABLE `subjects` (
   `name` varchar(100) NOT NULL,
   `face_id` varchar(255) DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`id`)
+  `group` varchar(30) DEFAULT 'Staff',
+  `avatar_path` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix_subjects_face_id` (`face_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -117,12 +134,13 @@ CREATE TABLE `subjects` (
 -- Dumping data for table `subjects`
 --
 
+SET @OLD_AUTOCOMMIT=@@AUTOCOMMIT, @@AUTOCOMMIT=0;
 LOCK TABLES `subjects` WRITE;
 /*!40000 ALTER TABLE `subjects` DISABLE KEYS */;
-set autocommit=0;
 /*!40000 ALTER TABLE `subjects` ENABLE KEYS */;
 UNLOCK TABLES;
-commit;
+COMMIT;
+SET AUTOCOMMIT=@OLD_AUTOCOMMIT;
 
 --
 -- Table structure for table `training_data`
@@ -154,20 +172,37 @@ CREATE TABLE `training_data` (
   `label` int(11) DEFAULT -1,
   `confidence` float DEFAULT NULL,
   `sub_label` varchar(20) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+  `image_path` varchar(255) DEFAULT NULL,
+  `mar` float DEFAULT NULL,
+  `ear` float DEFAULT NULL,
+  `head_pitch` float DEFAULT NULL,
+  `breath_ratio` float DEFAULT NULL,
+  `sanitizer_ratio` float DEFAULT NULL,
+  `spatial_direction` float DEFAULT NULL,
+  `trial_id` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `fk_training_data_subject` (`subject_id`),
+  KEY `ix_training_data_date` (`date`),
+  KEY `ix_training_data_trial_id` (`trial_id`),
+  CONSTRAINT `fk_training_data_subject` FOREIGN KEY (`subject_id`) REFERENCES `subjects` (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
 -- Dumping data for table `training_data`
 --
 
+SET @OLD_AUTOCOMMIT=@@AUTOCOMMIT, @@AUTOCOMMIT=0;
 LOCK TABLES `training_data` WRITE;
 /*!40000 ALTER TABLE `training_data` DISABLE KEYS */;
-set autocommit=0;
+INSERT INTO `training_data` VALUES
+(1,'2026-09-11 05:41:53',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,0.05,1,NULL,NULL,'/home/whou/CAPSTONE/Backend/data/snapshots/impaired/impaired_1.jpg',0.2584,0.1039,-0.22,NULL,NULL,NULL,1),
+(2,'2026-09-19 01:46:09',NULL,392,385.75,2.6942,786,774.679,8.836,521,504.25,6.4511,1,26,164.013,162.768,34.3,63,0,0,NULL,'clear_air',NULL,NULL,NULL,NULL,NULL,NULL,NULL,2),
+(3,'2026-09-19 01:47:19',NULL,259,256.179,0.8886,431,427.571,1.9898,299,295.714,2.0504,1,26,73.4907,73.2764,34.8,60,0,0,NULL,'clear_air',NULL,NULL,NULL,NULL,NULL,NULL,NULL,3);
 /*!40000 ALTER TABLE `training_data` ENABLE KEYS */;
 UNLOCK TABLES;
-commit;
+COMMIT;
+SET AUTOCOMMIT=@OLD_AUTOCOMMIT;
 
 --
 -- Table structure for table `users`
@@ -191,9 +226,9 @@ CREATE TABLE `users` (
 -- Dumping data for table `users`
 --
 
+SET @OLD_AUTOCOMMIT=@@AUTOCOMMIT, @@AUTOCOMMIT=0;
 LOCK TABLES `users` WRITE;
 /*!40000 ALTER TABLE `users` DISABLE KEYS */;
-set autocommit=0;
 INSERT INTO `users` VALUES
 (1,'gonzagaedrian143','123','2026-02-10 13:40:00','2026-02-10 13:43:28'),
 (2,'joms69','jom69','2026-02-10 13:44:57','2026-02-10 13:46:13'),
@@ -202,7 +237,8 @@ INSERT INTO `users` VALUES
 (18,'ag','123456','2026-02-19 02:28:07','2026-02-19 02:28:07');
 /*!40000 ALTER TABLE `users` ENABLE KEYS */;
 UNLOCK TABLES;
-commit;
+COMMIT;
+SET AUTOCOMMIT=@OLD_AUTOCOMMIT;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
@@ -213,4 +249,4 @@ commit;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*M!100616 SET NOTE_VERBOSITY=@OLD_NOTE_VERBOSITY */;
 
--- Dump completed on 2026-08-22 11:09:26
+-- Dump completed on 2026-09-19 10:43:55
