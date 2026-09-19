@@ -68,6 +68,9 @@ class TrainingData(Base):
     mar                  = Column(Float,        nullable=True)  # mouth aspect ratio at capture (for yawning)
     ear                  = Column(Float,        nullable=True)  # eye aspect ratio at capture
     head_pitch           = Column(Float,        nullable=True)  # head pitch at capture
+    breath_ratio         = Column(Float,        nullable=True)  # Plan A: (nose+jaw)/2 / chest
+    sanitizer_ratio      = Column(Float,        nullable=True)  # Plan A: (jaw+chest)/2 / nose
+    spatial_direction    = Column(Float,        nullable=True)  # Plan A: chest_max - nose_max
 
     subject = relationship("Subject", back_populates="training_data")
 
