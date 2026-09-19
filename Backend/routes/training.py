@@ -511,34 +511,42 @@ class FusionPayload(BaseModel):
 
 @router.post("/train/fusion")
 def train_fusion(db: Session = Depends(get_db)):
-    """Hidden /fusion trainer — trains fusion on paired deployment logs if available, else synthetic demo."""
+    """Hidden /fusion trainer — NO deployment_logs required. Uses logs if available, else synthetic demo."""
     try:
         from models.train import fusion_model
-        # Try to build paired dataset from deployment_logs + training_data if possible
-        # For now require manual X,y; if none, return guidance
-        # Attempt to use existing deployment_logs as demo if they have prediction labels
         from database.models import DeploymentLog
+        import numpy as np
         logs = db.query(DeploymentLog).limit(200).all()
-        # Need paired sensor+visual; if logs have predictions, map to fusion labels
-        if len(logs) < 10:
-            return {"error": f"Not enough paired data: {len(logs)} deployment logs — need 50+ with sensor+visual for fusion. Collect via live flow first.", "logs": len(logs)}
-        # Build X from logs (approx)
         X = []
         y = []
-        for l in logs:
-            if l.prediction is None:
-                continue
-            # map prediction string to fusion label
-            label_map = {"pass":0, "near_limit":1, "over_limit":2, "Pass":0, "Near Limit":1, "Over Limit":2}
-            fl = label_map.get(l.prediction, 0)
-            # visual_class approx from prediction if no mobilenet
-            vc = 0
-            X.append([fl, float(l.confidence or 0.5), vc, 0.5, 0.25, 0.0, float(l.temperature or 27.0), float(l.humidity or 60.0)])
-            y.append(fl)
+        source = "deployment_logs"
+        if len(logs) >= 10:
+            for l in logs:
+                if l.prediction is None:
+                    continue
+                label_map = {"pass":0, "near_limit":1, "over_limit":2, "Pass":0, "Near Limit":1, "Over Limit":2}
+                fl = label_map.get(l.prediction, 0)
+                vc = 0
+                X.append([fl, float(l.confidence or 0.5), vc, 0.5, 0.25, 0.0, float(l.temperature or 27.0), float(l.humidity or 60.0)])
+                y.append(fl)
+        # If not enough real logs, synthesize demo (so fusion does NOT require deployment_logs)
+        if len(X) < 10:
+            source = "synthetic_demo"
+            rng = np.random.default_rng(42)
+            # 60 samples balanced across 3 fusion labels
+            for _ in range(60):
+                fl = int(rng.integers(0,3))
+                # sensor_class mirrors fusion label approx
+                sensor_conf = float(rng.uniform(0.6,0.95))
+                visual = int(rng.integers(0,4))  # 0-3 mobilenet 4-class
+                visual_conf = float(rng.uniform(0.5,0.95))
+                ear = float(rng.uniform(0.15,0.35) if fl==2 else rng.uniform(0.25,0.40))
+                X.append([fl, sensor_conf, visual, visual_conf, ear, 0.0, 27.0, 60.0])
+                y.append(fl)
         res = fusion_model.train(X, y)
         from models.train.metrics_store import load_metrics
         m = load_metrics().get("fusion", {})
-        return {"message": "Fusion training complete", "samples": len(X), "metrics": m, "results": res}
+        return {"message": f"Fusion training complete via {source}", "samples": len(X), "source": source, "metrics": m, "results": res}
     except Exception as e:
         import traceback
         return {"error": str(e), "trace": traceback.format_exc()[:2000]}
