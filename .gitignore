@@ -14,3 +14,23 @@ dist/
 # OS
 .DS_Store
 *.log
+
+# Training runtime photos — never commit captured photos (keep .gitkeep for empty dirs)
+Backend/data/faces/**/*.jpg
+Backend/data/faces/**/*.jpeg
+Backend/data/faces/**/*.png
+Backend/data/faces/registered/**/*.jpg
+Backend/data/faces/registered/**/*.jpeg
+Backend/data/faces/registered/**/*.png
+Backend/data/snapshots/**/*.jpg
+Backend/data/snapshots/**/*.jpeg
+Backend/data/snapshots/**/*.png
+data/faces/**/*.jpg
+data/faces/**/*.jpeg
+data/faces/**/*.png
+data/faces/registered/**/*.jpg
+data/faces/registered/**/*.jpeg
+data/faces/registered/**/*.png
+data/snapshots/**/*.jpg
+data/snapshots/**/*.jpeg
+data/snapshots/**/*.png
