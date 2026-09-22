@@ -32,6 +32,8 @@ class Reading(Base):
     ear           = Column(Float)
     label         = Column(String(20))
     fusion_label  = Column(String(20))
+    denial_reason = Column(String(20), nullable=True)  # FIX 7: alcohol | fatigue | both
+    height_offset_cm = Column(Float, nullable=True)  # height-offset feature (tape-measured rig constant)
     model_used    = Column(String(50))
     date          = Column(DateTime, server_default=func.now())
 
@@ -71,6 +73,9 @@ class TrainingData(Base):
     breath_ratio         = Column(Float,        nullable=True)  # Plan A: (nose+jaw)/2 / chest
     sanitizer_ratio      = Column(Float,        nullable=True)  # Plan A: (jaw+chest)/2 / nose
     spatial_direction    = Column(Float,        nullable=True)  # Plan A: chest_max - nose_max
+    auto_labeled         = Column(Boolean,      nullable=True, default=False)  # FIX 4: True if label came from heuristic, needs manual confirmation
+    label_confirmed      = Column(Boolean,      nullable=True, default=True)   # FIX 4: False = unconfirmed, exclude from training until confirmed
+    height_offset_cm     = Column(Float, nullable=True)  # height-offset feature (explicit, not derived from 167)
 
     subject = relationship("Subject", back_populates="training_data")
 
@@ -81,6 +86,7 @@ class DeploymentLog(Base):
     id               = Column(Integer, primary_key=True, index=True)
     date             = Column(DateTime, server_default=func.now())
     subject_id       = Column(Integer, ForeignKey("subjects.id"), nullable=True)
+    reading_id       = Column(Integer, ForeignKey("sensor_readings.id"), nullable=True, unique=True)  # FIX 8: one log per physical trial, dedup sensor vs predict writes
     mq3_1_max        = Column(Float)
     mq3_1_avg        = Column(Float)
     mq3_1_std        = Column(Float)
@@ -104,6 +110,8 @@ class DeploymentLog(Base):
     risk_level       = Column(String(20))
     estimated_bac    = Column(Float, nullable=True)  # PH regressor 0.00-0.40
     bac_tier         = Column(String(20), nullable=True)  # sober/trace/light/over
+    denial_reason    = Column(String(20), nullable=True)  # FIX 7: alcohol | fatigue | both | none
+    height_offset_cm = Column(Float, nullable=True)  # height-offset explicit feature
     model_version    = Column(String(50))
 
     subject = relationship("Subject", back_populates="deployment_logs")

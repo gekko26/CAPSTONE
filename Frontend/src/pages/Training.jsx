@@ -353,7 +353,7 @@ export default function Training() {
   const [relabelSubLabel, setRelabelSubLabel] = useState("");
   const [relabelReason, setRelabelReason] = useState("");
 
-  const isCameraEvent = ["alcohol", "perfume", "sober", "drowsy", "yawning"].includes(activeEvent);
+  const isCameraEvent = ["alcohol", "perfume", "sober", "drowsy"].includes(activeEvent);
 
   // ── Data ──────────────────────────────────────────────────
   const loadSummary = useCallback(async () => {
@@ -497,10 +497,15 @@ export default function Training() {
       const liveEvent = activeEventRef.current;
 
       const checkTrigger = (d, rowId) => {
+        if (d.trigger && d.trigger.busy) {
+          toast(`Row #${rowId} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} (incoming #${d.trigger.row_id || rowId}). Wait 3s and retry.`, "error");
+          setHardwareState("idle");
+          setCollectingSync(false);
+          capturedRef.current = false;
+          throw new Error(`ESP32 busy — retry Row #${rowId} after buffer clears`);
+        }
         if (d.trigger && d.trigger.triggered === false) {
           toast(`Row #${rowId} saved but ESP32 not triggered: ${d.trigger.error || d.trigger.message || "offline"} — check ESP32_URL and WiFi`, "error");
-        } else if (d.trigger && d.trigger.status === 409) {
-          toast(`Row #${rowId} saved — ESP32 was already buffering (409), will attach next window`, "success");
         }
       };
       if (liveEvent === "alcohol") {
@@ -573,12 +578,18 @@ export default function Training() {
       if (liveEvent === "clear_air") {
         const r = await fetch(`${BASE}/training/collect/clear_air`, { method: "POST" });
         const d = await r.json();
-        if (!r.ok) throw new Error(d.detail);
+        if (!r.ok) throw new Error(d.detail || d.error);
+        if (d.trigger && d.trigger.busy) {
+          throw new Error(`Row #${d.id} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} . Wait 3s and retry.`);
+        }
         toast(`Clear air baseline logged — Row #${d.id}.`);
       } else if (liveEvent === "sanitizer") {
         const r = await fetch(`${BASE}/training/collect/sanitizer`, { method: "POST" });
         const d = await r.json();
-        if (!r.ok) throw new Error(d.detail);
+        if (!r.ok) throw new Error(d.detail || d.error);
+        if (d.trigger && d.trigger.busy) {
+          throw new Error(`Row #${d.id} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} . Wait 3s and retry.`);
+        }
         toast(`Vapor reference logged — Row #${d.id}. Keep compound active.`);
       }
 
@@ -589,7 +600,7 @@ export default function Training() {
         setTimeout(() => setHardwareState("idle"), 2000);
       }, 5000);
     } catch (e) {
-      toast("Collection execution drop", "error");
+      toast(e.message || "Collection execution drop", "error");
       setCollectingSync(false);
       setHardwareState("idle");
     }
@@ -604,8 +615,7 @@ export default function Training() {
       alcohol: "Proximity pipeline armed — stand in front of lens",
       perfume: "Chemical evaluation armed — execute walkthrough",
       sober: "Baseline armed — Keep eyes open",
-      drowsy: "Baseline armed — Fake sleep (close eyes, EAR)",
-      yawning: "Baseline armed — Mouth wide open (MAR yawning)",
+      drowsy: "Baseline armed — Fatigue (close eyes or yawn, EAR+MAR)",
     };
     
     toast(msgs[activeEventRef.current] || "Pipeline armed");
@@ -747,9 +757,8 @@ export default function Training() {
   const EVENT_CONFIG = {
     clear_air: { label: "Clear Air (Empty)", hint: "Manual trigger. Records clean room environment.", color: "#3b82f6", icon: Wind, badge: "Manual", camera: false },
     sober: { label: "Sober Face", hint: "Camera auto-captures. Open eyes, mouth closed.", color: "var(--pass)", icon: Camera, badge: "Camera", camera: true },
-    drowsy: { label: "Drowsy (EAR)", hint: "Camera auto-captures. Eyes closed (EAR).", color: "var(--near)", icon: Eye, badge: "Camera", camera: true },
-    yawning: { label: "Yawning (MAR)", hint: "Camera auto-captures. Mouth open wide (MAR).", color: "#F59E0B", icon: Activity, badge: "Camera", camera: true },
-    alcohol: { label: "Breath alcohol", hint: "Camera auto-captures. BAC required.", color: "var(--over)", icon: Wind, badge: "Camera + BAC", camera: true },
+    drowsy: { label: "Fatigue (EAR+MAR)", hint: "Camera auto-captures. Eyes closed or yawning (mar measurement).", color: "var(--near)", icon: Eye, badge: "Camera", camera: true },
+    alcohol: { label: "Breath alcohol", hint: "Camera auto-captures. BAC required (0.00-0.40).", color: "var(--over)", icon: Wind, badge: "Camera + BAC", camera: true },
     sanitizer: { label: "Rubbing alcohol", hint: "Manual trigger. Spray near sensors.", color: "var(--text-secondary)", icon: Droplets, badge: "Manual", camera: false },
     perfume: { label: "Perfume / cologne", hint: "Camera auto-captures. Image discarded.", color: "var(--text-secondary)", icon: Camera, badge: "Camera", camera: true },
   };
@@ -850,8 +859,7 @@ export default function Training() {
             <div className="space-y-3">
               {[
                 { label: "Sober",    val: summary?.face_images?.sober,    color: "var(--pass)" },
-                { label: "Drowsy",   val: summary?.face_images?.drowsy,   color: "var(--near)" },
-                { label: "Yawning",  val: summary?.face_images?.yawning,  color: "#F59E0B" },
+                { label: "Fatigue",  val: summary?.face_images?.fatigue ?? summary?.face_images?.drowsy,   color: "var(--near)" },
                 { label: "Impaired", val: summary?.face_images?.impaired, color: "var(--over)" },
               ].map(({ label, val, color }) => (
                 <div key={label}>
@@ -869,8 +877,8 @@ export default function Training() {
                 borderColor: summary.balanced ? "color-mix(in srgb, var(--pass) 30%, transparent)" : "color-mix(in srgb, var(--near) 30%, transparent)",
               }}>
               {summary.balanced
-                ? <><Check size={11}/> Balanced — 3000 sensor + 800 faces ready</>
-                : <><AlertTriangle size={11}/> Unbalanced — need 1000/event (3000) + 200/face (800) • {summary?.ready_to_train ?? 0}/3000 rows</>}
+                ? <><Check size={11}/> Balanced — 3000 sensor + 600 faces ready</>
+                : <><AlertTriangle size={11}/> Unbalanced — need 1000/event (3000) + 200/face (600) • {summary?.ready_to_train ?? 0}/3000 rows</>}
             </div>
           )}
         </div>
@@ -897,6 +905,15 @@ export default function Training() {
             ))}
           </div>
 
+          {/* ── Proximity slider (configurable 0.05-0.15) ── */}
+          <div className="flex items-center gap-2 p-2 rounded-lg border text-xs" style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
+            <span className="text-[11px] uppercase font-medium shrink-0" style={{ color: "var(--text-muted)" }}>Proximity</span>
+            <input type="range" min="0.05" max="0.15" step="0.01" defaultValue="0.09" onChange={e=>{
+              const v=parseFloat(e.target.value);
+              fetch(`${BASE}/camera/proximity-config`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({close:v})}).catch(()=>{});
+            }} className="flex-1 accent-[var(--pass)]" title="Face close threshold 0.05-0.15 (0.09 default) — medium = close*0.65"/>
+            <span className="text-[10px] font-mono shrink-0" style={{ color: "var(--text-muted)" }}>0.09 close</span>
+          </div>
           {/* ── REAL-TIME TRANSACTION METRIC PIPELINE VISUALIZER ── */}
           <div className="grid grid-cols-2 gap-2 p-2 rounded-lg border text-xs" 
                style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>

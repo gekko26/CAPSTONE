@@ -176,22 +176,21 @@ def extract_features(window_1, window_2, window_3, temp, humidity):
 
 
 # ── Label assignment ───────────────────────────────────────────
-def assign_label(bac_value, is_sanitizer_event=False, features=None):
+def assign_label(bac_value, is_sanitizer_event=False, features=None, require_manual_others=True):
     """
     Assigns class label. Used ONLY during training data collection.
     Mirrors frontend Others (label 2) — sanitizer+perfume combined.
-
-    Priority order:
-        1. Operator explicitly flags Others (sanitizer/perfume) → 2
+    FIX 4: spatial_variance is a model input feature — auto-labeling on it leaks.
+    Priority order (FIX 4 strict):
+        1. Operator explicitly flags Others (sanitizer/perfume) → 2 (manual confirmed)
         2. BAC > 0.00 (breathalyzer confirmed alcohol)           → 1
-        3. Sensor pattern looks like Others (high variance)      → 2  (auto-detect)
-        4. Everything else                                       → 0
+        3. Everything else                                       → 0
+    Auto-detect on spatial_variance>80 is DISABLED by default (require_manual_others=True).
+    If caller needs legacy heuristic, pass require_manual_others=False and handle the
+    returned flag as unconfirmed — do NOT train directly on it.
 
-    Parameters:
-        bac_value          — reading from BACtrack S80
-        is_sanitizer_event — operator manually flagged Others event (sanitizer/perfume)
-        features           — 15-feature list from extract_features()
-                             used for auto-detect fallback
+    Returns: int label, or (label, is_auto) if features provided and heuristic would fire.
+    For backward compat, plain int is returned when no auto would fire.
     """
 
     # 1. Operator explicitly flagged Others
@@ -202,16 +201,15 @@ def assign_label(bac_value, is_sanitizer_event=False, features=None):
     if bac_value > 0.00:
         return 1
 
-    # 3. Auto-detect Others from sensor pattern
-    #    Others = big spike on 1 sensor only (high spatial variance, e.g. sanitizer/perfume upperChest)
-    if features is not None:
+    # 3. FIX 4: Auto-detect DISABLED — spatial_variance is a feature, cannot label on it
+    if features is not None and not require_manual_others:
         spatial_variance_max = features[11]
         overall_max          = max(features[0], features[3], features[6])
-        is_high_spike        = overall_max > 300        # big spike happened
-        is_uneven            = spatial_variance_max > 80 # only 1 sensor triggered
-
+        is_high_spike        = overall_max > 300
+        is_uneven            = spatial_variance_max > 80
         if is_high_spike and is_uneven:
-            return 2
+            # return as unconfirmed — caller must flag row as auto_labeled
+            return 2  # caller must set TrainingData.auto_labeled=True and require confirmation
 
     # 4. No alcohol
     return 0

@@ -160,23 +160,24 @@ float readMQ3(int pin) {
 // Called by backend when proximity detected (Option B middleman)
 // Optional body: { "row_id": 42 }
 void handleTrigger() {
-  // Parse optional row_id from body
-  targetRowId = -1;
+  // Parse optional row_id from body — parse to incomingId first to avoid overwriting targetRowId on 409 busy
+  int incomingId = -1;
   if (server.hasArg("plain")) {
     StaticJsonDocument<128> doc;
     DeserializationError err = deserializeJson(doc, server.arg("plain"));
     if (!err && doc.containsKey("row_id")) {
-      targetRowId = doc["row_id"].as<int>();
+      incomingId = doc["row_id"].as<int>();
     }
   }
 
   if (isBuffering) {
-    // Already buffering — reject to avoid overlap
-    server.send(409, "application/json",
-      "{\"status\":\"busy\",\"message\":\"Already buffering — wait for current window to finish\"}");
-    Serial.println("⚠ Trigger rejected — already buffering");
+    // Already buffering — reject without clobbering targetRowId
+    String busyBody = "{\"status\":\"busy\",\"message\":\"Already buffering — wait for current window to finish\",\"busy\":true,\"busy_row_id\":" + String(targetRowId) + ",\"incoming_row_id\":" + String(incomingId) + "}";
+    server.send(409, "application/json", busyBody);
+    Serial.println("⚠ Trigger rejected — already buffering (busy_row_id=" + String(targetRowId) + " incoming=" + String(incomingId) + ")");
     return;
   }
+  targetRowId = incomingId;
 
   // Start buffering
   buf1.clear();

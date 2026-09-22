@@ -13,7 +13,13 @@ RIGHT_EYE = [33,  160, 158, 133, 153, 144]
 # Mouth landmarks: corners (61, 291), outer top/bottom (0, 17), inner top/bottom (13, 14)
 MOUTH = [61, 291, 0, 17, 13, 14]
 
-FACE_CLOSE_THRESHOLD = 0.09  # was 0.18/0.12 still too strict for your 1m demo → now medium at 0.058, close at 0.09
+import os as _os
+FACE_CLOSE_THRESHOLD = float(_os.getenv("FACE_CLOSE_THRESHOLD", "0.09"))  # was 0.18/0.12 → now env-configurable slider 0.05-0.15
+FACE_MEDIUM_RATIO = float(_os.getenv("FACE_MEDIUM_RATIO", "0.65"))
+EAR_NORMAL_THRESHOLD = float(_os.getenv("EAR_NORMAL_THRESHOLD", "0.25"))
+EAR_DROWSY_THRESHOLD = float(_os.getenv("EAR_DROWSY_THRESHOLD", "0.20"))
+MAR_YAWN_THRESHOLD = float(_os.getenv("MAR_YAWN_THRESHOLD", "0.55"))
+HEAD_DOWN_PITCH_DEG = float(_os.getenv("HEAD_DOWN_PITCH_DEG", "15.0"))
 
 # Overlay style constants (BGR)
 FONT       = cv2.FONT_HERSHEY_SIMPLEX
@@ -24,11 +30,8 @@ COLOR_BAD  = (60, 60, 230)     # red
 COLOR_TEXT = (245, 245, 245)   # near-white
 COLOR_IDLE = (180, 180, 180)   # grey
 
-# Thresholds — tune these empirically against your own footage
-EAR_NORMAL_THRESHOLD = 0.25
-EAR_DROWSY_THRESHOLD = 0.20
-MAR_YAWN_THRESHOLD   = 0.55
-HEAD_DOWN_PITCH_DEG  = 15.0   # positive pitch ~ chin dropping (nodding off)
+# Thresholds now env-configurable via FACE_* (above); kept for backward compat
+# (duplicate definitions removed — see top)
 
 _MODEL_PATH = os.path.join(
     os.path.dirname(__file__),
@@ -122,7 +125,7 @@ def estimate_proximity(landmarks, w, h):
     # also return raw width for debug/frontend (visible in HUD)
     if face_width_fraction >= FACE_CLOSE_THRESHOLD:
         return "close"
-    elif face_width_fraction >= FACE_CLOSE_THRESHOLD * 0.65:
+    elif face_width_fraction >= FACE_CLOSE_THRESHOLD * FACE_MEDIUM_RATIO:
         return "medium"
     else:
         return "far"

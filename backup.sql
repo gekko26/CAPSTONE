@@ -52,7 +52,11 @@ CREATE TABLE `deployment_logs` (
   `model_version` varchar(50) DEFAULT NULL,
   `estimated_bac` float DEFAULT NULL,
   `bac_tier` varchar(20) DEFAULT NULL,
+  `denial_reason` varchar(20) DEFAULT NULL,
+  `height_offset_cm` float DEFAULT NULL,
+  `reading_id` int(11) DEFAULT NULL,
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_deployment_logs_reading_id` (`reading_id`),
   KEY `fk_deployment_logs_subject` (`subject_id`),
   KEY `ix_deployment_logs_date` (`date`),
   CONSTRAINT `fk_deployment_logs_subject` FOREIGN KEY (`subject_id`) REFERENCES `subjects` (`id`)
@@ -91,6 +95,8 @@ CREATE TABLE `sensor_readings` (
   `date` datetime DEFAULT current_timestamp(),
   `estimated_bac` float DEFAULT NULL,
   `bac_tier` varchar(20) DEFAULT NULL,
+  `denial_reason` varchar(20) DEFAULT NULL,
+  `height_offset_cm` float DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `subject_id` (`subject_id`),
   KEY `ix_sensor_readings_id` (`id`),
@@ -180,12 +186,15 @@ CREATE TABLE `training_data` (
   `sanitizer_ratio` float DEFAULT NULL,
   `spatial_direction` float DEFAULT NULL,
   `trial_id` int(11) DEFAULT NULL,
+  `auto_labeled` tinyint(1) DEFAULT 0,
+  `label_confirmed` tinyint(1) DEFAULT 1,
+  `height_offset_cm` float DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `fk_training_data_subject` (`subject_id`),
   KEY `ix_training_data_date` (`date`),
   KEY `ix_training_data_trial_id` (`trial_id`),
   CONSTRAINT `fk_training_data_subject` FOREIGN KEY (`subject_id`) REFERENCES `subjects` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -195,10 +204,6 @@ CREATE TABLE `training_data` (
 SET @OLD_AUTOCOMMIT=@@AUTOCOMMIT, @@AUTOCOMMIT=0;
 LOCK TABLES `training_data` WRITE;
 /*!40000 ALTER TABLE `training_data` DISABLE KEYS */;
-INSERT INTO `training_data` VALUES
-(1,'2026-09-11 05:41:53',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,0.05,1,NULL,NULL,'/home/whou/CAPSTONE/Backend/data/snapshots/impaired/impaired_1.jpg',0.2584,0.1039,-0.22,NULL,NULL,NULL,1),
-(2,'2026-09-19 01:46:09',NULL,392,385.75,2.6942,786,774.679,8.836,521,504.25,6.4511,1,26,164.013,162.768,34.3,63,0,0,NULL,'clear_air',NULL,NULL,NULL,NULL,NULL,NULL,NULL,2),
-(3,'2026-09-19 01:47:19',NULL,259,256.179,0.8886,431,427.571,1.9898,299,295.714,2.0504,1,26,73.4907,73.2764,34.8,60,0,0,NULL,'clear_air',NULL,NULL,NULL,NULL,NULL,NULL,NULL,3);
 /*!40000 ALTER TABLE `training_data` ENABLE KEYS */;
 UNLOCK TABLES;
 COMMIT;
@@ -249,4 +254,4 @@ SET AUTOCOMMIT=@OLD_AUTOCOMMIT;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*M!100616 SET NOTE_VERBOSITY=@OLD_NOTE_VERBOSITY */;
 
--- Dump completed on 2026-09-19 10:43:55
+-- Dump completed on 2026-09-22 14:24:46

@@ -47,11 +47,14 @@ function Report() {
     { label: "Others", color: "var(--text-muted)", count: sanitizersBlocked },
   ];
 
-  // Real verification event feed from deployment_logs
+  // Real verification event feed from deployment_logs — now shows FIX 7 reason + FIX 8 dedup id + height offset
   const activeLogFeed = logs.slice(0, 6).map((l) => ({
     time: l.date ? new Date(l.date).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }) : "--",
     id: l.id,
+    reading_id: l.reading_id,
     label: l.prediction || "Pass",
+    reason: l.denial_reason || null,
+    height_offset: l.height_offset_cm,
   }));
 
   return (
@@ -120,6 +123,12 @@ function Report() {
               <p className="text-[11px] uppercase font-semibold tracking-wide" style={{ color: "var(--over-text)", opacity: 0.8 }}>Flagged</p>
             </div>
           </div>
+          {stats?.by_reason && (
+            <div className="mt-3 flex gap-2 text-[11px] font-mono justify-center" style={{ color: "var(--text-muted)" }}>
+              <span>alcohol:{stats.by_reason.alcohol}</span> · <span>fatigue:{stats.by_reason.fatigue}</span> · <span>both:{stats.by_reason.both}</span>
+              {stats.deduped ? <span>· deduped:{stats.deduped}/{stats.total}</span> : null}
+            </div>
+          )}
         </Card>
       </div>
 
@@ -139,11 +148,14 @@ function Report() {
               <p className="text-xs text-center py-4" style={{ color: "var(--text-muted)" }}>No deployment events recorded yet</p>
             ) : (
               activeLogFeed.map((r, i) => (
-                <div key={i} className="flex items-center justify-between rounded-xl px-3 py-2 text-xs"
+                <div key={i} className="flex items-center justify-between rounded-xl px-3 py-2 text-xs gap-2"
                      style={{ background: "var(--bg-card-alt)" }}>
                   <span className="font-mono" style={{ color: "var(--text-muted)" }}>{r.time}</span>
-                  <span style={{ color: "var(--text-secondary)" }}>#{r.id}</span>
-                  <StatusBadge label={r.label} />
+                  <span className="flex flex-col items-start">
+                    <span style={{ color: "var(--text-secondary)" }}>#{r.id}{r.reading_id ? ` → R${r.reading_id}` : ""}</span>
+                    {r.reason && <span className="text-[10px] leading-none" style={{ color: "var(--text-muted)" }}>{r.reason}{r.height_offset!=null ? ` · ${r.height_offset>0?'+':''}${Number(r.height_offset).toFixed(1)}cm` : ""}</span>}
+                  </span>
+                  <StatusBadge label={r.reason ? `${r.label} (${r.reason})` : r.label} />
                 </div>
               ))
             )}

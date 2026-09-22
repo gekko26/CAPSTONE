@@ -97,17 +97,31 @@ export default function Deployment() {
     addLog(`Subject detected: ${cvData.identified ? cvData.name : "Unknown"}`, "info");
 
     try {
-      // 1. Trigger ESP32 Hardware (You can modify this to fetch live MQ3 arrays if needed)
-      await fetch(`${BASE}/sensor/trigger`, { method: "POST" }).catch(() => {});
+      // 1. Trigger ESP32 Hardware — capture reading_id for staleness-checked /predict/full
+      let readingId = null;
+      try {
+        const tr = await fetch(`${BASE}/sensor/trigger`, { method: "POST" });
+        if (tr.ok) {
+          const tj = await tr.json();
+          readingId = tj.reading_id || tj.readingId || null;
+        }
+      } catch {}
       
       // 2. Wait 3 seconds for breathalyzer payload
       await new Promise(res => setTimeout(res, 3000));
 
-      // 3. Hit the Deployment Gatekeeper! 
+      // 3. Hit the Deployment Gatekeeper! reading_id is required (FIX 2 staleness check)
+      if (!readingId) {
+        setSystemState("DENIED");
+        setLastResult({ name: cvData.identified ? cvData.name : "Unknown", reason: "Trigger failed — no reading_id", color: "var(--over)", bg: "var(--over-bg)" });
+        addLog("Trigger failed: no reading_id from /sensor/trigger — denied", "error");
+        setTimeout(() => { setSystemState("IDLE"); setLastResult(null); isScanningRef.current = false; }, 5000);
+        return;
+      }
       const fd = new FormData();
       fd.append("file", blob, "frame.jpg");
+      fd.append("reading_id", String(readingId));
       
-      // Note: In production, you'll pass the real MQ3 arrays from your ESP32 here
       const result = await fetch(`${BASE}/predict/full`, { 
         method: "POST", 
         body: fd 
@@ -125,19 +139,33 @@ export default function Deployment() {
           bg: "var(--over-bg)"
         });
         addLog(`Checkpoint error: ${prediction.error || `HTTP ${result.status}`} — denied by fail-closed policy`, "error");
+      } else if (prediction.final_label === "RECAPTURE_NEEDED") {
+        setSystemState("SCANNING");
+        addLog("Recapture needed — please realign", "warn");
+        setTimeout(() => {
+          isScanningRef.current = false;
+        }, 1500);
+        return;
       } else {
         const isImpaired = prediction.final_label === "Over Limit" || prediction.final_label === "Near Limit";
         const isDrowsy = prediction.impaired || prediction.eye_status === "drowsy";
 
         if (isImpaired || isDrowsy) {
+          // FIX 7: use backend denial_reason so fatigue isn't reported as alcohol
+          const dr = prediction.denial_reason || prediction.reason || null;
+          let denyReason = isImpaired ? "Alcohol Detected" : "Fatigue Detected";
+          if (dr === "fatigue") denyReason = "Fatigue Detected";
+          else if (dr === "alcohol") denyReason = "Alcohol Detected";
+          else if (dr === "both") denyReason = "Alcohol + Fatigue Detected";
+          else if (dr === "other") denyReason = "Other Substance Detected";
           setSystemState("DENIED");
           setLastResult({
             name: cvData.identified ? cvData.name : "Unknown",
-            reason: isImpaired ? "Alcohol Detected" : "Fatigue Detected",
+            reason: denyReason + (dr ? ` (${dr})` : ""),
             color: "var(--over)",
             bg: "var(--over-bg)"
           });
-          addLog(`Access Denied: ${cvData.name || "Subject"} (${isImpaired ? "Alcohol" : "Fatigue"})`, "error");
+          addLog(`Access Denied: ${cvData.name || "Subject"} (${denyReason})`, "error");
         } else {
           setSystemState("PASSED");
           setLastResult({

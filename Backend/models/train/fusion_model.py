@@ -2,19 +2,19 @@ import joblib
 import os
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GroupKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, classification_report
 
 # ── Features ───────────────────────────────────────────────────
-# [0] sensor_class       — 0=no alcohol, 1=breath, 2=sanitizer
+# [0] sensor_class       — 0=no alcohol, 1=breath, 2=sanitizer (Others)
 # [1] sensor_confidence  — 0.0 to 1.0
-# [2] visual_class       — 0=sober, 1=drowsy, 2=yawning, 3=impaired (from MobileNet 4-class)
+# [2] visual_class       — 0=sober, 1=fatigue, 2=impaired (from MobileNet 3-class, yawning mar is measurement)
 # [3] visual_confidence  — 0.0 to 1.0
 # [4] ear                — eye aspect ratio from MediaPipe
-# [5] blink_rate         — blinks per second (0.0 if unavailable)
-# [6] temperature        — from ESP32
-# [7] humidity           — from ESP32
+# [5] mar                — mouth aspect ratio (yawning measurement continuous)
+# [6] estimated_bac      — from BAC regressor 0.00-0.40 (primary)
+# [7] temperature        — from ESP32
 
 # ── Labels ─────────────────────────────────────────────────────
 # 0 = pass        (sober, eyes normal)
@@ -31,25 +31,34 @@ FUSION_LABELS = {
 }
 
 
-def train(X, y):
+def train(X, y, groups=None):
     """
-    Train fusion model on combined sensor + CV data.
+    Train fusion model on combined sensor + CV data — no fitted leakage.
 
     Parameters:
         X — list of 8-feature vectors:
             [sensor_class, sensor_confidence,
              visual_class, visual_confidence,
-             ear, blink_rate,
-             temperature, humidity]
+             ear, mar, estimated_bac, temperature]
+             (humidity removed; use estimated_bac primary; mar is yawning measurement)
         y — list of labels (0=pass, 1=near_limit, 2=over_limit)
+        groups — trial_id per row for GroupKFold (prevents same trial in train+test)
 
     Usage:
-        train(X, y)
+        train(X, y, groups)
     """
-    X = np.array(X)
+    X = np.array(X, dtype=float)
     y = np.array(y)
+    groups = np.array(groups) if groups is not None else None
 
-    if len(y) < 10:
+    # GroupKFold when groups available (like sensor), else stratified — prevents trial leakage
+    if groups is not None and len(np.unique(groups)) >= 3:
+        n_splits = min(5, len(np.unique(groups)))
+        gkf = GroupKFold(n_splits=n_splits)
+        train_idx, test_idx = list(gkf.split(X, y, groups))[-1]
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+    elif len(y) < 10:
         X_train, X_test = X, X
         y_train, y_test = y, y
     else:
@@ -96,10 +105,11 @@ def train(X, y):
         "recall":    round(report["macro avg"]["recall"] * 100, 2),
         "f1":        round(report["macro avg"]["f1-score"] * 100, 2),
         "samples":   len(y),
+        "trials":    int(len(np.unique(groups))) if groups is not None else None,
         "confusion_matrix": cm,
         "per_class": {k: {kk: round(vv*100,1) if kk!='support' else vv for kk,vv in vs.items()} for k,vs in report.items() if k in ("Pass","Near limit","Over limit")},
         "feature_importances": [round(float(x),4) for x in fi] if fi else None,
-        "feature_names": ["sensor_class","sensor_conf","visual_class","visual_conf","ear","blink_rate","temp","hum"][:len(fi)] if fi else None,
+        "feature_names": ["sensor_class","sensor_conf","visual_class","visual_conf","ear","mar","estimated_bac","temp"][:len(fi)] if fi else None,
     })
 
     return {"accuracy": round(acc * 100, 2), "confusion_matrix": cm}
@@ -112,24 +122,32 @@ def load():
     return joblib.load(path)
 
 
+def _compute_reason(ear, mar, estimated_bac, visual_class, sensor_class):
+    """FIX 7: Keep underlying trigger visible even though both map to DENY."""
+    bac_driven = bool(estimated_bac is not None and estimated_bac >= 0.05) or sensor_class == 1
+    fatigue_driven = bool((ear is not None and ear < 0.20) or (mar is not None and mar > 0.55) or visual_class == 1)
+    if bac_driven and fatigue_driven:
+        reason = "both"
+    elif bac_driven:
+        reason = "alcohol"
+    elif fatigue_driven:
+        reason = "fatigue"
+    else:
+        reason = "none" if sensor_class == 0 else "alcohol" if sensor_class == 1 else "other"
+    return reason, bac_driven, fatigue_driven
+
+
 def predict_single(
     sensor_class,      sensor_confidence,
     visual_class,      visual_confidence,
-    ear,               blink_rate,
-    temperature,       humidity,
+    ear,               mar,
+    estimated_bac,     temperature,
+    humidity=60.0,
+    blink_rate=0.0,
 ):
     """
-    Make a fusion prediction combining sensor + MobileNet + EAR results.
-
-    Parameters:
-        sensor_class       — from RF/XGBoost ensemble (0, 1, or 2)
-        sensor_confidence  — from RF/XGBoost ensemble (0.0 to 1.0)
-        visual_class       — from MobileNet (0=sober, 1=drowsy, 2=yawning, 3=impaired)
-        visual_confidence  — from MobileNet (0.0 to 1.0)
-        ear                — eye aspect ratio from MediaPipe
-        blink_rate         — blinks per second (pass 0.0 if unavailable)
-        temperature        — from ESP32
-        humidity           — from ESP32
+    Make a fusion prediction combining sensor + MobileNet + EAR+MAR+BAC.
+    FIX 7: returns reason field so fatigue vs alcohol is not conflated.
 
     Returns:
         {
@@ -137,23 +155,40 @@ def predict_single(
             "label":      "over_limit",
             "risk":       "high",
             "action":     "deny",
-            "confidence": 0.91
+            "confidence": 0.91,
+            "reason":     "alcohol" | "fatigue" | "both" | "none",
+            "bac_driven": bool,
+            "fatigue_driven": bool
         }
     """
     model  = load()
     scaler = joblib.load(os.path.join(SAVE_DIR, "fusion_scaler.pkl"))
 
-    X = scaler.transform([[
-        sensor_class,     sensor_confidence,
-        visual_class,     visual_confidence,
-        ear,              blink_rate,
-        temperature,      humidity,
-    ]])
+    # Fusion 8D: sensor_class, sensor_conf, visual_class, visual_conf, ear, mar, estimated_bac, temperature
+    # humidity kept for backward compat but not used in new 8D (old 8D had blink_rate/hum)
+    n_feat = getattr(scaler, 'n_features_in_', 8)
+    if n_feat == 8:
+        # New 8D: mar + estimated_bac replace blink_rate/humidity
+        X = scaler.transform([[
+            sensor_class,     sensor_confidence,
+            visual_class,     visual_confidence,
+            ear,              mar,
+            estimated_bac,    temperature,
+        ]])
+    else:
+        # Legacy fallback: blink_rate/humidity
+        X = scaler.transform([[
+            sensor_class,     sensor_confidence,
+            visual_class,     visual_confidence,
+            ear,              blink_rate,
+            temperature,      humidity,
+        ]])
 
     class_index = int(model.predict(X)[0])
     probs       = model.predict_proba(X)[0]
     confidence  = round(float(probs[class_index]), 4)
     info        = FUSION_LABELS[class_index]
+    reason, bac_driven, fatigue_driven = _compute_reason(ear, mar, estimated_bac, visual_class, sensor_class)
 
     return {
         "class":      class_index,
@@ -161,6 +196,9 @@ def predict_single(
         "risk":       info["risk"],
         "action":     info["action"],
         "confidence": confidence,
+        "reason":     reason,
+        "bac_driven": bac_driven,
+        "fatigue_driven": fatigue_driven,
         "all_probs": {
             FUSION_LABELS[i]["label"]: round(float(p), 4)
             for i, p in enumerate(probs)
@@ -169,16 +207,16 @@ def predict_single(
 
 
 if __name__ == "__main__":
-    print("Fusion model ready. Visual now 4-class (yawning separate).")
+    print("Fusion model ready. Visual 3-class sober/fatigue/impaired, yawning is mar measurement.")
     print("\nFeatures (8 total):")
     print("  [0] sensor_class       — 0=no alcohol, 1=breath, 2=sanitizer")
     print("  [1] sensor_confidence  — 0.0 to 1.0")
-    print("  [2] visual_class       — 0=sober, 1=drowsy, 2=yawning, 3=impaired")
+    print("  [2] visual_class       — 0=sober, 1=fatigue, 2=impaired")
     print("  [3] visual_confidence  — 0.0 to 1.0")
     print("  [4] ear                — eye aspect ratio")
-    print("  [5] blink_rate         — blinks per second")
-    print("  [6] temperature")
-    print("  [7] humidity")
+    print("  [5] mar                — mouth aspect ratio (yawning measurement)")
+    print("  [6] estimated_bac      — 0.00-0.40 primary")
+    print("  [7] temperature")
     print("\nLabels:")
     for idx, info in FUSION_LABELS.items():
         print(f"  {idx} = {info['label']} → action: {info['action']}")

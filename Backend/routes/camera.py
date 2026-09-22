@@ -126,6 +126,47 @@ _last_analysis = None
 JPEG_QUALITY = int(os.getenv("JPEG_QUALITY", "82"))
 JPEG_QUALITY = max(50, min(JPEG_QUALITY, 85))
 
+# ── Proximity config — runtime configurable via PUT /camera/proximity-config
+from models.train import cv_model as _cv
+_prox_lock = threading.Lock()
+
+@router.get("/proximity-config")
+def get_proximity_config():
+    return {
+        "close": float(_cv.FACE_CLOSE_THRESHOLD),
+        "medium_ratio": float(_cv.FACE_MEDIUM_RATIO),
+        "medium": float(_cv.FACE_CLOSE_THRESHOLD * _cv.FACE_MEDIUM_RATIO),
+        "ear_normal": float(_cv.EAR_NORMAL_THRESHOLD),
+        "ear_drowsy": float(_cv.EAR_DROWSY_THRESHOLD),
+        "mar_yawn": float(_cv.MAR_YAWN_THRESHOLD),
+        "pitch_down": float(_cv.HEAD_DOWN_PITCH_DEG),
+    }
+
+@router.put("/proximity-config")
+def put_proximity_config(payload: dict):
+    try:
+        with _prox_lock:
+            if "close" in payload:
+                v = float(payload["close"])
+                if not 0.03 <= v <= 0.30:
+                    raise HTTPException(status_code=400, detail="close must be 0.03-0.30")
+                _cv.FACE_CLOSE_THRESHOLD = v
+            if "medium_ratio" in payload:
+                _cv.FACE_MEDIUM_RATIO = float(payload["medium_ratio"])
+            if "ear_normal" in payload:
+                _cv.EAR_NORMAL_THRESHOLD = float(payload["ear_normal"])
+            if "ear_drowsy" in payload:
+                _cv.EAR_DROWSY_THRESHOLD = float(payload["ear_drowsy"])
+            if "mar_yawn" in payload:
+                _cv.MAR_YAWN_THRESHOLD = float(payload["mar_yawn"])
+            if "pitch_down" in payload:
+                _cv.HEAD_DOWN_PITCH_DEG = float(payload["pitch_down"])
+        return get_proximity_config()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 # ── Overlay cache — decoupled from per-request analysis (C) ─────
 # Background thread calls analyze_frame() at fixed 100-150ms and caches landmarks.
 # GET /stream/frame and /stream/mjpeg read from this cache via lock, so
