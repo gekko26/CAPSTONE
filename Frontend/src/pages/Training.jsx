@@ -348,10 +348,12 @@ export default function Training() {
   const [labelModal, setLabelModal]       = useState(null);
   const [labelBac, setLabelBac]           = useState("");
   const [labelSanitizer, setLabelSanitizer] = useState(false);
+  const [labelSubjectId, setLabelSubjectId] = useState("");
   const [relabelModal, setRelabelModal]   = useState(null);
   const [relabelValue, setRelabelValue]   = useState("0");
   const [relabelSubLabel, setRelabelSubLabel] = useState("");
   const [relabelReason, setRelabelReason] = useState("");
+  const [relabelSubjectId, setRelabelSubjectId] = useState("");
 
   const isCameraEvent = ["alcohol", "perfume", "sober", "drowsy"].includes(activeEvent);
 
@@ -650,11 +652,14 @@ export default function Training() {
   const submitLabel = async () => {
     const bac = parseFloat(labelBac);
     if (isNaN(bac) || bac < 0) { toast("Enter a valid BAC value", "error"); return; }
+    if (labelSubjectId !== "" && (isNaN(parseInt(labelSubjectId)) || parseInt(labelSubjectId) < 0)) { toast("subject_id must be >=0", "error"); return; }
     try {
+      const body = { bac, is_sanitizer: labelSanitizer };
+      if (labelSubjectId !== "") body.subject_id = parseInt(labelSubjectId);
       const r = await fetch(`${BASE}/training/label/${labelModal.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bac, is_sanitizer: labelSanitizer }),
+        body: JSON.stringify(body),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail);
@@ -665,17 +670,20 @@ export default function Training() {
   };
 
   // ── Relabel modal ─────────────────────────────────────────
-  const openRelabelModal = (id, currentLabel, currentSubLabel) => {
+  const openRelabelModal = (id, currentLabel, currentSubLabel, subjectId) => {
     setRelabelModal({ id, currentLabel });
     setRelabelValue(String(currentLabel >= 0 ? currentLabel : 0));
     setRelabelSubLabel(currentSubLabel ?? "");
     setRelabelReason("");
+    setRelabelSubjectId(subjectId != null ? String(subjectId) : "");
   };
 
   const submitRelabel = async () => {
+    if (relabelSubjectId !== "" && (isNaN(parseInt(relabelSubjectId)) || parseInt(relabelSubjectId) < 0)) { toast("subject_id must be >=0", "error"); return; }
     try {
       const body = { label: parseInt(relabelValue), reason: relabelReason || undefined };
       if (relabelValue === "2" && relabelSubLabel) body.sub_label = relabelSubLabel;
+      if (relabelSubjectId !== "") body.subject_id = parseInt(relabelSubjectId);
       const r = await fetch(`${BASE}/training/relabel/${relabelModal.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -1101,7 +1109,7 @@ export default function Training() {
             <thead>
               <tr style={{ borderBottom: "0.5px solid var(--border-subtle)" }}>
                 {[
-                  { h: "ID", w: 52 }, { h: "Trial", w: 50 }, { h: "Date", w: 100 }, { h: "Label", w: 150 },
+                  { h: "ID", w: 52 }, { h: "Subj", w: 50 }, { h: "Trial", w: 50 }, { h: "Date", w: 100 }, { h: "Label", w: 150 },
                   { h: "BAC", w: 50 }, { h: "MQ3-1↑", w: 55 }, { h: "MQ3-2↑", w: 55 },
                   { h: "MQ3-3↑", w: 55 }, { h: "SpVar", w: 55 }, { h: "°C", w: 45 },
                   { h: "%RH", w: 45 }, { h: "Actions", w: 95 },
@@ -1113,9 +1121,9 @@ export default function Training() {
             </thead>
             <tbody>
               {loadingData ? (
-                <tr><td colSpan={12} className="text-center py-10 text-xs" style={{ color: "var(--text-muted)" }}>Loading...</td></tr>
+                <tr><td colSpan={13} className="text-center py-10 text-xs" style={{ color: "var(--text-muted)" }}>Loading...</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={12} className="text-center py-10 text-xs" style={{ color: "var(--text-muted)" }}>No rows</td></tr>
+                <tr><td colSpan={13} className="text-center py-10 text-xs" style={{ color: "var(--text-muted)" }}>No rows</td></tr>
               ) : (
                 filtered.flatMap(row => {
                   const isExpanded  = expandedId === row.id;
@@ -1137,6 +1145,7 @@ export default function Training() {
                           <span className="ml-1 w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block animate-pulse" title="Waiting for ESP32"/>
                         )}
                       </td>
+                      <td className="px-3 py-2.5 text-xs font-mono text-center" style={{ color: "var(--text-muted)" }}>{row.subject_id != null ? row.subject_id : "—"}</td>
                       <td className="px-3 py-2.5 text-xs font-mono" style={{ color: "var(--text-muted)" }} title={`Trial ${row.trial_id ?? "—"}`}>{row.trial_id ?? "—"}</td>
                       <td className="px-3 py-2.5 text-xs" style={{ color: "var(--text-secondary)" }}>{date}</td>
                       <td className="px-3 py-2.5"><LabelBadge label={row.label} subLabel={row.sub_label} bac={row.bac}/></td>
@@ -1154,12 +1163,12 @@ export default function Training() {
                         <div className="flex items-center gap-1">
                           {isPending ? (
                             <button title="Attach label"
-                              onClick={() => { setLabelModal({ id: row.id }); setLabelBac(""); setLabelSanitizer(false); }}
+                              onClick={() => { setLabelModal({ id: row.id }); setLabelBac(""); setLabelSanitizer(false); setLabelSubjectId(row.subject_id != null ? String(row.subject_id) : ""); }}
                               className="p-1.5 rounded border" style={{ borderColor: "var(--near)", color: "var(--near)" }}>
                               <Tag size={11}/>
                             </button>
                           ) : (
-                            <button title="Relabel" onClick={() => openRelabelModal(row.id, row.label, row.sub_label)}
+                            <button title="Relabel" onClick={() => openRelabelModal(row.id, row.label, row.sub_label, row.subject_id)}
                               className="p-1.5 rounded border" style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
                               <Pencil size={11}/>
                             </button>
@@ -1242,6 +1251,13 @@ export default function Training() {
               Mark as sanitizer / perfume event
             </label>
           </div>
+          <div>
+            <label className="block text-xs mb-1.5" style={{ color: "var(--text-muted)" }}>Subject ID (≥0, blank to leave unset)</label>
+            <input type="number" min="0" placeholder="e.g. 1 = Juan, 2 = Maria" value={labelSubjectId}
+              onChange={e => { const v=e.target.value; if(v===""||parseInt(v)>=0) setLabelSubjectId(v); else toast("subject_id must be >=0","error"); }}
+              className="w-full rounded-lg px-3 py-2 text-sm border"
+              style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}/>
+          </div>
           <div className="flex justify-end gap-2 pt-1">
             <button onClick={() => setLabelModal(null)} className="px-3 py-1.5 rounded-lg text-sm border"
               style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>Cancel</button>
@@ -1288,6 +1304,13 @@ export default function Training() {
               placeholder="e.g. misread breathalyzer..."
               className="w-full rounded-lg px-3 py-2 text-sm border resize-none"
               style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}/>
+          </div>
+          <div>
+            <label className="block text-xs mb-1.5" style={{ color: "var(--text-muted)" }}>Subject ID (≥0, blank to leave unset)</label>
+            <input type="number" min="0" placeholder="e.g. 12" value={relabelSubjectId}
+              onChange={e => { const v=e.target.value; if(v===""||parseInt(v)>=0) setRelabelSubjectId(v); else toast("subject_id must be >=0","error"); }}
+              className="w-full rounded-lg px-3 py-2 text-sm border"
+              style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}/>
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <button onClick={() => setRelabelModal(null)} className="px-3 py-1.5 rounded-lg text-sm border"

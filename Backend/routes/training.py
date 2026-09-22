@@ -311,7 +311,7 @@ def receive_sensor_data(data: SensorPayload, db: Session = Depends(get_db)):
     return {"message": "Features synced", "id": parent.id, "trial_id": parent.trial_id, "rows_created": len(created_ids)}
 
 class LabelPayload(BaseModel):
-    bac: float; is_sanitizer: bool = False
+    bac: float; is_sanitizer: bool = False; subject_id: Optional[int] = None
 
 @router.patch("/label/{row_id}")
 def attach_label(row_id: int, payload: LabelPayload, db: Session = Depends(get_db)):
@@ -319,6 +319,10 @@ def attach_label(row_id: int, payload: LabelPayload, db: Session = Depends(get_d
     if not row: raise HTTPException(status_code=404, detail="Not found")
     if row.label == 1:
         row.bac = payload.bac
+        if payload.subject_id is not None:
+            if payload.subject_id < 0:
+                raise HTTPException(status_code=400, detail="subject_id must be >=0")
+            row.subject_id = payload.subject_id
         db.commit()
         return {"id": row.id, "label": row.label, "label_name": LABEL_NAMES[row.label]}
     # Support 18D stored vector for assign_label (needs at least 15)
@@ -331,6 +335,10 @@ def attach_label(row_id: int, payload: LabelPayload, db: Session = Depends(get_d
         pass
     label = sensor_models.assign_label(payload.bac, payload.is_sanitizer, features=stored)
     row.bac, row.label = payload.bac, label
+    if payload.subject_id is not None:
+        if payload.subject_id < 0:
+            raise HTTPException(status_code=400, detail="subject_id must be >=0")
+        row.subject_id = payload.subject_id
     # FIX 4: heuristic auto-label is disabled by default — any label 2 here is manual, mark confirmed
     try:
         row.auto_labeled = False
@@ -340,7 +348,7 @@ def attach_label(row_id: int, payload: LabelPayload, db: Session = Depends(get_d
     return {"id": row.id, "label": label, "label_name": LABEL_NAMES[label]}
 
 class RelabelPayload(BaseModel):
-    label: int; sub_label: Optional[str] = None
+    label: int; sub_label: Optional[str] = None; subject_id: Optional[int] = None; reason: Optional[str] = None
 
 @router.patch("/relabel/{row_id}")
 def relabel(row_id: int, payload: RelabelPayload, db: Session = Depends(get_db)):
@@ -348,6 +356,10 @@ def relabel(row_id: int, payload: RelabelPayload, db: Session = Depends(get_db))
     if not row: raise HTTPException(status_code=404, detail="Not found")
     row.label = payload.label
     if payload.sub_label: row.sub_label = payload.sub_label
+    if payload.subject_id is not None:
+        if payload.subject_id < 0:
+            raise HTTPException(status_code=400, detail="subject_id must be >=0")
+        row.subject_id = payload.subject_id
     db.commit()
     return {"id": row.id, "new_label": LABEL_NAMES[payload.label]}
 
