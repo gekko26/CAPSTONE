@@ -250,10 +250,11 @@ def analyze_frame(frame):
     # Fusion of EAR + MAR + head pose into a single rule-based status.
     # This stays a lightweight pre-trigger heuristic — it does NOT touch
     # the trained fusion RF, which still only consumes sensor + MobileNetV2 outputs.
+    # Unified to 3-class: normal / fatigue (was drowsy) / impaired — fatigue = drowsy(ear)+yawning(mar)+head_down
     if avg_ear > float(EAR_NORMAL_THRESHOLD) and not yawning and not head_down:
         status, impaired = "normal", False
     elif avg_ear > float(EAR_DROWSY_THRESHOLD) or yawning or head_down:
-        status, impaired = "drowsy", True
+        status, impaired = "fatigue", True
     else:
         status, impaired = "impaired", True
     impaired = bool(impaired)
@@ -322,7 +323,8 @@ def draw_overlay(frame, result):
 
     color_status = {
         "normal":   COLOR_OK,
-        "drowsy":   COLOR_WARN,
+        "fatigue":  COLOR_WARN,
+        "drowsy":   COLOR_WARN,  # alias for old rows / cached frontend values
         "impaired": COLOR_BAD,
     }.get(status, COLOR_IDLE)
 
