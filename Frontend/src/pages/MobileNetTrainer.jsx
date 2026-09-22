@@ -47,10 +47,10 @@ export default function MobileNetTrainer() {
         <h1 className="text-lg font-medium" style={{color:"var(--text-primary)"}}>MobileNet Trainer — hidden /mobilenet</h1>
         <span className="text-xs px-2 py-0.5 rounded-full" style={{background:"var(--bg-active)", color:"var(--text-muted)"}}>7GB incremental</span>
       </div>
-      <p className="text-xs" style={{color:"var(--text-muted)"}}>Not in sidebar — URL only. 4 classes 200 each (sober/drowsy/yawning/impaired =800). Batch 8 for 7GB RAM, epochs 5 per hit (resume).</p>
+      <p className="text-xs" style={{color:"var(--text-muted)"}}>Not in sidebar — URL only. <b>3 classes sober/fatigue/impaired =600</b> (fatigue = drowsy(ear)+yawning(mar) aggregated, yawning is mar measurement not class). Batch 8 for 7GB RAM, epochs 5 per hit.</p>
 
-      <div className="grid grid-cols-4 gap-2">
-        {["sober","drowsy","yawning","impaired"].map(k=>(
+      <div className="grid grid-cols-3 gap-2">
+        {["sober","fatigue","impaired"].map(k=>(
           <div key={k} className="rounded-lg p-3 text-center" style={{background:"var(--bg-card)", border:"1px solid var(--border-subtle)"}}>
             <div className="text-xs" style={{color:"var(--text-muted)"}}>{k}</div>
             <div className="text-xl font-medium" style={{color: (faces[k]||0)>=200?"var(--pass)":"var(--near)"}}>{faces[k]??0}/200</div>

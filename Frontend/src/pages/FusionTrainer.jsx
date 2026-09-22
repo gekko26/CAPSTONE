@@ -36,7 +36,7 @@ export default function FusionTrainer() {
         <h1 className="text-lg font-medium" style={{color:"var(--text-primary)"}}>Fusion Trainer — hidden /fusion</h1>
         <span className="text-xs px-2 py-0.5 rounded-full" style={{background:"var(--bg-active)", color:"var(--text-muted)"}}>URL only</span>
       </div>
-      <p className="text-xs" style={{color:"var(--text-muted)"}}>Not in sidebar — URL only. Trains fusion (sensor + visual + EAR → pass/near/over). Uses <b>deployment_logs if available</b> (paired sensor+visual from Live Flow) — if less than 10 logs, it auto-generates a synthetic demo dataset so you can still train/validate. In production, collect via Live Flow for real paired data.</p>
+      <p className="text-xs" style={{color:"var(--text-muted)"}}>Not in sidebar — URL only. Trains fusion <b>from training_data pairs</b> (sensor + visual + mar + BAC → pass/warn/fail), <b>no fitted leakage</b> (GroupKFold by trial_id, separate val). Requires ≥10 paired rows. Frontend `training_data` is source, <b>not</b> `deployment_logs`.</p>
 
       <div className="rounded-xl p-4 flex gap-3 items-center" style={{background:"var(--bg-card)", border:"1px solid var(--border-subtle)"}}>
         <button onClick={train} disabled={training} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50" style={{background:"var(--text-primary)", color:"var(--bg-card)"}}>
@@ -74,7 +74,7 @@ export default function FusionTrainer() {
         </div>
       )}
 
-      <div className="text-xs" style={{color:"var(--text-muted)"}}>No deployment_logs required — will synthesize demo data if none found. For real accuracy, collect paired Live Flow events first.</div>
+      <div className="text-xs" style={{color:"var(--text-muted)"}}>Needs paired <code>training_data</code> rows (sensor+face+BAC). For real accuracy, collect via Training page first.</div>
     </div>
   );
 }
