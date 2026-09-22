@@ -165,8 +165,8 @@ void handleTrigger() {
   if (server.hasArg("plain")) {
     StaticJsonDocument<128> doc;
     DeserializationError err = deserializeJson(doc, server.arg("plain"));
-    if (!err && doc.containsKey("row_id")) {
-      incomingId = doc["row_id"].as<int>();
+    if (!err && (doc.containsKey("row_id") || doc.containsKey("reading_id"))) {
+      incomingId = doc.containsKey("row_id") ? doc["row_id"].as<int>() : doc["reading_id"].as<int>();
     }
   }
 
@@ -258,9 +258,11 @@ void postSensorData() {
   doc["temperature"] = temperature;
   doc["humidity"]    = humidity;
 
-  // Add row_id if provided by backend trigger
+  // Add both row_id and reading_id so training (/training/collect/sensor-data expects row_id)
+  // and deployment (/sensor expects reading_id) both find the field they look for
   if (targetRowId > 0) {
     doc["row_id"] = targetRowId;
+    doc["reading_id"] = targetRowId;
   }
 
   // MQ3 arrays
