@@ -5,6 +5,8 @@ from database.models import Subject
 from models.train.face_recognition import enroll, identify, verify
 from pydantic import BaseModel
 from typing import Optional
+import os
+import shutil
 import numpy as np
 import cv2
 
@@ -232,6 +234,35 @@ def delete_subject(subject_id: int, db: Session = Depends(get_db)):
     db.query(TrainingData).filter(TrainingData.subject_id == subject_id).update({TrainingData.subject_id: None})
     db.query(Reading).filter(Reading.subject_id == subject_id).update({Reading.subject_id: None})
     db.query(DeploymentLog).filter(DeploymentLog.subject_id == subject_id).update({DeploymentLog.subject_id: None})
+    # capture names before delete for filesystem cleanup
+    name_to_delete = subject.name
+    face_id_to_delete = getattr(subject, "face_id", None)
+    avatar_to_delete = getattr(subject, "avatar_path", None)
     db.delete(subject)
     db.commit()
-    return {"message": f"{subject.name} removed"}
+    # --- filesystem cleanup: delete registered folder(s) so deleted person no longer identified ---
+    try:
+        base_registered = os.path.join(os.path.dirname(__file__), "../data/faces/registered")
+        for key in {name_to_delete, face_id_to_delete}:
+            if not key:
+                continue
+            folder = os.path.join(base_registered, key)
+            if os.path.isdir(folder):
+                shutil.rmtree(folder)
+            # legacy flat file registered/Name.jpg
+            flat = os.path.join(base_registered, f"{key}.jpg")
+            if os.path.isfile(flat):
+                os.remove(flat)
+            flat_png = os.path.join(base_registered, f"{key}.png")
+            if os.path.isfile(flat_png):
+                os.remove(flat_png)
+        # bust DeepFace cache — next identify() will rebuild without deleted person
+        pkl = os.path.join(base_registered, "representations_facenet.pkl")
+        if os.path.isfile(pkl):
+            os.remove(pkl)
+        # also remove avatar file if outside registered/
+        if avatar_to_delete and os.path.isfile(avatar_to_delete) and "registered" not in avatar_to_delete:
+            os.remove(avatar_to_delete)
+    except Exception as e:
+        print(f"[DELETE SUBJECT] filesystem cleanup failed for {name_to_delete}: {e}")
+    return {"message": f"{name_to_delete} removed"}
