@@ -75,13 +75,40 @@ def decode_frame(contents: bytes):
     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     return frame
 
-def build_pending_row(label: int, sub_label: str = None, bac: float = None) -> TrainingData:
+def build_pending_row(label: int, sub_label: str = None, bac: float = None,
+                      subject_id: int = None) -> TrainingData:
     # trial_id is assigned after insert (id == trial_id for first row of trial)
-    return TrainingData(label=label, sub_label=sub_label, bac=bac, trial_id=None)
+    return TrainingData(label=label, sub_label=sub_label, bac=bac, trial_id=None,
+                        subject_id=validate_subject_id(subject_id))
+
+
+def validate_subject_id(subject_id):
+    """subject_id is optional, but a negative value is always a client bug."""
+    if subject_id is None:
+        return None
+    subject_id = int(subject_id)
+    if subject_id < 0:
+        raise HTTPException(status_code=400, detail="subject_id must be >= 0")
+    return subject_id
+
+
+def resolve_group_by(rows):
+    """Pick ONE grouping key for a whole training run — never a mix.
+
+    Prefers subject_id so GroupKFold keeps every row from the same person on the
+    same side of the split. Falls back to trial_id (and finally the row id for
+    legacy rows) only when at least one row has no subject_id, because mixing the
+    two keys inside one run would silently destroy the grouping.
+
+    Returns (group_by_name, key_fn).
+    """
+    if rows and all(getattr(r, "subject_id", None) is not None for r in rows):
+        return "subject_id", (lambda r: int(r.subject_id))
+    return "trial_id", (lambda r: r.trial_id if r.trial_id is not None else r.id)
 
 @router.post("/collect/clear_air")
-async def collect_clear_air(db: Session = Depends(get_db)):
-    row = build_pending_row(label=0, sub_label="clear_air", bac=0.00)
+async def collect_clear_air(subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
+    row = build_pending_row(label=0, sub_label="clear_air", bac=0.00, subject_id=subject_id)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -90,13 +117,13 @@ async def collect_clear_air(db: Session = Depends(get_db)):
         row.trial_id = row.id
         db.commit()
     trigger_result = await trigger_esp32_async(row_id=row.id)
-    return {"message": "Clear air baseline triggered", "id": row.id, "trigger": trigger_result}
+    return {"message": "Clear air baseline triggered", "id": row.id, "subject_id": row.subject_id, "trigger": trigger_result}
 
 @router.post("/collect/sober")
-async def collect_sober(background_tasks: BackgroundTasks, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def collect_sober(background_tasks: BackgroundTasks, file: UploadFile = File(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = TrainingData(label=0, sub_label=None, bac=0.00)
+    row = TrainingData(label=0, sub_label=None, bac=0.00, subject_id=validate_subject_id(subject_id))
     try:
         cv = analyze_frame(frame) if frame is not None else {}
         row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
@@ -121,10 +148,10 @@ async def collect_sober(background_tasks: BackgroundTasks, file: UploadFile = Fi
     return {"message": "Sober baseline captured", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
 
 @router.post("/collect/drowsy")
-async def collect_drowsy(background_tasks: BackgroundTasks, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def collect_drowsy(background_tasks: BackgroundTasks, file: UploadFile = File(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = TrainingData(label=0, sub_label="drowsy", bac=0.00)
+    row = TrainingData(label=0, sub_label="drowsy", bac=0.00, subject_id=validate_subject_id(subject_id))
     # capture EAR at collection time for DB consistency
     try:
         cv = analyze_frame(frame) if frame is not None else {}
@@ -152,11 +179,11 @@ async def collect_drowsy(background_tasks: BackgroundTasks, file: UploadFile = F
     return {"message": "Fatigue (drowsy) baseline captured", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
 
 @router.post("/collect/yawning")
-async def collect_yawning(background_tasks: BackgroundTasks, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def collect_yawning(background_tasks: BackgroundTasks, file: UploadFile = File(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     # Deprecated: yawning is mar measurement, not class. Keep endpoint for compat but route to fatigue (drowsy) class.
     contents = await file.read()
     frame = decode_frame(contents)
-    row = TrainingData(label=0, sub_label="yawning", bac=0.00)
+    row = TrainingData(label=0, sub_label="yawning", bac=0.00, subject_id=validate_subject_id(subject_id))
     try:
         cv = analyze_frame(frame) if frame is not None else {}
         row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
@@ -182,10 +209,10 @@ async def collect_yawning(background_tasks: BackgroundTasks, file: UploadFile = 
     return {"message": "Yawning (fatigue) captured — yawning is measurement, stored as fatigue", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
 
 @router.post("/collect/alcohol")
-async def collect_alcohol(background_tasks: BackgroundTasks, file: UploadFile = File(...), bac: float = Form(...), db: Session = Depends(get_db)):
+async def collect_alcohol(background_tasks: BackgroundTasks, file: UploadFile = File(...), bac: float = Form(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = TrainingData(label=1, sub_label=None, bac=bac)
+    row = TrainingData(label=1, sub_label=None, bac=bac, subject_id=validate_subject_id(subject_id))
     try:
         cv = analyze_frame(frame) if frame is not None else {}
         row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
@@ -199,24 +226,35 @@ async def collect_alcohol(background_tasks: BackgroundTasks, file: UploadFile = 
         row.image_path = path
         db.commit()
         background_tasks.add_task(save_snapshot_task, path, frame)
+        # H3: mirror into data/faces/impaired/ so the MobileNet trainer can see the
+        # class. Without this the impaired class can never accumulate training
+        # images, because the trainer globs data/faces/ and not data/snapshots/.
+        try:
+            from pathlib import Path as _P
+            faces_impaired = os.path.join(BASE_DIR, "data", "faces", "impaired")
+            _P(faces_impaired).mkdir(parents=True, exist_ok=True)
+            import cv2 as _cv2
+            _cv2.imwrite(os.path.join(faces_impaired, f"impaired_{row.id}.jpg"), frame)
+        except Exception as _e:
+            print(f"⚠️ [H3] faces/impaired mirror failed for row {row.id}: {_e}")
     trigger_result = await trigger_esp32_async(row_id=row.id)
-    return {"message": "Alcohol captured", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
+    return {"message": "Alcohol captured", "id": row.id, "subject_id": row.subject_id, "image_path": row.image_path, "trigger": trigger_result}
 
 @router.post("/collect/sanitizer")
-async def collect_sanitizer(db: Session = Depends(get_db)):
-    row = build_pending_row(label=2, sub_label="sanitizer", bac=0.00)
+async def collect_sanitizer(subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
+    row = build_pending_row(label=2, sub_label="sanitizer", bac=0.00, subject_id=subject_id)
     db.add(row); db.commit(); db.refresh(row)
     if row.trial_id is None:
         row.trial_id = row.id
         db.commit()
     trigger_result = await trigger_esp32_async(row_id=row.id)
-    return {"message": "Sanitizer context triggered", "id": row.id, "trigger": trigger_result}
+    return {"message": "Sanitizer context triggered", "id": row.id, "subject_id": row.subject_id, "trigger": trigger_result}
 
 @router.post("/collect/perfume")
-async def collect_perfume(background_tasks: BackgroundTasks, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def collect_perfume(background_tasks: BackgroundTasks, file: UploadFile = File(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = TrainingData(label=2, sub_label="perfume", bac=0.00)
+    row = TrainingData(label=2, sub_label="perfume", bac=0.00, subject_id=validate_subject_id(subject_id))
     try:
         cv = analyze_frame(frame) if frame is not None else {}
         row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
@@ -272,6 +310,12 @@ def receive_sensor_data(data: SensorPayload, db: Session = Depends(get_db)):
                 sub_label=parent.sub_label,
                 bac=parent.bac,
                 trial_id=parent.trial_id,
+                # H8: an expanded window row must stay attached to the same person,
+                # otherwise subject-level GroupKFold grouping silently degrades.
+                subject_id=parent.subject_id,
+                ear=parent.ear,
+                mar=parent.mar,
+                head_pitch=parent.head_pitch,
                 image_path=None,
             )
             db.add(row); db.flush()
@@ -478,7 +522,9 @@ def trigger_training(db: Session = Depends(get_db)):
     rows = db.query(TrainingData).filter(TrainingData.label >= 0).all()
     # FIX 4: exclude auto_labeled unconfirmed rows from sensor training
     rows = [r for r in rows if not getattr(r, 'auto_labeled', False) or getattr(r, 'label_confirmed', True)]
-    # Only rows with trial_id can be grouped; fallback to None for legacy rows
+    # One grouping key for the whole run: subject_id when every row has one,
+    # otherwise trial_id. Used for both the classifier and the BAC regressor.
+    group_by, group_key = resolve_group_by(rows)
     X = []
     y = []
     groups = []
@@ -508,21 +554,24 @@ def trigger_training(db: Session = Depends(get_db)):
             feat = base + [0.0, 0.0, 0.0]
         X.append(feat)
         y.append(r.label)
-        groups.append(r.trial_id if r.trial_id is not None else r.id)
+        groups.append(group_key(r))
         # BAC regressor — only breath alcohol with measured BAC
         if r.label == 1 and r.bac is not None and r.bac > 0.001:
             X_bac.append(feat)
             y_bac.append(float(r.bac))
-            g_bac.append(r.trial_id if r.trial_id is not None else r.id)
+            g_bac.append(group_key(r))
     if not X:
-        return {"message": "No data with sensor features", "samples": 0}
+        return {"message": "No data with sensor features", "samples": 0, "group_by": group_by}
     clf_results = sensor_models.train(X, y, groups=groups)
     if isinstance(clf_results, dict) and clf_results.get("error"):
-        return {"error": clf_results["error"], "samples": len(X), "trials": len(set(groups)), "results": clf_results}
+        return {"error": clf_results["error"], "samples": len(X), "trials": len(set(groups)),
+                "group_by": group_by, "results": clf_results}
     bac_results = None
     if X_bac:
         bac_results = sensor_models.train_bac(X_bac, y_bac, groups=g_bac)
-    return {"message": "Training running", "samples": len(X), "trials": len(set(groups)), "results": clf_results, "bac_results": bac_results, "bac_samples": len(X_bac)}
+    return {"message": "Training running", "samples": len(X), "trials": len(set(groups)),
+            "group_by": group_by, "results": clf_results, "bac_results": bac_results,
+            "bac_samples": len(X_bac)}
 
 
 # ── Hidden trainers (URL only) + transparent statistics ────────────────────
@@ -573,9 +622,24 @@ def train_fusion(db: Session = Depends(get_db)):
         import numpy as np
         import cv2, os
 
-        rows = db.query(TrainingData).filter(TrainingData.label>=0, TrainingData.mq3_1_max != None).all()
+        all_rows = db.query(TrainingData).filter(TrainingData.label>=0, TrainingData.mq3_1_max != None).all()
+        # Fusion needs a (sensor window, face image) PAIR per row. clear_air and
+        # sanitizer captures have no face image by design, so they are EXCLUDED,
+        # not refused — only the count of usable pairs gates the run.
+        rows = []
+        excluded = []
+        for r in all_rows:
+            _p = getattr(r, "image_path", None) or ""
+            if _p and os.path.exists(_p):
+                rows.append(r)
+            else:
+                excluded.append(r)
+        pair_counts = {"rows_total": len(all_rows), "rows_paired": len(rows),
+                       "rows_excluded_no_image": len(excluded)}
         if len(rows) < 10:
-            return {"error": f"Not enough paired training_data: {len(rows)} — need 10+ with sensor+visual", "counts": {"rows": len(rows)}}
+            return {"error": (f"Not enough paired training_data: {len(rows)} of {len(all_rows)} rows have an "
+                              "image on disk — need 10+ paired rows (sensor features + face image) for fusion."),
+                    "counts": pair_counts, "group_by": resolve_group_by(rows)[0]}
 
         # FIX A7: refuse a single-class set up front rather than deep inside a
         # half-built feature matrix.
@@ -585,6 +649,9 @@ def train_fusion(db: Session = Depends(get_db)):
                               f"label(s) {distinct_row_labels} — need >= 2 (e.g. clear air and breath "
                               "alcohol). Collect and label more data first."),
                     "labels": distinct_row_labels, "rows": len(rows)}
+
+        # One grouping key for sensor OOF, BAC OOF and the final fusion fit.
+        group_by, group_key = resolve_group_by(rows)
 
         # ---- Build raw sensor feature matrix for OOF ----
         X_sensor = []
@@ -604,7 +671,7 @@ def train_fusion(db: Session = Depends(get_db)):
                     feat = base + [br_calc, sr_calc, sd_calc]
             except Exception:
                 feat = base + [0.0, 0.0, 0.0]
-            X_sensor.append(feat); y_sensor.append(int(r.label)); groups_arr.append(r.trial_id if r.trial_id is not None else r.id)
+            X_sensor.append(feat); y_sensor.append(int(r.label)); groups_arr.append(group_key(r))
 
         X_sensor = np.array(X_sensor, dtype=float); y_sensor = np.array(y_sensor); groups_arr = np.array(groups_arr)
 
@@ -635,8 +702,8 @@ def train_fusion(db: Session = Depends(get_db)):
         missing_oof = [i for i in range(len(rows)) if oof_sensor_class[i] is None]
         if missing_oof:
             return {"error": (f"Fusion refused: {len(missing_oof)} of {len(rows)} rows have no out-of-fold "
-                              "sensor prediction (needs >= 3 distinct trial_id and >= 10 rows). Refusing to "
-                              "substitute the ground-truth label into feature[0]."),
+                              f"sensor prediction (needs >= 3 distinct {group_by} values and >= 10 "
+                              f"rows). Refusing to substitute the ground-truth label into feature[0]."),
                     "missing_oof_rows": len(missing_oof)}
         use_oof = True
 
@@ -666,8 +733,8 @@ def train_fusion(db: Session = Depends(get_db)):
                     "distinct_bac_levels": int(len(distinct_bac))}
         n_bac_splits = min(5, len(np.unique(groups_arr)))
         if n_bac_splits < 2:
-            return {"error": (f"Fusion refused: need >= 2 distinct trial_id for the grouped OOF BAC estimate, "
-                              f"have {len(np.unique(groups_arr))}.")}
+            return {"error": (f"Fusion refused: need >= 2 distinct {group_by} values for the grouped OOF BAC "
+                              f"estimate, have {len(np.unique(groups_arr))}.")}
         oof_bac = [None] * len(rows)
         for tr_i, te_i in GroupKFold(n_splits=n_bac_splits).split(X_sensor, y_bac, groups_arr):
             reg = RandomForestRegressor(n_estimators=100, random_state=42)
@@ -718,17 +785,19 @@ def train_fusion(db: Session = Depends(get_db)):
         for idx, r in enumerate(rows):
             ear = float(r.ear) if r.ear is not None else 0.28
             mar = float(r.mar) if r.mar is not None else 0.30
-            bac_val = float(r.bac)            # ground truth — LABEL ONLY, never a feature
+            bac_val = float(r.bac)            # ground truth — the ONLY input to the label
             bac_est = float(oof_bac[idx])     # FIX A6: feature[6] is the regressor's OOF estimate
-            if bac_val >= 0.05: fl = 2
-            elif bac_val >= 0.01 or (r.ear is not None and r.ear < 0.20) or (r.mar is not None and r.mar > 0.55): fl = 1
-            elif r.label == 2: fl = 0
-            else: fl = 0 if oof_sensor_class[idx]==0 and oof_visual_class[idx]==0 else 1 if oof_visual_class[idx]==1 else 2 if oof_sensor_class[idx]==1 else 0
+            # Label is derived purely from measured BAC. ear/mar and the sensor /
+            # visual classes are INPUT FEATURES ONLY — letting them into the label
+            # rule would make the target depend on the model's own inputs.
+            if bac_val >= 0.05:   fl = 2   # over_limit
+            elif bac_val >= 0.01: fl = 1   # near_limit
+            else:                 fl = 0   # pass
             class_counts[fl] += 1
             # feature[6] = bac_est (estimate). bac_val deliberately does NOT appear here.
             X.append([oof_sensor_class[idx], oof_sensor_conf[idx], oof_visual_class[idx], oof_visual_conf[idx], ear, mar, bac_est, float(r.temperature or 27.0)])
             y.append(fl)
-            groups.append(r.trial_id if r.trial_id is not None else r.id)
+            groups.append(group_key(r))
 
         if sum(1 for c in class_counts.values() if c > 0) < 2:
             return {"error": (f"Fusion refused: rows collapse to a single fusion class. per-class counts "
@@ -739,9 +808,11 @@ def train_fusion(db: Session = Depends(get_db)):
         res = fusion_model.train(X, y, groups=groups if len(set(groups))>=3 else None)
         from models.train.metrics_store import load_metrics
         m = load_metrics().get("fusion", {})
-        return {"message": "Fusion training complete via OOF (sensor_oof, mobilenet_infer, bac_oof — no ground truth in features)",
-                "samples": len(X), "source": "training_data_oof",
+        return {"message": "Fusion training complete via OOF (sensor_oof, mobilenet_infer, bac_oof — label from measured BAC only)",
+                "samples": len(X), "source": "training_data_oof", "counts": pair_counts,
+                "group_by": group_by, "groups": int(len(np.unique(groups_arr))),
                 "oof": {"sensor_oof": use_oof, "visual_oof": True, "bac_oof": True},
+                "label_rule": {"over_limit": ">=0.05", "near_limit": ">=0.01", "pass": "<0.01"},
                 "class_counts": class_counts, "metrics": m, "results": res}
     except Exception as e:
         import traceback

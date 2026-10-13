@@ -355,6 +355,19 @@ export default function Training() {
   const [relabelReason, setRelabelReason] = useState("");
   const [relabelSubjectId, setRelabelSubjectId] = useState("");
 
+  // Single place to hold the subject for the NEXT capture. Sent with every
+  // collect/* request so subject_id is attached at capture time instead of
+  // having to be patched onto each row afterwards. Empty = not captured.
+  const [captureSubjectId, setCaptureSubjectId] = useState("");
+  const captureSubjectRef = useRef(captureSubjectId);
+  useEffect(() => { captureSubjectRef.current = captureSubjectId; }, [captureSubjectId]);
+
+  const appendSubject = (fd) => {
+    const v = captureSubjectRef.current;
+    if (v !== "" && !isNaN(parseInt(v)) && parseInt(v) >= 0) fd.append("subject_id", String(parseInt(v)));
+    return fd;
+  };
+
   const isCameraEvent = ["alcohol", "perfume", "sober", "drowsy"].includes(activeEvent);
 
   // ── Data ──────────────────────────────────────────────────
@@ -496,6 +509,8 @@ export default function Training() {
       const fd = new FormData();
       fd.append("file", blob, "frame.jpg");
       
+      appendSubject(fd);
+
       const liveEvent = activeEventRef.current;
 
       const checkTrigger = (d, rowId) => {
@@ -578,7 +593,8 @@ export default function Training() {
       const liveEvent = activeEventRef.current;
       
       if (liveEvent === "clear_air") {
-        const r = await fetch(`${BASE}/training/collect/clear_air`, { method: "POST" });
+        const cf = appendSubject(new FormData());
+        const r = await fetch(`${BASE}/training/collect/clear_air`, { method: "POST", body: cf });
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || d.error);
         if (d.trigger && d.trigger.busy) {
@@ -586,7 +602,8 @@ export default function Training() {
         }
         toast(`Clear air baseline logged — Row #${d.id}.`);
       } else if (liveEvent === "sanitizer") {
-        const r = await fetch(`${BASE}/training/collect/sanitizer`, { method: "POST" });
+        const sf = appendSubject(new FormData());
+        const r = await fetch(`${BASE}/training/collect/sanitizer`, { method: "POST", body: sf });
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || d.error);
         if (d.trigger && d.trigger.busy) {
@@ -635,10 +652,13 @@ export default function Training() {
     const bac = parseFloat(bacValue);
     if (isNaN(bac) || bac < 0) { toast("Enter a valid BAC value", "error"); return; }
     try {
+      const bacBody = { bac, is_sanitizer: false };
+      const cs = captureSubjectRef.current;
+      if (cs !== "" && !isNaN(parseInt(cs)) && parseInt(cs) >= 0) bacBody.subject_id = parseInt(cs);
       const r = await fetch(`${BASE}/training/label/${bacModal.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bac, is_sanitizer: false }),
+        body: JSON.stringify(bacBody),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail);
@@ -921,6 +941,28 @@ export default function Training() {
               fetch(`${BASE}/camera/proximity-config`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({close:v})}).catch(()=>{});
             }} className="flex-1 accent-[var(--pass)]" title="Face close threshold 0.05-0.15 (0.09 default) — medium = close*0.65"/>
             <span className="text-[10px] font-mono shrink-0" style={{ color: "var(--text-muted)" }}>0.09 close</span>
+          </div>
+
+          {/* ── Subject for the next capture (H8) ── */}
+          <div className="flex items-center gap-2 p-2 rounded-lg border text-xs" style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
+            <span className="text-[11px] uppercase font-medium shrink-0" style={{ color: "var(--text-muted)" }}>Subject</span>
+            <input
+              type="number" min="0" step="1" placeholder="id (blank = none)"
+              value={captureSubjectId}
+              onChange={e => {
+                const v = e.target.value;
+                if (v === "" || (parseInt(v) >= 0 && !isNaN(parseInt(v)))) setCaptureSubjectId(v);
+              }}
+              onBlur={e => {
+                if (e.target.value !== "" && parseInt(e.target.value) < 0) setCaptureSubjectId("");
+              }}
+              className="flex-1 bg-transparent font-mono text-xs outline-none"
+              style={{ color: "var(--text-primary)" }}
+              title="subject_id sent with the next capture. Groups rows per person so training splits never put the same face in train and val."
+            />
+            <span className="text-[10px] font-mono shrink-0" style={{ color: captureSubjectId !== "" ? "var(--pass)" : "var(--text-muted)" }}>
+              {captureSubjectId !== "" ? `→ #${captureSubjectId}` : "not tagged"}
+            </span>
           </div>
           {/* ── REAL-TIME TRANSACTION METRIC PIPELINE VISUALIZER ── */}
           <div className="grid grid-cols-2 gap-2 p-2 rounded-lg border text-xs" 

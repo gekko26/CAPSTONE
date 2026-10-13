@@ -1,4 +1,5 @@
 import os
+import json
 import joblib
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
@@ -284,73 +285,105 @@ def train(X, y, groups=None):
     results = {}
     trained_models = []
 
+    # Original label space, so XGBoost can be remapped and later inverted.
+    classes_present = sorted({int(c) for c in np.unique(y)})
+    fwd = {orig: i for i, orig in enumerate(classes_present)}
+    inv = {i: orig for orig, i in fwd.items()}
+
     for name, base_model in MODELS.items():
         print(f"\nTraining {name}...")
-        # clone model to apply class_weight per run
+        # clone model so per-run class weighting does not leak across models
         import copy
         model = copy.deepcopy(base_model)
 
-        # FIX A2: every model in MODELS must be fitted inside this loop. The
-        # previous version only called fit() in the `elif name == "xgboost"`
-        # branch, so random_forest stayed unfitted and `accuracy` was unbound
-        # on the first iteration -> UnboundLocalError at the results dict.
-        if name == "random_forest":
-            if class_weights is not None:
-                model.set_params(class_weight='balanced')
-            model.fit(X_train, y_train)
-        elif class_weights is not None:
-            # per-row weights for the boosting models
-            sample_weight = np.array([class_weights[int(c)] for c in y_train])
-            model.fit(X_train, y_train, sample_weight=sample_weight)
-        else:
-            model.fit(X_train, y_train)
+        # XGBoost requires contiguous 0..n-1 class labels. If the dataset skips a
+        # class (e.g. {0, 2} because no sanitizer rows exist yet) fit in the
+        # remapped space and persist the inverse map so predict() can undo it.
+        needs_remap = name == "xgboost" and classes_present != list(range(len(classes_present)))
 
-        preds    = model.predict(X_test)
-        accuracy = accuracy_score(y_test, preds)
-
-        # classification_report requires len(target_names) == number of labels
-        # present, so derive both from the labels actually seen (A2 follow-on).
-        names_all = ["No alcohol", "Breath alcohol", "Others"]
-        present   = sorted({int(c) for c in np.unique(y_test)} | {int(c) for c in np.unique(preds)})
-        in_range  = [c for c in present if 0 <= c < len(names_all)]
-        report    = classification_report(
-            y_test, preds,
-            labels=present,
-            target_names=[names_all[c] for c in in_range] if len(in_range) == len(present) else None,
-            output_dict=True,
-            zero_division=0,
-        )
-        cm = confusion_matrix(y_test, preds, labels=[0,1,2])
-        # feature importances transparent (reliability)
         try:
-            fi = model.feature_importances_.tolist() if hasattr(model, 'feature_importances_') else None
-        except Exception:
-            fi = None
-        results[name] = {
-            "accuracy":  round(accuracy * 100, 2),
-            "precision": round(report["macro avg"]["precision"] * 100, 2),
-            "recall":    round(report["macro avg"]["recall"] * 100, 2),
-            "f1":        round(report["macro avg"]["f1-score"] * 100, 2),
-            "samples":   len(y),
-            "trials":    int(len(np.unique(groups))) if groups is not None else None,
-            "confusion_matrix": cm.tolist(),
-            "per_class": {
-                cls: {k: round(v * 100, 1) if k != "support" else v for k, v in stats.items()}
-                for cls, stats in report.items()
-                if cls in ("No alcohol", "Breath alcohol", "Others")
-            },
-            "feature_importances": [round(float(x),4) for x in fi] if fi else None,
-            "feature_names": ["mq1_max","mq1_avg","mq1_std","mq2_max","mq2_avg","mq2_std","mq3_max","mq3_avg","mq3_std","rise_time","decay_time","spatial_var_max","spatial_var_avg","temp","hum","breath_ratio","sanitizer_ratio","spatial_dir"][:len(fi)] if fi else None,
-        }
-        joblib.dump(model, os.path.join(SAVE_DIR, f"{name}.pkl"))
-        trained_models.append(name)
-        print(f"✅ {name} saved — accuracy: {results[name]['accuracy']}%")
+            if needs_remap:
+                y_fit  = np.array([fwd[int(c)] for c in y_train])
+                y_eval = np.array([fwd[int(c)] for c in y_test])
+            else:
+                y_fit, y_eval = y_train, y_test
+
+            # FIX A2: every model in MODELS must be fitted inside this loop.
+            if name == "random_forest":
+                if class_weights is not None:
+                    model.set_params(class_weight='balanced')
+                model.fit(X_train, y_fit)
+            elif class_weights is not None:
+                # per-row weights for the boosting models
+                sample_weight = np.array([class_weights[int(c)] for c in y_train])
+                model.fit(X_train, y_fit, sample_weight=sample_weight)
+            else:
+                model.fit(X_train, y_fit)
+
+            preds    = model.predict(X_test)
+            accuracy = accuracy_score(y_eval, preds)
+
+            # classification_report requires len(target_names) == number of labels
+            # present, so derive both from the labels actually seen.
+            names_all = ["No alcohol", "Breath alcohol", "Others"]
+            present   = sorted({int(c) for c in np.unique(y_eval)} | {int(c) for c in np.unique(preds)})
+            in_range  = [c for c in present if 0 <= c < len(names_all)]
+            report    = classification_report(
+                y_eval, preds,
+                labels=present,
+                target_names=[names_all[c] for c in in_range] if len(in_range) == len(present) else None,
+                output_dict=True,
+                zero_division=0,
+            )
+            cm = confusion_matrix(y_eval, preds, labels=list(range(len(present))))
+            # feature importances transparent (reliability)
+            try:
+                fi = model.feature_importances_.tolist() if hasattr(model, 'feature_importances_') else None
+            except Exception:
+                fi = None
+            results[name] = {
+                "accuracy":  round(accuracy * 100, 2),
+                "precision": round(report["macro avg"]["precision"] * 100, 2),
+                "recall":    round(report["macro avg"]["recall"] * 100, 2),
+                "f1":        round(report["macro avg"]["f1-score"] * 100, 2),
+                "samples":   len(y),
+                "trials":    int(len(np.unique(groups))) if groups is not None else None,
+                "classes_present": classes_present,
+                "label_map": {str(k): int(v) for k, v in inv.items()} if needs_remap else None,
+                "confusion_matrix": cm.tolist(),
+                "per_class": {
+                    cls: {k: round(v * 100, 1) if k != "support" else v for k, v in stats.items()}
+                    for cls, stats in report.items()
+                    if cls in ("No alcohol", "Breath alcohol", "Others")
+                },
+                "feature_importances": [round(float(x),4) for x in fi] if fi else None,
+                "feature_names": ["mq1_max","mq1_avg","mq1_std","mq2_max","mq2_avg","mq2_std","mq3_max","mq3_avg","mq3_std","rise_time","decay_time","spatial_var_max","spatial_var_avg","temp","hum","breath_ratio","sanitizer_ratio","spatial_dir"][:len(fi)] if fi else None,
+            }
+            joblib.dump(model, os.path.join(SAVE_DIR, f"{name}.pkl"))
+            if needs_remap:
+                with open(label_map_path(name), "w") as fh:
+                    json.dump({str(k): int(v) for k, v in inv.items()}, fh, indent=2)
+            trained_models.append(name)
+            print(f"✅ {name} saved — accuracy: {results[name]['accuracy']}%"
+                  + (f"  (labels {classes_present} remapped via {inv})" if needs_remap else ""))
+        except Exception as e:
+            # One broken estimator must not lose the others.
+            msg = f"{type(e).__name__}: {e}"
+            print(f"❌ {name} failed — {msg}")
+            results[name] = {
+                "error": msg,
+                "samples": int(len(y)),
+                "classes_present": classes_present,
+                "label_map": {str(k): int(v) for k, v in inv.items()} if needs_remap else None,
+            }
+            continue
 
     # FIX A2: persist the scaler only once at least one model actually trained,
     # so a failed run can never leave an orphan scaler.pkl beside no model.
     if not trained_models:
         return {"error": "No models were trained — scaler not saved",
-                "samples": int(len(y))}
+                "samples": int(len(y)),
+                "results": results}
     joblib.dump(scaler, os.path.join(SAVE_DIR, "scaler.pkl"))
     print(f"✅ Scaler saved (after {len(trained_models)} model(s): {', '.join(trained_models)})")
 
@@ -370,6 +403,23 @@ def load(model_name="random_forest"):
             f"Model '{model_name}' not found. Train it first by calling train(X, y)"
         )
     return joblib.load(path)
+
+
+def label_map_path(model_name: str) -> str:
+    """Sidecar holding the remapped-index -> original-label inverse map."""
+    return os.path.join(SAVE_DIR, f"{model_name}_label_map.json")
+
+
+def load_label_map(model_name: str):
+    """Return {str(remapped): original_label}, or None when no remap was applied."""
+    path = label_map_path(model_name)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except Exception:
+        return None
 
 
 # ── Continuous sensor-priority prior (Plan A: nose/jaw vs jaw+chest) ──
@@ -525,21 +575,41 @@ def predict(window_1, window_2, window_3,
     probs_raw   = model.predict_proba(X)[0]
     # apply prior if requested (renormalized, p0 untouched per Option A)
     probs       = _apply_sensor_prior(probs_raw, features, use_prior=use_prior)
-    class_index = int(np.argmax(probs))
-    confidence  = round(float(probs[class_index]), 4)
-    label_info  = LABELS[class_index]
+
+    # predict_proba columns are ordered by model.classes_, NOT by original label.
+    # With labels {0, 2} column 1 means label 2, so a bare argmax mislabels.
+    # XGBoost is additionally fitted in a remapped 0..n-1 space (see train()).
+    model_classes = getattr(model, "classes_", None)
+    inv_map       = load_label_map(model_name)
+
+    def _to_label(col):
+        ci = int(model_classes[col]) if (
+            model_classes is not None and col < len(model_classes)) else int(col)
+        if inv_map:
+            ci = int(inv_map.get(str(ci), ci))
+        return ci
+
+    def _name_of(ci):
+        return LABELS.get(ci, {"name": f"Unknown({ci})", "risk": "unknown"})["name"]
+
+    top_col      = int(np.argmax(probs))
+    class_index  = _to_label(top_col)
+    confidence   = round(float(probs[top_col]), 4)
+    label_info   = LABELS.get(class_index, {"name": f"Unknown({class_index})",
+                                            "risk": "unknown", "color": "grey"})
 
     return {
         "class":      class_index,
         "label":      label_info["name"],
         "risk":       label_info["risk"],
         "confidence": confidence,
+        "label_remapped": bool(inv_map),
         "all_probs": {
-            LABELS[i]["name"]: round(float(p), 4)
+            _name_of(_to_label(i)): round(float(p), 4)
             for i, p in enumerate(probs)
         },
         "all_probs_raw": {
-            LABELS[i]["name"]: round(float(p), 4)
+            _name_of(_to_label(i)): round(float(p), 4)
             for i, p in enumerate(probs_raw)
         } if use_prior else None,
         "prior_applied": bool(use_prior),

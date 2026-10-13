@@ -83,10 +83,18 @@ def train(X, y, groups=None):
 
     preds  = model.predict(X_test)
     acc    = accuracy_score(y_test, preds)
+    # classification_report requires len(target_names) == number of labels present.
+    # A fusion run with only 2 populated classes (common before all three tiers are
+    # collected) used to raise here and take the whole trainer down.
+    names_all  = ["Pass", "Near limit", "Over limit"]
+    present    = sorted({int(c) for c in np.unique(y_test)} | {int(c) for c in np.unique(preds)})
+    in_range   = [c for c in present if 0 <= c < len(names_all)]
     report = classification_report(
         y_test, preds,
-        target_names=["Pass", "Near limit", "Over limit"],
+        labels=present,
+        target_names=[names_all[c] for c in in_range] if len(in_range) == len(present) else None,
         output_dict=True,
+        zero_division=0,
     )
 
     cm = None
@@ -190,11 +198,30 @@ def predict_single(
             temperature,      humidity,
         ]])
 
-    class_index = int(model.predict(X)[0])
-    probs       = model.predict_proba(X)[0]
-    confidence  = round(float(probs[class_index]), 4)
-    info        = FUSION_LABELS[class_index]
+    probs_raw  = model.predict_proba(X)[0]
+    top_col    = int(np.argmax(probs_raw))
+    confidence = round(float(probs_raw[top_col]), 4)
+
+    # predict_proba columns are ordered by model.classes_, not by tier index. A model
+    # trained on only two classes (e.g. {0, 2} before any near_limit rows exist) has
+    # classes_ == [0, 2], so a bare argmax returns column 1 and would be read as
+    # near_limit. Map the winning column back through classes_ first.
+    model_classes = getattr(model, "classes_", None)
+    if model_classes is not None and top_col < len(model_classes):
+        class_index = int(model_classes[top_col])
+    else:
+        class_index = top_col
+    class_index = class_index if class_index in FUSION_LABELS else 0
+    info = FUSION_LABELS[class_index]
+
     reason, bac_driven, fatigue_driven = _compute_reason(ear, mar, estimated_bac, visual_class, sensor_class)
+
+    all_probs = {}
+    for col, p in enumerate(probs_raw):
+        ci = int(model_classes[col]) if (
+            model_classes is not None and col < len(model_classes)) else int(col)
+        if ci in FUSION_LABELS:
+            all_probs[FUSION_LABELS[ci]["label"]] = round(float(p), 4)
 
     return {
         "class":      class_index,
@@ -205,10 +232,7 @@ def predict_single(
         "reason":     reason,
         "bac_driven": bac_driven,
         "fatigue_driven": fatigue_driven,
-        "all_probs": {
-            FUSION_LABELS[i]["label"]: round(float(p), 4)
-            for i, p in enumerate(probs)
-        }
+        "all_probs": all_probs
     }
 
 

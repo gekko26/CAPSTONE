@@ -37,3 +37,32 @@ def load_metrics():
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}
+
+
+def describe(entry):
+    """Consumer-side guard for a per-model metrics entry.
+
+    After per-model isolation in sensor_models.train(), a single estimator can fail
+    while the others succeed. That failure is recorded as
+    ``{"error": "...", "samples": n}`` — an entry with NO "accuracy" key. Any
+    consumer that does `entry["accuracy"]` blindly renders "undefined%" or throws.
+
+    Returns ``(ok, payload_or_error)``:
+      ok=True  -> (True, entry)  the normal metrics dict
+      ok=False -> (False, reason) a displayable explanation
+    """
+    if entry is None:
+        return False, "not trained"
+    if not isinstance(entry, dict):
+        return False, f"malformed metrics entry ({type(entry).__name__})"
+    if entry.get("error"):
+        return False, str(entry["error"])
+    if entry.get("accuracy") is None:
+        return False, "trained but no accuracy recorded"
+    return True, entry
+
+
+def is_failed(entry):
+    """True when the entry carries no usable accuracy (missing, None, or an error)."""
+    ok, _ = describe(entry)
+    return not ok

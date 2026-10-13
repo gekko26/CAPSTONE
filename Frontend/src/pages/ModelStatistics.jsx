@@ -4,6 +4,12 @@ import { BarChart3, AlertTriangle, Check, Layers, Cpu, GitMerge } from "lucide-r
 
 function MetricRow({k,v}){ return <div className="flex justify-between py-1.5 border-b last:border-0 text-xs"><span style={{color:"var(--text-muted)"}}>{k}</span><span className="font-mono font-medium" style={{color:"var(--text-primary)"}}>{v}</span></div>; }
 
+// Per-model training isolation can leave an entry like {"error": "...", "samples": n}
+// with no accuracy. Show the reason instead of rendering "undefined%".
+const metricFailed = (e) => !e || e.error || e.accuracy == null;
+const metricFailText = (e) => e?.error || "not trained / no accuracy recorded";
+function MetricErr({e}){ return <div className="text-xs" style={{color:"var(--over)"}}>{metricFailText(e)}</div>; }
+
 export default function ModelStatistics(){
   const [data,setData]=useState(null);
   const [status,setStatus]=useState(null);
@@ -55,37 +61,37 @@ export default function ModelStatistics(){
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="rounded-xl p-4" style={{background:"var(--bg-card)", border:"1px solid var(--border-subtle)"}}>
             <div className="flex items-center gap-1.5 text-sm font-medium mb-2" style={{color:"var(--text-primary)"}}><Cpu size={14}/> Sensor RF (18D Plan A)</div>
-            {rf ? <>
+            {metricFailed(rf) ? <MetricErr e={rf}/> : <>
               <MetricRow k="Accuracy" v={`${rf.accuracy}%`} />
               <MetricRow k="Precision / Recall / F1" v={`${rf.precision}% / ${rf.recall}% / ${rf.f1}%`} />
               <MetricRow k="Samples / Trials" v={`${rf.samples} / ${rf.trials ?? "—"}`} />
               {rf.per_class && Object.entries(rf.per_class).map(([cls,vals])=>(
                 <div key={cls} className="text-xs mt-1" style={{color: vals["f1-score"]<70?"var(--over)":"var(--text-secondary)"}}>{cls}: F1 {vals["f1-score"]}% Prec {vals.precision}% Rec {vals.recall}%</div>
               ))}
-            </> : <div className="text-xs" style={{color:"var(--over)"}}>Not trained</div>}
+            </>}
           </div>
           <div className="rounded-xl p-4" style={{background:"var(--bg-card)", border:"1px solid var(--border-subtle)"}}>
             <div className="flex items-center gap-1.5 text-sm font-medium mb-2" style={{color:"var(--text-primary)"}}><Cpu size={14}/> Sensor XGB</div>
-            {xgb ? <>
+            {metricFailed(xgb) ? <MetricErr e={xgb}/> : <>
               <MetricRow k="Accuracy" v={`${xgb.accuracy}%`} />
               <MetricRow k="Precision / Recall / F1" v={`${xgb.precision}% / ${xgb.recall}% / ${xgb.f1}%`} />
               <MetricRow k="Samples / Trials" v={`${xgb.samples} / ${xgb.trials ?? "—"}`} />
-            </> : <div className="text-xs" style={{color:"var(--over)"}}>Not trained</div>}
+            </>}
           </div>
           <div className="rounded-xl p-4" style={{background:"var(--bg-card)", border:"1px solid var(--border-subtle)"}}>
             <div className="flex items-center gap-1.5 text-sm font-medium mb-2" style={{color:"var(--text-primary)"}}><Layers size={14}/> MobileNet 4-class</div>
-            {mobilenet ? <>
+            {metricFailed(mobilenet) ? <MetricErr e={mobilenet}/> : <>
               <MetricRow k="Accuracy (val)" v={`${mobilenet.accuracy}%`} />
               <MetricRow k="Val loss" v={`${mobilenet.val_loss ?? "—"}`} />
               <MetricRow k="Epochs / Best" v={`${mobilenet.epochs ?? "—"} / ${mobilenet.best_epoch ?? "—"}`} />
               <MetricRow k="Classes" v={`${(mobilenet.classes||[]).join(", ")}`} />
               <MetricRow k="Final val" v={`${mobilenet.final_val_accuracy ?? "—"}%`} />
-            </> : <div className="text-xs" style={{color:"var(--over)"}}>Not trained — hit /mobilenet</div>}
+            </>}
           </div>
           <div className="rounded-xl p-4" style={{background:"var(--bg-card)", border:"1px solid var(--border-subtle)"}}>
             <div className="flex items-center gap-1.5 text-sm font-medium mb-2" style={{color:"var(--text-primary)"}}><GitMerge size={14}/> Fusion + BAC</div>
-            {fusion ? <><MetricRow k="Fusion acc" v={`${fusion.accuracy}%`} /><MetricRow k="Prec/Rec/F1" v={`${fusion.precision}%/${fusion.recall}%/${fusion.f1}%`} /></> : <div className="text-xs" style={{color:"var(--over)"}}>Fusion not trained — /fusion</div>}
-            {bac ? <><MetricRow k="BAC MAE/RMSE/R²" v={`${bac.mae}/${bac.rmse}/${bac.r2}`} /><MetricRow k="BAC tier acc" v={`${bac.tier_accuracy}%`} /></> : <div className="text-xs mt-2" style={{color:"var(--text-muted)"}}>BAC: {bac?.error || "not trained / needs 100+ Breath rows"}</div>}
+            {metricFailed(fusion) ? <MetricErr e={fusion}/> : <><MetricRow k="Fusion acc" v={`${fusion.accuracy}%`} /><MetricRow k="Prec/Rec/F1" v={`${fusion.precision}%/${fusion.recall}%/${fusion.f1}%`} /></>}
+            {bac && bac.mae != null ? <><MetricRow k="BAC MAE/RMSE/R²" v={`${bac.mae}/${bac.rmse}/${bac.r2}`} /><MetricRow k="BAC tier acc" v={`${bac.tier_accuracy}%`} /></> : <div className="text-xs mt-2" style={{color:"var(--text-muted)"}}>BAC: {bac?.error || "not trained / needs 100+ Breath rows"}</div>}
           </div>
         </div>
       )}

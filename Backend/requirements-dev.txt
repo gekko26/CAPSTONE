@@ -1,0 +1,4 @@
+# Development / test-only dependencies.
+# Runtime deps live in requirements.txt and are NOT duplicated here.
+# Install with:  uv pip install --python ./.venv/bin/python -r requirements-dev.txt
+pytest==9.1.1

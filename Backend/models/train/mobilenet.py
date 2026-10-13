@@ -100,6 +100,7 @@ def _collect_subject_split():
     import glob
     from collections import defaultdict
     # Try DB-backed mapping via TrainingData subject_id -> image_path
+    # FIX 6 / H13: DB subject_map — filepath -> subject_key
     subject_map = {}  # filepath -> subject_key
     try:
         from database.db import SessionLocal
@@ -108,11 +109,30 @@ def _collect_subject_split():
         try:
             rows = db.query(TrainingData).filter(TrainingData.image_path != None).all()
             for r in rows:
-                if r.image_path:
-                    # normalize path for glob comparison
-                    key = f"subject_{r.subject_id}" if r.subject_id is not None else f"trial_{r.trial_id}" if r.trial_id is not None else f"row_{r.id}"
-                    subject_map[os.path.abspath(r.image_path)] = key
-                    subject_map[r.image_path] = key
+                if not r.image_path:
+                    continue
+                key = f"subject_{r.subject_id}" if r.subject_id is not None else f"trial_{r.trial_id}" if r.trial_id is not None else f"row_{r.id}"
+                # H13: image_path is stored under data/snapshots/<class>/, but the
+                # trainer globs data/faces/<class>/. Key the map on the snapshot
+                # path AND on the matching data/faces path, normalized via
+                # os.path.realpath, so a globbed file actually resolves.
+                # Previously every file missed the map -> "unknown_<basename>" ->
+                # distinct_subjects == 0 -> unconditional fallback to a leaky
+                # image-level split.
+                raw = r.image_path
+                abspath = os.path.abspath(raw)
+                subject_map[abspath] = key
+                subject_map[os.path.realpath(abspath)] = key
+                # derive the data/faces sibling: .../data/snapshots/<cls>/x.jpg
+                #                             -> .../data/faces/<cls>/x.jpg
+                faces_path = abspath.replace(
+                    os.path.join("data", "snapshots"), os.path.join("data", "faces")
+                ).replace(
+                    os.path.join("snapshots", os.path.basename(os.path.dirname(abspath))),
+                    os.path.join("faces", os.path.basename(os.path.dirname(abspath))),
+                )
+                subject_map[faces_path] = key
+                subject_map[os.path.realpath(faces_path)] = key
         finally:
             db.close()
     except Exception as e:
