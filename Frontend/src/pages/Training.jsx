@@ -362,6 +362,18 @@ export default function Training() {
   const captureSubjectRef = useRef(captureSubjectId);
   useEffect(() => { captureSubjectRef.current = captureSubjectId; }, [captureSubjectId]);
 
+  // TASK 5: last training result (shows group_by + partial-tagging warning) and
+  // subject coverage from GET /training/subject-coverage.
+  const [trainResult, setTrainResult] = useState(null);
+  const [coverage, setCoverage]   = useState(null);
+
+  const loadCoverage = useCallback(async () => {
+    try {
+      const r = await fetch(`${BASE}/training/subject-coverage`);
+      if (r.ok) setCoverage(await r.json());
+    } catch { /* coverage is advisory only */ }
+  }, []);
+
   const appendSubject = (fd) => {
     const v = captureSubjectRef.current;
     if (v !== "" && !isNaN(parseInt(v)) && parseInt(v) >= 0) fd.append("subject_id", String(parseInt(v)));
@@ -387,7 +399,7 @@ export default function Training() {
     finally { setLoadingData(false); }
   }, [toast]);
 
-  const loadAll = useCallback(() => { loadSummary(); loadData(); }, [loadSummary, loadData]);
+  const loadAll = useCallback(() => { loadSummary(); loadData(); loadCoverage(); }, [loadSummary, loadData, loadCoverage]);
   useEffect(() => { loadAll(); }, [loadAll]);
 
   // ── ESP32 ─────────────────────────────────────────────────
@@ -577,7 +589,7 @@ export default function Training() {
       }, 6000);
 
     } catch (e) {
-      toast(e.message || "Capture verification error", "error");
+      toast(readableErr(e, "Capture verification error"), "error");
       setHardwareState("idle");
     } finally {
       setCollectingSync(false);
@@ -686,7 +698,14 @@ export default function Training() {
       toast(`Row #${labelModal.id} → "${d.label_name}"`);
       setLabelModal(null);
       loadAll();
-    } catch (e) { toast(e.message || "Label failed", "error"); }
+    } catch (e) { toast(readableErr(e, "Label failed"), "error"); }
+  };
+
+  // Backend 400 detail, e.g. "subject_id 12 is not enrolled - enroll the person first"
+  const readableErr = (e, fallback) => {
+    const raw = e?.message || "";
+    const m = raw.match(/(subject_id \d+ is not enrolled[^"]*)/);
+    return m ? m[1] : (raw || fallback);
   };
 
   // ── Relabel modal ─────────────────────────────────────────
@@ -714,7 +733,7 @@ export default function Training() {
       toast(`Row #${relabelModal.id} → "${d.new_label}"`);
       setRelabelModal(null);
       loadAll();
-    } catch (e) { toast(e.message || "Relabel failed", "error"); }
+    } catch (e) { toast(readableErr(e, "Relabel failed"), "error"); }
   };
 
   // ── Delete ────────────────────────────────────────────────
@@ -751,8 +770,10 @@ export default function Training() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail);
       const bacMsg = d.bac_results && !d.bac_results.error ? ` · BAC MAE ${d.bac_results.mae} R² ${d.bac_results.r2}` : d.bac_results?.error ? ` · BAC ${d.bac_results.error}` : "";
+      setTrainResult({ group_by: d.group_by, warning: d.warning, samples: d.samples, trials: d.trials });
       toast(`Training complete — ${d.samples} samples${bacMsg}`);
       loadSummary();
+      loadCoverage();
     } catch (e) { toast(e.message || "Training failed", "error"); }
     finally { setTraining(false); }
   };
@@ -964,6 +985,27 @@ export default function Training() {
               {captureSubjectId !== "" ? `→ #${captureSubjectId}` : "not tagged"}
             </span>
           </div>
+
+          {/* ── Subject coverage (TASK 5) ── */}
+          <button
+            onClick={loadCoverage}
+            className="flex items-center gap-2 p-2 rounded-lg border text-xs text-left w-full"
+            style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}
+            title="Click to refresh subject coverage"
+          >
+            <span className="text-[11px] uppercase font-medium shrink-0" style={{ color: "var(--text-muted)" }}>Coverage</span>
+            <span className="font-mono text-[10px]">
+              {coverage
+                ? `${coverage.rows_with_subject_id}/${coverage.rows_considered} tagged · ${coverage.distinct_subjects} subjects`
+                : "—"}
+            </span>
+            {coverage && (
+              <span className="ml-auto text-[10px] font-mono shrink-0"
+                style={{ color: coverage.warning ? "var(--near)" : "var(--text-muted)" }}>
+                groups by {coverage.will_group_by}
+              </span>
+            )}
+          </button>
           {/* ── REAL-TIME TRANSACTION METRIC PIPELINE VISUALIZER ── */}
           <div className="grid grid-cols-2 gap-2 p-2 rounded-lg border text-xs" 
                style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
@@ -1118,6 +1160,29 @@ export default function Training() {
             style={{ background: "var(--text-primary)", color: "var(--bg-card)" }}>
             {training ? <><RefreshCw size={13} className="animate-spin"/> Training...</> : <><Play size={13}/> Run training</>}
           </button>
+          {/* TASK 5: grouping actually used, plus a loud partial-tagging warning */}
+          {trainResult && (
+            <div className="w-full lg:w-auto">
+              <div className="flex items-center gap-2 text-xs flex-wrap">
+                <span className="font-mono" style={{ color: "var(--text-muted)" }}>
+                  grouped by <span style={{ color: "var(--text-primary)" }}>{trainResult.group_by}</span>
+                  {" · "}{trainResult.samples} samples / {trainResult.trials} groups
+                </span>
+              </div>
+              {trainResult.warning && (
+                <div className="mt-1 text-xs px-2 py-1.5 rounded-lg border flex items-start gap-1.5"
+                  style={{ background: "var(--bg-active)", borderColor: "var(--near)" }}>
+                  <AlertTriangle size={12} style={{ color: "var(--near)", flexShrink: 0, marginTop: 1 }}/>
+                  <span style={{ color: "var(--near)" }}>
+                    Partial subject tagging — {trainResult.warning.tagged} tagged, {trainResult.warning.untagged} untagged.
+                    Grouping fell back to <span className="font-mono">trial_id</span>, so the same person can appear in both train and validation.
+                    Untagged rows: {trainResult.warning.untagged_row_ids.join(", ")}
+                    {trainResult.warning.untagged_row_ids.length < trainResult.warning.untagged ? " …" : ""}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

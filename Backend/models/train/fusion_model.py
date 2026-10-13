@@ -1,6 +1,8 @@
 import joblib
 import os
 import numpy as np
+
+from models.train.sensor_models import BAC_OVER_LIMIT
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, GroupKFold
 from sklearn.preprocessing import StandardScaler
@@ -138,7 +140,7 @@ def load():
 
 def _compute_reason(ear, mar, estimated_bac, visual_class, sensor_class):
     """FIX 7: Keep underlying trigger visible even though both map to DENY."""
-    bac_driven = bool(estimated_bac is not None and estimated_bac >= 0.05) or sensor_class == 1
+    bac_driven = bool(estimated_bac is not None and estimated_bac >= BAC_OVER_LIMIT) or sensor_class == 1
     fatigue_driven = bool((ear is not None and ear < 0.20) or (mar is not None and mar > 0.55) or visual_class == 1)
     if bac_driven and fatigue_driven:
         reason = "both"

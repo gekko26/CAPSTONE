@@ -40,20 +40,29 @@ LABELS = {
 # ── PH BAC tiers (inside label 1 only) — RA 10586 0.05% is gate ──────────
 PH_LIMIT = 0.05
 
+# Canonical BAC band edges. Every threshold comparison in the backend must read
+# these instead of repeating a literal, so the tiers cannot drift between the
+# classifier, the fusion label rule and the /training response echo.
+#   pass       bac <  BAC_NEAR_LIMIT
+#   near_limit BAC_NEAR_LIMIT <= bac < BAC_OVER_LIMIT
+#   over_limit bac >= BAC_OVER_LIMIT
+BAC_NEAR_LIMIT = 0.02
+BAC_OVER_LIMIT = PH_LIMIT
+
 BAC_TIERS = {
     "sober": {"range": (0.00, 0.00), "risk": "none",     "ph_verdict": "PASS",    "color": "green",  "label": "Sober"},
     "trace": {"range": (0.01, 0.02), "risk": "low",      "ph_verdict": "PASS",    "color": "yellow", "label": "Trace"},
-    "light": {"range": (0.02, 0.05), "risk": "moderate", "ph_verdict": "PASS",    "color": "yellow", "label": "Light"},
-    "over":  {"range": (0.05, 0.40), "risk": "high",     "ph_verdict": "PH FAIL", "color": "red",    "label": "Over PH Limit"},
+    "light": {"range": (BAC_NEAR_LIMIT, BAC_OVER_LIMIT), "risk": "moderate", "ph_verdict": "PASS", "color": "yellow", "label": "Light"},
+    "over":  {"range": (BAC_OVER_LIMIT, 0.40), "risk": "high",     "ph_verdict": "PH FAIL", "color": "red",    "label": "Over PH Limit"},
 }
 
 def classify_bac_tier(bac: float):
     """Deterministic PH tier inside label 1. Called after regressor."""
     if bac is None or bac <= 0.001:
         return {"tier": "sober", **BAC_TIERS["sober"], "bac": 0.0}
-    if bac < 0.02:
+    if bac < BAC_NEAR_LIMIT:
         return {"tier": "trace", **BAC_TIERS["trace"], "bac": float(bac)}
-    if bac < PH_LIMIT:
+    if bac < BAC_OVER_LIMIT:
         return {"tier": "light", **BAC_TIERS["light"], "bac": float(bac)}
     return {"tier": "over",  **BAC_TIERS["over"],  "bac": float(bac)}
 
@@ -507,8 +516,8 @@ def train_bac(X, bac_y, groups=None):
     r2 = r2_score(y_test, preds_c) if len(y_test) >= 2 else 0.0
     # Tier accuracy (PH)
     def tier_of(v): 
-        if v < 0.02: return "trace"
-        if v < PH_LIMIT: return "light"
+        if v < BAC_NEAR_LIMIT: return "trace"
+        if v < BAC_OVER_LIMIT: return "light"
         return "over"
     tier_acc = sum(tier_of(a) == tier_of(p) for a, p in zip(y_test, preds_c)) / max(len(y_test), 1)
     joblib.dump(reg, os.path.join(SAVE_DIR, BAC_REGRESSOR_FILE))
@@ -621,7 +630,7 @@ if __name__ == "__main__":
     print("\nLabels:")
     for idx, info in LABELS.items():
         print(f"  {idx} = {info['name']} (risk: {info['risk']})")
-    print(f"\nPH limit: {PH_LIMIT} — tiers: trace <0.02 / light <0.05 / over ≥0.05")
+    print(f"\nPH limit: {PH_LIMIT} — tiers: trace <{BAC_NEAR_LIMIT} / light <{BAC_OVER_LIMIT} / over ≥{BAC_OVER_LIMIT}")
     print(f"\n{NUM_FEATURES} Features (Plan A):")
     print("  [0-2]  Nose: max, avg, std")
     print("  [3-5]  Jaw (mouth+neck): max, avg, std")

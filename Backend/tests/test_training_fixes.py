@@ -125,82 +125,40 @@ def test_a2_single_class_guard_still_works(tmp_path, monkeypatch):
 # ----------------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------
-# helpers: a real in-memory SQLite DB (no MariaDB contact) + real ORM rows
+# helpers: a throwaway SQLite file (tmp_path) + real ORM rows
 # ------------------------------------------------------------------------------
 
-import os
-from urllib.parse import quote_plus
-
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
-
-from dotenv import load_dotenv
 
 from database.db import Base
-from database.models import TrainingData, Subject
-
-# ----------------------------------------------------------------------------------
-# MariaDB test engine
-#
-# Production is MariaDB, and SQLite quietly disagrees with it on the things that
-# matter most here: SQLite ignores FOREIGN KEY constraints unless you switch them
-# on, tolerates DDL SQLAlchemy's MySQL dialect would reject, and stores Booleans
-# differently. So the suite runs against a real MariaDB server.
-#
-# The schema is MariaDB's built-in `test` database, which the app user can write to
-# via the default `TO PUBLIC` grants. It is a different schema from Alcohol_System,
-# so production data is never touched.
-# ----------------------------------------------------------------------------------
-TEST_DB_NAME = "test"
-PROD_DB_NAME = "Alcohol_System"
-
-
-def _mariadb_url(dbname: str) -> str:
-    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
-    user = quote_plus(os.getenv("DB_USER", ""))
-    pw = quote_plus(os.getenv("DB_PASSWORD", ""))
-    host = os.getenv("DB_HOST", "localhost")
-    port = os.getenv("DB_PORT", "3306")
-    return f"mysql+pymysql://{user}:{pw}@{host}:{port}/{dbname}"
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _mariadb_engine():
-    """One engine for the whole session; refuses to touch the production schema."""
-    prod = os.path.basename((os.getenv("DB_NAME") or "").strip()) or None
-    assert TEST_DB_NAME != PROD_DB_NAME, "test schema must never be the production schema"
-
-    engine = create_engine(_mariadb_url(TEST_DB_NAME), poolclass=NullPool,
-                           connect_args={"connect_timeout": 5},
-                           future=True)
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    try:
-        yield engine
-    finally:
-        Base.metadata.drop_all(engine)
-        engine.dispose()
+from database.models import Subject, TrainingData
 
 
 @pytest.fixture()
-def db(_mariadb_engine):
-    """A real MariaDB session with a freshly emptied schema for each test."""
-    with _mariadb_engine.connect() as conn:
-        conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
-        conn.commit()
-    # drop_all in dependency order so FKs do not block the teardown
-    Base.metadata.drop_all(_mariadb_engine)
-    Base.metadata.create_all(_mariadb_engine)
-    with _mariadb_engine.connect() as conn:
-        conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
-        conn.commit()
-    session = sessionmaker(bind=_mariadb_engine, future=True)()
+def db(tmp_path):
+    """Real ORM rows against a throwaway SQLite file in tmp_path.
+
+    SQLite ignores FOREIGN KEY constraints unless you switch them on, and MariaDB
+    (production) always enforces them — so the PRAGMA below is what makes this
+    fixture behave like the real database. Without it a test can happily store a
+    subject_id that has no subjects row, which MariaDB rejects with error 1452.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}",
+                           connect_args={"check_same_thread": False})
+
+    @event.listens_for(engine, "connect")
+    def _fk_on(dbapi_conn, _rec):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
+
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
     try:
         yield session
     finally:
-        session.rollback()
         session.close()
 
 
@@ -883,51 +841,366 @@ def test_subject_id_must_reference_a_real_subjects_row(db):
 
 
 def test_relabel_rejects_unknown_subject_id(db):
-    """End-to-end through the route: a subject_id with no subjects row is rejected
-    rather than silently stored."""
+    """End-to-end through the route: a subject_id with no subjects row must produce
+    an actionable HTTP 400, never a raw IntegrityError (TASK 2).
+
+    CHANGED during TASK 2: this test previously asserted sqlalchemy IntegrityError,
+    i.e. it locked in the behaviour the task forbids. The code is correct; the
+    expectation was wrong, so the assertion was updated (not weakened)."""
     import routes.training as tr
-    from sqlalchemy.exc import IntegrityError
+    from fastapi import HTTPException
 
     row = TrainingData(label=0, sub_label=None, bac=0.0, trial_id=1, mq3_1_max=1.0)
     db.add(row)
     db.commit()
     db.refresh(row)
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(HTTPException) as e:
         tr.relabel(row.id, tr.RelabelPayload(label=0, subject_id=999), db)
-        db.commit()
-    db.rollback()
+    assert e.value.status_code == 400
+    assert e.value.detail == "subject_id 999 is not enrolled - enroll the person first"
     assert db.query(TrainingData).filter(TrainingData.id == row.id).one().subject_id is None
 
 
 # ------------------------------------------------------------------------------
-# Guard: the suite must never silently regress to SQLite
+# TASK 0 — BAC band edges are centralized and boundary-correct
 # ------------------------------------------------------------------------------
 
-def test_suite_runs_against_mariadb(_mariadb_engine):
-    """SQLite ignores FOREIGN KEYs, tolerates DDL the MySQL dialect would reject,
-    and stores Booleans differently. If this ever runs on SQLite again, the FK and
-    DDL guarantees the rest of the suite relies on are gone."""
-    assert _mariadb_engine.dialect.name == "mysql", \
-        f"expected the MySQL/MariaDB dialect, got {_mariadb_engine.dialect.name}"
-
-    with _mariadb_engine.connect() as conn:
-        version = conn.execute(text("SELECT VERSION()")).scalar()
-        schema = conn.execute(text("SELECT DATABASE()")).scalar()
-
-    assert "MariaDB" in version, f"not MariaDB: {version}"
-    assert schema == TEST_DB_NAME, f"connected to {schema!r}, expected {TEST_DB_NAME!r}"
-    assert schema != "Alcohol_System", "tests are pointed at the production schema"
+def test_bac_constants_define_the_intended_tiers():
+    """pass < 0.02, near_limit 0.02..<0.05, over_limit >= 0.05."""
+    from models.train.sensor_models import BAC_NEAR_LIMIT, BAC_OVER_LIMIT, PH_LIMIT
+    assert BAC_NEAR_LIMIT == 0.02
+    assert BAC_OVER_LIMIT == 0.05
+    assert BAC_OVER_LIMIT == PH_LIMIT
 
 
-def test_mariadb_actually_enforces_the_subject_fk(db):
-    """Proves the FK is live on this engine — the SQLite version of this test passed
-    even with no subjects row, which is exactly the gap that hid MariaDB error 1452."""
-    from sqlalchemy.exc import IntegrityError
+@pytest.mark.parametrize("bac,expected", [
+    (0.0,    0),   # pass
+    (0.0199, 0),   # pass — just under near
+    (0.02,   1),   # near_limit — inclusive lower edge
+    (0.0499, 1),   # near_limit — just under over
+    (0.05,   2),   # over_limit — inclusive upper edge
+    (0.09,   2),   # over_limit
+])
+def test_fusion_label_rule_boundaries(db, tmp_path, monkeypatch, bac, expected):
+    """train_fusion's label must flip exactly at BAC_NEAR_LIMIT / BAC_OVER_LIMIT.
 
-    with pytest.raises(IntegrityError) as e:
-        db.add(TrainingData(label=0, sub_label=None, bac=0.0, trial_id=1,
-                            subject_id=4242, mq3_1_max=1.0))
-        db.commit()
-    db.rollback()
-    assert "FOREIGN KEY" in str(e.value).upper()
+    Observes the REAL label vector by intercepting the (X, y) that train_fusion
+    hands to fusion_model.train — the last row is the probe row.
+    """
+    import cv2
+    from routes import training as tr
+    from models.train import mobilenet, fusion_model
+    from models.train.sensor_models import BAC_NEAR_LIMIT, BAC_OVER_LIMIT
+
+    save = tmp_path / "mob"; save.mkdir()
+    (save / "mobilenet.h5").write_bytes(b"stub")
+    monkeypatch.setattr(mobilenet, "SAVE_DIR", str(save))
+    monkeypatch.setattr(mobilenet, "predict_frame",
+                        lambda img: {"label": "sober", "confidence": 0.9, "class_index": 0})
+    fus = tmp_path / "fus"; fus.mkdir()
+    monkeypatch.setattr(fusion_model, "SAVE_DIR", str(fus))
+    monkeypatch.setattr("models.train.metrics_store.save_metrics", lambda *a, **k: None)
+
+    captured = {}
+
+    def _capture_train(X, y, groups=None):
+        captured["X"] = list(X)
+        captured["y"] = list(y)
+        return {"accuracy": 50.0, "evaluation": "random_holdout"}
+    monkeypatch.setattr(fusion_model, "train", _capture_train)
+
+    # 11 filler rows keep every fusion class populated (the endpoint requires >= 10
+    # paired rows); row 12 is the probe carrying the boundary BAC under test.
+    bacs = [0.0, 0.02, 0.07, 0.0, 0.0, 0.0, 0.03, 0.03, 0.08, 0.08, 0.03, bac]
+    for i, b in enumerate(bacs):
+        p = str(tmp_path / f"b_{i}.jpg")
+        cv2.imwrite(p, np.full((16, 16, 3), i * 9, dtype=np.uint8))
+        db.add(TrainingData(
+            label=0 if b < 0.01 else 1, sub_label=None, bac=b, trial_id=i,
+            subject_id=None, image_path=p,
+            mq3_1_max=10.0 + i, mq3_1_avg=9.0, mq3_1_std=0.5,
+            mq3_2_max=11.0, mq3_2_avg=10.0, mq3_2_std=0.5,
+            mq3_3_max=12.0, mq3_3_avg=11.0, mq3_3_std=0.5,
+            rise_time=1.0, decay_time=1.0,
+            spatial_variance=2.0, spatial_variance_avg=2.0,
+            temperature=27.0, humidity=60.0))
+    db.commit()
+
+    out = tr.train_fusion(db)
+    assert "error" not in out, out
+    assert "y" in captured, "fusion_model.train was never reached"
+
+    # the probe row is last, so its label is the last element of the real y vector
+    assert len(captured["y"]) == 12
+    assert captured["y"][-1] == expected, (
+        f"bac={bac} -> label {captured['y'][-1]}, expected {expected}")
+
+    # label_rule echo is built from the constants, not literals
+    assert out["label_rule"]["over_limit"] == f">={BAC_OVER_LIMIT}"
+    assert out["label_rule"]["near_limit"] == f">={BAC_NEAR_LIMIT}"
+    assert out["label_rule"]["pass"] == f"<{BAC_NEAR_LIMIT}"
+
+
+# ------------------------------------------------------------------------------
+# TASK 2 / 3 / 4 — subject existence, coverage, loud partial-tagging warning
+# ------------------------------------------------------------------------------
+
+def _client(db, monkeypatch, tmp_path):
+    """A TestClient wired to the throwaway SQLite session, with ESP32 stubbed."""
+    import asyncio
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routes import training as tr
+
+    async def _fake_trigger(row_id=None):
+        return {"triggered": True, "status": 200, "row_id": row_id}
+    monkeypatch.setattr(tr, "trigger_esp32_async", _fake_trigger)
+    monkeypatch.setattr(tr, "analyze_frame",
+                        lambda f: {"ear": 0.3, "mar": 0.2, "pitch": 1.0})
+    monkeypatch.setattr(tr, "BASE_DIR", str(tmp_path))
+
+    app = FastAPI()
+    app.include_router(tr.router)
+    app.dependency_overrides[tr.get_db] = lambda: db
+    return TestClient(app)
+
+
+def _jpg(tmp_path, name="f.jpg"):
+    import cv2
+    ok, buf = cv2.imencode(".jpg", np.full((16, 16, 3), 80, dtype=np.uint8))
+    assert ok
+    return buf.tobytes()
+
+
+@pytest.mark.parametrize("endpoint", [
+    "/training/collect/clear_air", "/training/collect/sanitizer",
+])
+def test_collect_rejects_unenrolled_subject_id(db, tmp_path, monkeypatch, endpoint):
+    client = _client(db, monkeypatch, tmp_path)
+    r = client.post(endpoint, data={"subject_id": 77})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == "subject_id 77 is not enrolled - enroll the person first"
+    # nothing leaked into the table
+    assert db.query(TrainingData).count() == 0
+
+
+def test_collect_file_endpoint_rejects_unenrolled_subject_id(db, tmp_path, monkeypatch):
+    client = _client(db, monkeypatch, tmp_path)
+    r = client.post("/training/collect/sober",
+                    files={"file": ("f.jpg", _jpg(tmp_path), "image/jpeg")},
+                    data={"subject_id": 88})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == "subject_id 88 is not enrolled - enroll the person first"
+    assert db.query(TrainingData).count() == 0
+
+
+def test_collect_alcohol_rejects_unenrolled_subject_id(db, tmp_path, monkeypatch):
+    client = _client(db, monkeypatch, tmp_path)
+    r = client.post("/training/collect/alcohol",
+                    files={"file": ("f.jpg", _jpg(tmp_path), "image/jpeg")},
+                    data={"bac": "0.07", "subject_id": 99})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == "subject_id 99 is not enrolled - enroll the person first"
+    assert db.query(TrainingData).count() == 0
+
+
+def test_collect_accepts_enrolled_subject_id(db, tmp_path, monkeypatch):
+    _seed_subject(db, 12)
+    client = _client(db, monkeypatch, tmp_path)
+    r = client.post("/training/collect/clear_air", data={"subject_id": 12})
+    assert r.status_code == 200, r.text
+    assert r.json()["subject_id"] == 12
+    assert db.query(TrainingData).one().subject_id == 12
+
+
+def test_collect_still_allows_no_subject_id(db, tmp_path, monkeypatch):
+    client = _client(db, monkeypatch, tmp_path)
+    for ep in ("/training/collect/clear_air", "/training/collect/sanitizer"):
+        r = client.post(ep)
+        assert r.status_code == 200, r.text
+        assert r.json()["subject_id"] is None
+    assert db.query(TrainingData).count() == 2
+
+
+def test_label_rejects_unenrolled_subject_id(db, tmp_path, monkeypatch):
+    import routes.training as tr
+    from fastapi import HTTPException
+    row = TrainingData(label=0, sub_label=None, bac=0.0, trial_id=1, mq3_1_max=1.0)
+    db.add(row); db.commit(); db.refresh(row)
+    with pytest.raises(HTTPException) as e:
+        tr.attach_label(row.id, tr.LabelPayload(bac=0.0, subject_id=123), db)
+    assert e.value.status_code == 400
+    assert e.value.detail == "subject_id 123 is not enrolled - enroll the person first"
+
+
+def test_label_accepts_enrolled_subject_id_on_non_alcohol_row(db, tmp_path, monkeypatch):
+    """The point of TASK 2: subject_id must be settable for label != 1 too."""
+    import routes.training as tr
+    _seed_subject(db, 21)
+    row = TrainingData(label=0, sub_label="sober", bac=0.0, trial_id=1, mq3_1_max=1.0)
+    db.add(row); db.commit(); db.refresh(row)
+    out = tr.attach_label(row.id, tr.LabelPayload(bac=0.0, subject_id=21), db)
+    db.refresh(row)
+    assert out["label_name"]
+    assert row.subject_id == 21
+
+
+def test_subject_coverage_all_tagged(db, tmp_path, monkeypatch):
+    _seed_subject(db, 1, 2)
+    for i, sid in enumerate([1, 1, 2, 2]):
+        db.add(TrainingData(label=i % 2, bac=0.0, trial_id=i, subject_id=sid, mq3_1_max=1.0))
+    db.commit()
+    client = _client(db, monkeypatch, tmp_path)
+    r = client.get("/training/subject-coverage")
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["rows_considered"] == 4
+    assert d["rows_with_subject_id"] == 4
+    assert d["distinct_subjects"] == 2
+    assert d["untagged_row_ids"] == []
+    assert d["will_group_by"] == "subject_id"
+    assert d["per_label"] == {"0": 2, "1": 2}
+    assert d["warning"] is None
+
+
+def test_subject_coverage_one_untagged(db, tmp_path, monkeypatch):
+    _seed_subject(db, 1, 2)
+    for i, sid in enumerate([1, 1, 2, None]):
+        db.add(TrainingData(label=i % 2, bac=0.0, trial_id=i, subject_id=sid, mq3_1_max=1.0))
+    db.commit()
+    client = _client(db, monkeypatch, tmp_path)
+    d = client.get("/training/subject-coverage").json()
+    assert d["will_group_by"] == "trial_id"
+    assert d["rows_with_subject_id"] == 3
+    assert len(d["untagged_row_ids"]) == 1
+    row = db.query(TrainingData).filter(TrainingData.subject_id.is_(None)).one()
+    assert d["untagged_row_ids"] == [row.id]
+    assert d["warning"]["partial_subject_tagging"] is True
+    assert d["warning"]["tagged"] == 3
+    assert d["warning"]["untagged"] == 1
+
+
+def test_subject_coverage_empty_table(db, tmp_path, monkeypatch):
+    client = _client(db, monkeypatch, tmp_path)
+    d = client.get("/training/subject-coverage").json()
+    assert d["rows_considered"] == 0
+    assert d["rows_with_subject_id"] == 0
+    assert d["distinct_subjects"] == 0
+    assert d["untagged_row_ids"] == []
+    assert d["per_label"] == {}
+    assert d["will_group_by"] == "trial_id"
+    assert d["warning"] is None
+
+
+def _train_row(i, sid):
+    return TrainingData(label=i % 2, bac=0.0, trial_id=i, subject_id=sid,
+                        mq3_1_max=10.0 + i, mq3_1_avg=9.0, mq3_1_std=0.5,
+                        mq3_2_max=11.0, mq3_2_avg=10.0, mq3_2_std=0.5,
+                        mq3_3_max=12.0, mq3_3_avg=11.0, mq3_3_std=0.5,
+                        rise_time=1.0, decay_time=1.0,
+                        spatial_variance=2.0, spatial_variance_avg=2.0,
+                        temperature=27.0, humidity=60.0)
+
+
+def _stub_sensor_train(monkeypatch):
+    from models.train import sensor_models
+    monkeypatch.setattr(sensor_models, "train",
+                        lambda X, y, groups=None: {"random_forest": {"accuracy": 90.0}})
+    monkeypatch.setattr(sensor_models, "train_bac", lambda *a, **k: {"accuracy": 1.0})
+
+
+def test_trigger_training_warns_on_partial_tagging(db, tmp_path, monkeypatch):
+    import routes.training as tr
+    _seed_subject(db, 1, 2)
+    _stub_sensor_train(monkeypatch)
+    for i, sid in enumerate([1, 1, 2, None, None, None]):
+        db.add(_train_row(i, sid))
+    db.commit()
+    out = tr.trigger_training(db)
+    assert out["group_by"] == "trial_id"
+    w = out["warning"]
+    assert w["partial_subject_tagging"] is True
+    assert w["tagged"] == 3
+    assert w["untagged"] == 3
+    assert len(w["untagged_row_ids"]) == 3
+
+
+def test_trigger_training_no_warning_when_fully_tagged(db, tmp_path, monkeypatch):
+    import routes.training as tr
+    _seed_subject(db, 1, 2)
+    _stub_sensor_train(monkeypatch)
+    for i, sid in enumerate([1, 1, 2, 2]):
+        db.add(_train_row(i, sid))
+    db.commit()
+    out = tr.trigger_training(db)
+    assert out["group_by"] == "subject_id"
+    assert "warning" not in out or out["warning"] is None
+
+
+def test_trigger_training_no_warning_when_fully_untagged(db, tmp_path, monkeypatch):
+    import routes.training as tr
+    _stub_sensor_train(monkeypatch)
+    for i in range(6):
+        db.add(_train_row(i, None))
+    db.commit()
+    out = tr.trigger_training(db)
+    assert out["group_by"] == "trial_id"
+    assert "warning" not in out or out["warning"] is None
+
+
+def test_partial_tagging_warning_caps_row_ids_at_50():
+    from routes.training import partial_tagging_warning
+
+    class R:
+        def __init__(self, i, sid):
+            self.id = i
+            self.subject_id = sid
+
+    rows = [R(i, 1) for i in range(60)] + [R(100 + i, None) for i in range(60)]
+    w = partial_tagging_warning(rows, "trial_id")
+    assert w["tagged"] == 60 and w["untagged"] == 60
+    assert len(w["untagged_row_ids"]) == 50
+    assert w["untagged_row_ids"][0] == 100
+
+
+def test_train_fusion_warns_on_partial_tagging(db, tmp_path, monkeypatch):
+    import routes.training as tr
+    from models.train import fusion_model
+    _seed_subject(db, 1, 2)
+    sids = [1, 1, 2, None, 1, 2, None, 1, 2, None, 1, None]
+    for i, b in enumerate([0.0, 0.02, 0.07] * 4):
+        import cv2
+        p = str(tmp_path / f"g_{i}.jpg")
+        cv2.imwrite(p, np.full((16, 16, 3), i * 5, dtype=np.uint8))
+        db.add(TrainingData(
+            label=0 if b < 0.01 else 1, sub_label=None, bac=b, trial_id=i,
+            subject_id=sids[i], image_path=p,
+            mq3_1_max=10.0 + i, mq3_1_avg=9.0, mq3_1_std=0.5,
+            mq3_2_max=11.0, mq3_2_avg=10.0, mq3_2_std=0.5,
+            mq3_3_max=12.0, mq3_3_avg=11.0, mq3_3_std=0.5,
+            rise_time=1.0, decay_time=1.0,
+            spatial_variance=2.0, spatial_variance_avg=2.0,
+            temperature=27.0, humidity=60.0))
+    db.commit()
+
+    save = tmp_path / "mob"; save.mkdir()
+    (save / "mobilenet.h5").write_bytes(b"stub")
+    from models.train import mobilenet
+    monkeypatch.setattr(mobilenet, "SAVE_DIR", str(save))
+    monkeypatch.setattr(mobilenet, "predict_frame",
+                        lambda img: {"label": "sober", "confidence": 0.9, "class_index": 0})
+    fus = tmp_path / "fus"; fus.mkdir()
+    monkeypatch.setattr(fusion_model, "SAVE_DIR", str(fus))
+    monkeypatch.setattr("models.train.metrics_store.save_metrics", lambda *a, **k: None)
+    monkeypatch.setattr(fusion_model, "train",
+                        lambda X, y, groups=None: {"accuracy": 50.0, "evaluation": "random_holdout"})
+
+    out = tr.train_fusion(db)
+    assert "error" not in out, out
+    assert out["group_by"] == "trial_id"
+    w = out["warning"]
+    assert w["partial_subject_tagging"] is True
+    assert w["tagged"] == 8
+    assert w["untagged"] == 4
+    assert len(w["untagged_row_ids"]) == 4

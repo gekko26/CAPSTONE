@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form, B
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from database.db import get_db
-from database.models import TrainingData
+from database.models import Subject, TrainingData
 from models.train import sensor_models
+from models.train.sensor_models import BAC_NEAR_LIMIT, BAC_OVER_LIMIT
 from models.train.cv_model import analyze_frame
 from pydantic import BaseModel
 from typing import List, Optional
@@ -76,19 +77,31 @@ def decode_frame(contents: bytes):
     return frame
 
 def build_pending_row(label: int, sub_label: str = None, bac: float = None,
-                      subject_id: int = None) -> TrainingData:
+                      subject_id: int = None, db: Session = None) -> TrainingData:
     # trial_id is assigned after insert (id == trial_id for first row of trial)
     return TrainingData(label=label, sub_label=sub_label, bac=bac, trial_id=None,
-                        subject_id=validate_subject_id(subject_id))
+                        subject_id=validate_subject_id(subject_id, db))
 
 
-def validate_subject_id(subject_id):
-    """subject_id is optional, but a negative value is always a client bug."""
+def validate_subject_id(subject_id, db: Session = None):
+    """Validate a subject_id and, when a session is available, that it is enrolled.
+
+    training_data.subject_id carries a real FK to subjects(id) on MariaDB, so an
+    unknown id would otherwise surface as a raw IntegrityError (error 1452). Check
+    it up front and return an actionable 400 instead. subject_id=None stays
+    allowed — untagged rows are legitimate.
+    """
     if subject_id is None:
         return None
     subject_id = int(subject_id)
     if subject_id < 0:
         raise HTTPException(status_code=400, detail="subject_id must be >= 0")
+    if db is not None:
+        exists = db.query(Subject.id).filter(Subject.id == subject_id).first()
+        if exists is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"subject_id {subject_id} is not enrolled - enroll the person first")
     return subject_id
 
 
@@ -106,9 +119,31 @@ def resolve_group_by(rows):
         return "subject_id", (lambda r: int(r.subject_id))
     return "trial_id", (lambda r: r.trial_id if r.trial_id is not None else r.id)
 
+
+def partial_tagging_warning(rows, group_by):
+    """Loud warning when grouping silently degrades to trial_id despite partial tags.
+
+    Returns None for a fully tagged run (group_by == subject_id) and for a fully
+    untagged run (no subject_id anywhere) — neither is a surprise. Returns the
+    warning payload only when SOME but NOT ALL rows are tagged, because that is the
+    case where the operator believes grouping is person-scoped when it is not.
+    """
+    if group_by == "subject_id":
+        return None
+    tagged = [r for r in rows if getattr(r, "subject_id", None) is not None]
+    if not tagged:
+        return None
+    untagged = [r for r in rows if getattr(r, "subject_id", None) is None]
+    return {
+        "partial_subject_tagging": True,
+        "tagged": len(tagged),
+        "untagged": len(untagged),
+        "untagged_row_ids": [r.id for r in untagged[:50]],
+    }
+
 @router.post("/collect/clear_air")
 async def collect_clear_air(subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
-    row = build_pending_row(label=0, sub_label="clear_air", bac=0.00, subject_id=subject_id)
+    row = build_pending_row(label=0, sub_label="clear_air", bac=0.00, subject_id=subject_id, db=db)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -123,7 +158,7 @@ async def collect_clear_air(subject_id: Optional[int] = Form(None), db: Session 
 async def collect_sober(background_tasks: BackgroundTasks, file: UploadFile = File(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = TrainingData(label=0, sub_label=None, bac=0.00, subject_id=validate_subject_id(subject_id))
+    row = TrainingData(label=0, sub_label=None, bac=0.00, subject_id=validate_subject_id(subject_id, db))
     try:
         cv = analyze_frame(frame) if frame is not None else {}
         row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
@@ -151,7 +186,7 @@ async def collect_sober(background_tasks: BackgroundTasks, file: UploadFile = Fi
 async def collect_drowsy(background_tasks: BackgroundTasks, file: UploadFile = File(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = TrainingData(label=0, sub_label="drowsy", bac=0.00, subject_id=validate_subject_id(subject_id))
+    row = TrainingData(label=0, sub_label="drowsy", bac=0.00, subject_id=validate_subject_id(subject_id, db))
     # capture EAR at collection time for DB consistency
     try:
         cv = analyze_frame(frame) if frame is not None else {}
@@ -183,7 +218,7 @@ async def collect_yawning(background_tasks: BackgroundTasks, file: UploadFile = 
     # Deprecated: yawning is mar measurement, not class. Keep endpoint for compat but route to fatigue (drowsy) class.
     contents = await file.read()
     frame = decode_frame(contents)
-    row = TrainingData(label=0, sub_label="yawning", bac=0.00, subject_id=validate_subject_id(subject_id))
+    row = TrainingData(label=0, sub_label="yawning", bac=0.00, subject_id=validate_subject_id(subject_id, db))
     try:
         cv = analyze_frame(frame) if frame is not None else {}
         row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
@@ -212,7 +247,7 @@ async def collect_yawning(background_tasks: BackgroundTasks, file: UploadFile = 
 async def collect_alcohol(background_tasks: BackgroundTasks, file: UploadFile = File(...), bac: float = Form(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = TrainingData(label=1, sub_label=None, bac=bac, subject_id=validate_subject_id(subject_id))
+    row = TrainingData(label=1, sub_label=None, bac=bac, subject_id=validate_subject_id(subject_id, db))
     try:
         cv = analyze_frame(frame) if frame is not None else {}
         row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
@@ -242,7 +277,7 @@ async def collect_alcohol(background_tasks: BackgroundTasks, file: UploadFile = 
 
 @router.post("/collect/sanitizer")
 async def collect_sanitizer(subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
-    row = build_pending_row(label=2, sub_label="sanitizer", bac=0.00, subject_id=subject_id)
+    row = build_pending_row(label=2, sub_label="sanitizer", bac=0.00, subject_id=subject_id, db=db)
     db.add(row); db.commit(); db.refresh(row)
     if row.trial_id is None:
         row.trial_id = row.id
@@ -254,7 +289,7 @@ async def collect_sanitizer(subject_id: Optional[int] = Form(None), db: Session 
 async def collect_perfume(background_tasks: BackgroundTasks, file: UploadFile = File(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
-    row = TrainingData(label=2, sub_label="perfume", bac=0.00, subject_id=validate_subject_id(subject_id))
+    row = TrainingData(label=2, sub_label="perfume", bac=0.00, subject_id=validate_subject_id(subject_id, db))
     try:
         cv = analyze_frame(frame) if frame is not None else {}
         row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
@@ -361,11 +396,10 @@ class LabelPayload(BaseModel):
 def attach_label(row_id: int, payload: LabelPayload, db: Session = Depends(get_db)):
     row = db.query(TrainingData).filter(TrainingData.id == row_id).first()
     if not row: raise HTTPException(status_code=404, detail="Not found")
+    validate_subject_id(payload.subject_id, db)
     if row.label == 1:
         row.bac = payload.bac
         if payload.subject_id is not None:
-            if payload.subject_id < 0:
-                raise HTTPException(status_code=400, detail="subject_id must be >=0")
             row.subject_id = payload.subject_id
         db.commit()
         return {"id": row.id, "label": row.label, "label_name": LABEL_NAMES[row.label]}
@@ -380,8 +414,6 @@ def attach_label(row_id: int, payload: LabelPayload, db: Session = Depends(get_d
     label = sensor_models.assign_label(payload.bac, payload.is_sanitizer, features=stored)
     row.bac, row.label = payload.bac, label
     if payload.subject_id is not None:
-        if payload.subject_id < 0:
-            raise HTTPException(status_code=400, detail="subject_id must be >=0")
         row.subject_id = payload.subject_id
     # FIX 4: heuristic auto-label is disabled by default — any label 2 here is manual, mark confirmed
     try:
@@ -398,11 +430,10 @@ class RelabelPayload(BaseModel):
 def relabel(row_id: int, payload: RelabelPayload, db: Session = Depends(get_db)):
     row = db.query(TrainingData).filter(TrainingData.id == row_id).first()
     if not row: raise HTTPException(status_code=404, detail="Not found")
+    validate_subject_id(payload.subject_id, db)
     row.label = payload.label
     if payload.sub_label: row.sub_label = payload.sub_label
     if payload.subject_id is not None:
-        if payload.subject_id < 0:
-            raise HTTPException(status_code=400, detail="subject_id must be >=0")
         row.subject_id = payload.subject_id
     db.commit()
     return {"id": row.id, "new_label": LABEL_NAMES[payload.label]}
@@ -417,6 +448,36 @@ def delete_row(row_id: int, db: Session = Depends(get_db)):
 @router.get("/data")
 def get_training_data(db: Session = Depends(get_db)):
     return db.query(TrainingData).order_by(TrainingData.date.asc()).all()
+
+@router.get("/subject-coverage")
+def subject_coverage(db: Session = Depends(get_db)):
+    """How many training rows are tagged, and what the grouping will key on.
+
+    Uses the SAME row filter and the SAME resolve_group_by() as trigger_training, so
+    will_group_by is a real prediction of the next run rather than a separate guess.
+    """
+    rows = db.query(TrainingData).filter(TrainingData.label >= 0).all()
+    rows = [r for r in rows if not getattr(r, 'auto_labeled', False) or getattr(r, 'label_confirmed', True)]
+
+    group_by, _ = resolve_group_by(rows)
+    tagged = [r for r in rows if getattr(r, "subject_id", None) is not None]
+    untagged = [r for r in rows if getattr(r, "subject_id", None) is None]
+    per_label = {}
+    for r in rows:
+        key = str(r.label)
+        per_label[key] = per_label.get(key, 0) + 1
+
+    return {
+        "rows_considered": len(rows),
+        "rows_with_subject_id": len(tagged),
+        "distinct_subjects": len({r.subject_id for r in tagged}),
+        "untagged_row_ids": [r.id for r in untagged[:200]],
+        "untagged_truncated": len(untagged) > 200,
+        "per_label": per_label,
+        "will_group_by": group_by,
+        "warning": partial_tagging_warning(rows, group_by),
+    }
+
 
 @router.get("/summary")
 def training_summary(db: Session = Depends(get_db)):
@@ -438,8 +499,8 @@ def training_summary(db: Session = Depends(get_db)):
     bac_levels = sorted(set(round(float(r.bac),2) for r in bac_rows))
     bac_by_tier = {"trace":0,"light":0,"over":0}
     for r in bac_rows:
-        if r.bac < 0.02: bac_by_tier["trace"] += 1
-        elif r.bac < 0.05: bac_by_tier["light"] += 1
+        if r.bac < BAC_NEAR_LIMIT: bac_by_tier["trace"] += 1
+        elif r.bac < BAC_OVER_LIMIT: bac_by_tier["light"] += 1
         else: bac_by_tier["over"] += 1
     # Load bac regressor metrics if trained
     bac_metrics = None
@@ -504,7 +565,7 @@ def training_summary(db: Session = Depends(get_db)):
         "balanced": balanced,
         "trial_counts": {str(k): v for k,v in trial_counts.items()},
         "label_names": LABEL_NAMES,
-        "bac_stats": {"count": len(bac_rows), "levels": bac_levels, "by_tier": bac_by_tier, "metrics": bac_metrics, "ph_limit": 0.05},
+        "bac_stats": {"count": len(bac_rows), "levels": bac_levels, "by_tier": bac_by_tier, "metrics": bac_metrics, "ph_limit": BAC_OVER_LIMIT},
     }
 
 @router.get("/export")
@@ -565,12 +626,14 @@ def trigger_training(db: Session = Depends(get_db)):
     clf_results = sensor_models.train(X, y, groups=groups)
     if isinstance(clf_results, dict) and clf_results.get("error"):
         return {"error": clf_results["error"], "samples": len(X), "trials": len(set(groups)),
-                "group_by": group_by, "results": clf_results}
+                "group_by": group_by, "warning": partial_tagging_warning(rows, group_by),
+                "results": clf_results}
     bac_results = None
     if X_bac:
         bac_results = sensor_models.train_bac(X_bac, y_bac, groups=g_bac)
     return {"message": "Training running", "samples": len(X), "trials": len(set(groups)),
-            "group_by": group_by, "results": clf_results, "bac_results": bac_results,
+            "group_by": group_by, "warning": partial_tagging_warning(rows, group_by),
+            "results": clf_results, "bac_results": bac_results,
             "bac_samples": len(X_bac)}
 
 
@@ -618,7 +681,7 @@ def train_fusion(db: Session = Depends(get_db)):
     """Fusion trainer from training_data pairs — FIX 3 OOF: sensor/visual inputs are out-of-fold predictions, not ground truth."""
     try:
         from models.train import fusion_model
-        from database.models import TrainingData
+        from database.models import Subject, TrainingData
         import numpy as np
         import cv2, os
 
@@ -639,7 +702,8 @@ def train_fusion(db: Session = Depends(get_db)):
         if len(rows) < 10:
             return {"error": (f"Not enough paired training_data: {len(rows)} of {len(all_rows)} rows have an "
                               "image on disk — need 10+ paired rows (sensor features + face image) for fusion."),
-                    "counts": pair_counts, "group_by": resolve_group_by(rows)[0]}
+                    "counts": pair_counts, "group_by": resolve_group_by(rows)[0],
+                    "warning": partial_tagging_warning(rows, resolve_group_by(rows)[0])}
 
         # FIX A7: refuse a single-class set up front rather than deep inside a
         # half-built feature matrix.
@@ -790,9 +854,9 @@ def train_fusion(db: Session = Depends(get_db)):
             # Label is derived purely from measured BAC. ear/mar and the sensor /
             # visual classes are INPUT FEATURES ONLY — letting them into the label
             # rule would make the target depend on the model's own inputs.
-            if bac_val >= 0.05:   fl = 2   # over_limit
-            elif bac_val >= 0.01: fl = 1   # near_limit
-            else:                 fl = 0   # pass
+            if bac_val >= BAC_OVER_LIMIT:   fl = 2   # over_limit
+            elif bac_val >= BAC_NEAR_LIMIT: fl = 1   # near_limit
+            else:                           fl = 0   # pass
             class_counts[fl] += 1
             # feature[6] = bac_est (estimate). bac_val deliberately does NOT appear here.
             X.append([oof_sensor_class[idx], oof_sensor_conf[idx], oof_visual_class[idx], oof_visual_conf[idx], ear, mar, bac_est, float(r.temperature or 27.0)])
@@ -811,8 +875,11 @@ def train_fusion(db: Session = Depends(get_db)):
         return {"message": "Fusion training complete via OOF (sensor_oof, mobilenet_infer, bac_oof — label from measured BAC only)",
                 "samples": len(X), "source": "training_data_oof", "counts": pair_counts,
                 "group_by": group_by, "groups": int(len(np.unique(groups_arr))),
+                "warning": partial_tagging_warning(rows, group_by),
                 "oof": {"sensor_oof": use_oof, "visual_oof": True, "bac_oof": True},
-                "label_rule": {"over_limit": ">=0.05", "near_limit": ">=0.01", "pass": "<0.01"},
+                "label_rule": {"over_limit": f">={BAC_OVER_LIMIT}",
+                                  "near_limit": f">={BAC_NEAR_LIMIT}",
+                                  "pass": f"<{BAC_NEAR_LIMIT}"},
                 "class_counts": class_counts, "metrics": m, "results": res}
     except Exception as e:
         import traceback
