@@ -71,7 +71,7 @@ const char* WIFI_PASSWORD = "bayotko123";
 // Change to your laptop/Pi IP. Must be on same WiFi network. Keep in sync with Backend/.env ESP32_URL
 // Training:   http://192.168.x.x:8000/training/collect/sensor-data
 // Deployment: http://192.168.x.x:8000/sensor
-const char* BACKEND_IP      = "192.168.69.2";   // ← Backend/.env ESP32_URL, keep synced
+const char* BACKEND_IP      = "192.168.69.1";   // backend host, not the ESP32
 const int   BACKEND_PORT    = 8000;
 const char* TRAINING_ENDPOINT  = "/training/collect/sensor-data";
 const char* DEPLOYMENT_ENDPOINT = "/sensor";
@@ -87,7 +87,7 @@ const char* DEPLOYMENT_ENDPOINT = "/sensor";
 
 // ── Sampling config ───────────────────────────────────────────
 #define SAMPLE_INTERVAL_MS   100   // 100ms between samples = 10 samples/sec
-#define BUFFER_DURATION_MS  3000   // 3 second window (30 samples at 100ms)
+#define BUFFER_DURATION_MS  5000   // 5 second window (50 samples at 100ms)
 #define MIN_SAMPLES            5   // minimum samples required by backend
 
 // ── Mode ──────────────────────────────────────────────────────

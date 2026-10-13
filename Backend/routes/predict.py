@@ -11,7 +11,7 @@ from models.train.cv_model import analyze_frame
 from models.train.mobilenet import predict_frame
 from models.train.fusion_model import predict_single
 
-STALE_SECONDS = 5
+STALE_SECONDS = 10
 
 router = APIRouter(prefix="/predict", tags=["predict"])
 
@@ -19,10 +19,10 @@ router = APIRouter(prefix="/predict", tags=["predict"])
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SNAPSHOTS_DIR = os.path.join(BASE_DIR, "data", "snapshots")
 IMPAIRED_DIR  = os.path.join(SNAPSHOTS_DIR, "impaired")
-DROWSY_DIR    = os.path.join(SNAPSHOTS_DIR, "drowsy")
+FATIGUE_DIR   = os.path.join(SNAPSHOTS_DIR, "fatigue")
 
 os.makedirs(IMPAIRED_DIR, exist_ok=True)
-os.makedirs(DROWSY_DIR, exist_ok=True)
+os.makedirs(FATIGUE_DIR, exist_ok=True)
 
 def save_snapshot_task(file_path: str, frame_data: np.ndarray):
     try:
@@ -124,7 +124,7 @@ async def full_predict(background_tasks: BackgroundTasks, file: UploadFile = Fil
     is_drowsy = ear_result.get("impaired", False) or ear_result.get("status") in ["Drowsy", "Sleeping"]
     
     if is_impaired or is_drowsy:
-        target_dir = IMPAIRED_DIR if is_impaired else DROWSY_DIR
+        target_dir = IMPAIRED_DIR if is_impaired else FATIGUE_DIR
         prefix = "alcohol" if is_impaired else "fatigue"
         file_path = os.path.join(target_dir, f"{prefix}_reading_{reading.id}.jpg")
         background_tasks.add_task(save_snapshot_task, file_path, frame)
@@ -188,7 +188,7 @@ async def live_predict(background_tasks: BackgroundTasks, file: UploadFile = Fil
     is_drowsy = ear_result.get("impaired", False) or ear_result.get("status") in ["Drowsy", "Sleeping"]
     
     if is_impaired or is_drowsy:
-        target_dir = IMPAIRED_DIR if is_impaired else DROWSY_DIR
+        target_dir = IMPAIRED_DIR if is_impaired else FATIGUE_DIR
         prefix = "alcohol" if is_impaired else "fatigue"
         file_path = os.path.join(target_dir, f"{prefix}_reading_{new_reading.id}.jpg")
         background_tasks.add_task(save_snapshot_task, file_path, frame)

@@ -500,7 +500,7 @@ export default function Training() {
 
       const checkTrigger = (d, rowId) => {
         if (d.trigger && d.trigger.busy) {
-          toast(`Row #${rowId} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} (incoming #${d.trigger.row_id || rowId}). Wait 3s and retry.`, "error");
+          toast(`Row #${rowId} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} (incoming #${d.trigger.row_id || rowId}). Wait 5s and retry.`, "error");
           setHardwareState("idle");
           setCollectingSync(false);
           capturedRef.current = false;
@@ -559,7 +559,7 @@ export default function Training() {
         setHardwareState("completed");
         loadAll();
         setTimeout(() => setHardwareState("idle"), 2000);
-      }, 5000);
+      }, 6000);
 
     } catch (e) {
       toast(e.message || "Capture verification error", "error");
@@ -582,7 +582,7 @@ export default function Training() {
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || d.error);
         if (d.trigger && d.trigger.busy) {
-          throw new Error(`Row #${d.id} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} . Wait 3s and retry.`);
+          throw new Error(`Row #${d.id} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} . Wait 5s and retry.`);
         }
         toast(`Clear air baseline logged — Row #${d.id}.`);
       } else if (liveEvent === "sanitizer") {
@@ -590,7 +590,7 @@ export default function Training() {
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || d.error);
         if (d.trigger && d.trigger.busy) {
-          throw new Error(`Row #${d.id} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} . Wait 3s and retry.`);
+          throw new Error(`Row #${d.id} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} . Wait 5s and retry.`);
         }
         toast(`Vapor reference logged — Row #${d.id}. Keep compound active.`);
       }
@@ -600,7 +600,7 @@ export default function Training() {
         loadAll();
         setCollectingSync(false);
         setTimeout(() => setHardwareState("idle"), 2000);
-      }, 5000);
+      }, 6000);
     } catch (e) {
       toast(e.message || "Collection execution drop", "error");
       setCollectingSync(false);

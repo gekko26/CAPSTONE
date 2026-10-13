@@ -58,13 +58,18 @@ def train(X, y, groups=None):
         train_idx, test_idx = list(gkf.split(X, y, groups))[-1]
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
+        evaluation = "grouped_holdout"
     elif len(y) < 10:
+        # Too few rows to hold anything out. Train on everything, but flag the
+        # score as in-sample so it is never reported as generalization.
         X_train, X_test = X, X
         y_train, y_test = y, y
+        evaluation = "in_sample"
     else:
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42, stratify=y
         )
+        evaluation = "random_holdout"
 
     scaler  = StandardScaler()
     X_train = scaler.fit_transform(X_train)
@@ -101,6 +106,7 @@ def train(X, y, groups=None):
     from models.train.metrics_store import save_metrics
     save_metrics("fusion", {
         "accuracy":  round(acc * 100, 2),
+        "evaluation": evaluation,
         "precision": round(report["macro avg"]["precision"] * 100, 2),
         "recall":    round(report["macro avg"]["recall"] * 100, 2),
         "f1":        round(report["macro avg"]["f1-score"] * 100, 2),
@@ -112,7 +118,7 @@ def train(X, y, groups=None):
         "feature_names": ["sensor_class","sensor_conf","visual_class","visual_conf","ear","mar","estimated_bac","temp"][:len(fi)] if fi else None,
     })
 
-    return {"accuracy": round(acc * 100, 2), "confusion_matrix": cm}
+    return {"accuracy": round(acc * 100, 2), "evaluation": evaluation, "confusion_matrix": cm}
 
 
 def load():

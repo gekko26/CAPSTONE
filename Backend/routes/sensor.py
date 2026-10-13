@@ -73,7 +73,7 @@ def esp32_status():
 class SensorData(BaseModel):
     temperature: float
     humidity:    float
-    bac:         float
+    bac:         float | None = None
     mq3_1:       List[float]
     mq3_2:       List[float]
     mq3_3:       List[float]

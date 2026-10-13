@@ -236,6 +236,12 @@ def train(X, y, groups=None):
     # Verify class balance before training (item 6)
     unique, counts = np.unique(y, return_counts=True)
     print(f"Class distribution rows: {dict(zip(unique, counts))}")
+    if len(unique) < 2:
+        return {
+            "error": f"Need at least 2 distinct classes to train, currently only {len(unique)} present (labels: {unique.tolist()})",
+            "samples": int(len(y)),
+            "classes": unique.tolist(),
+        }
     if groups is not None:
         ug, gc = np.unique(groups, return_counts=True)
         print(f"Trials: {len(ug)} distinct trial_id, rows per trial avg {len(y)/len(ug):.1f}")
@@ -275,73 +281,51 @@ def train(X, y, groups=None):
     X_train = scaler.fit_transform(X_train)
     X_test  = scaler.transform(X_test)
 
-    joblib.dump(scaler, os.path.join(SAVE_DIR, "scaler.pkl"))
-    print("✅ Scaler saved")
-
     results = {}
+    trained_models = []
 
     for name, base_model in MODELS.items():
         print(f"\nTraining {name}...")
         # clone model to apply class_weight per run
         import copy
         model = copy.deepcopy(base_model)
-        if class_weights is not None:
-            if name == "random_forest":
-                model.set_params(class_weight='balanced')
-            elif name == "xgboost":
-                # sample_weight per row
-                sample_weight = np.array([class_weights[int(c)] for c in y_train])
-                model.fit(X_train, y_train, sample_weight=sample_weight)
-                preds    = model.predict(X_test)
-                accuracy = accuracy_score(y_test, preds)
-                report   = classification_report(
-                    y_test, preds,
-            target_names=["No alcohol", "Breath alcohol", "Others"],
-                    output_dict=True,
-                    zero_division=0,
-                )
-                cm = confusion_matrix(y_test, preds, labels=[0,1,2])
-                # feature importances transparent (reliability)
-        try:
-            fi = model.feature_importances_.tolist() if hasattr(model, 'feature_importances_') else None
-        except Exception:
-            fi = None
-        results[name] = {
-                    "accuracy":  round(accuracy * 100, 2),
-                    "precision": round(report["macro avg"]["precision"] * 100, 2),
-                    "recall":    round(report["macro avg"]["recall"] * 100, 2),
-                    "f1":        round(report["macro avg"]["f1-score"] * 100, 2),
-                    "samples":   len(y),
-                    "trials":    int(len(np.unique(groups))) if groups is not None else None,
-                    "confusion_matrix": cm.tolist(),
-                    "per_class": {
-                        cls: {k: round(v * 100, 1) if k != "support" else v for k, v in stats.items()}
-                        for cls, stats in report.items()
-                if cls in ("No alcohol", "Breath alcohol", "Others")
-                    },
-                    "feature_importances": [round(float(x),4) for x in fi] if fi else None,
-                    "feature_names": ["mq1_max","mq1_avg","mq1_std","mq2_max","mq2_avg","mq2_std","mq3_max","mq3_avg","mq3_std","rise_time","decay_time","spatial_var_max","spatial_var_avg","temp","hum","breath_ratio","sanitizer_ratio","spatial_dir"][:len(fi)] if fi else None,
-                }
-        joblib.dump(model, os.path.join(SAVE_DIR, f"{name}.pkl"))
-        print(f"✅ {name} saved — accuracy: {results[name]['accuracy']}%")
-        continue
 
-        model.fit(X_train, y_train)
+        # FIX A2: every model in MODELS must be fitted inside this loop. The
+        # previous version only called fit() in the `elif name == "xgboost"`
+        # branch, so random_forest stayed unfitted and `accuracy` was unbound
+        # on the first iteration -> UnboundLocalError at the results dict.
+        if name == "random_forest":
+            if class_weights is not None:
+                model.set_params(class_weight='balanced')
+            model.fit(X_train, y_train)
+        elif class_weights is not None:
+            # per-row weights for the boosting models
+            sample_weight = np.array([class_weights[int(c)] for c in y_train])
+            model.fit(X_train, y_train, sample_weight=sample_weight)
+        else:
+            model.fit(X_train, y_train)
 
         preds    = model.predict(X_test)
         accuracy = accuracy_score(y_test, preds)
-        report   = classification_report(
+
+        # classification_report requires len(target_names) == number of labels
+        # present, so derive both from the labels actually seen (A2 follow-on).
+        names_all = ["No alcohol", "Breath alcohol", "Others"]
+        present   = sorted({int(c) for c in np.unique(y_test)} | {int(c) for c in np.unique(preds)})
+        in_range  = [c for c in present if 0 <= c < len(names_all)]
+        report    = classification_report(
             y_test, preds,
-            target_names=["No alcohol", "Breath alcohol", "Others"],
+            labels=present,
+            target_names=[names_all[c] for c in in_range] if len(in_range) == len(present) else None,
             output_dict=True,
             zero_division=0,
         )
         cm = confusion_matrix(y_test, preds, labels=[0,1,2])
+        # feature importances transparent (reliability)
         try:
-            fi2 = model.feature_importances_.tolist() if hasattr(model, 'feature_importances_') else None
+            fi = model.feature_importances_.tolist() if hasattr(model, 'feature_importances_') else None
         except Exception:
-            fi2 = None
-
+            fi = None
         results[name] = {
             "accuracy":  round(accuracy * 100, 2),
             "precision": round(report["macro avg"]["precision"] * 100, 2),
@@ -355,12 +339,20 @@ def train(X, y, groups=None):
                 for cls, stats in report.items()
                 if cls in ("No alcohol", "Breath alcohol", "Others")
             },
-            "feature_importances": [round(float(x),4) for x in fi2] if fi2 else None,
-            "feature_names": ["mq1_max","mq1_avg","mq1_std","mq2_max","mq2_avg","mq2_std","mq3_max","mq3_avg","mq3_std","rise_time","decay_time","spatial_var_max","spatial_var_avg","temp","hum","breath_ratio","sanitizer_ratio","spatial_dir"][:len(fi2)] if fi2 else None,
+            "feature_importances": [round(float(x),4) for x in fi] if fi else None,
+            "feature_names": ["mq1_max","mq1_avg","mq1_std","mq2_max","mq2_avg","mq2_std","mq3_max","mq3_avg","mq3_std","rise_time","decay_time","spatial_var_max","spatial_var_avg","temp","hum","breath_ratio","sanitizer_ratio","spatial_dir"][:len(fi)] if fi else None,
         }
-
         joblib.dump(model, os.path.join(SAVE_DIR, f"{name}.pkl"))
+        trained_models.append(name)
         print(f"✅ {name} saved — accuracy: {results[name]['accuracy']}%")
+
+    # FIX A2: persist the scaler only once at least one model actually trained,
+    # so a failed run can never leave an orphan scaler.pkl beside no model.
+    if not trained_models:
+        return {"error": "No models were trained — scaler not saved",
+                "samples": int(len(y))}
+    joblib.dump(scaler, os.path.join(SAVE_DIR, "scaler.pkl"))
+    print(f"✅ Scaler saved (after {len(trained_models)} model(s): {', '.join(trained_models)})")
 
     # Persist REAL evaluation metrics for the frontend
     from models.train.metrics_store import save_metrics

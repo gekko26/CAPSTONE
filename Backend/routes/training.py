@@ -25,12 +25,12 @@ ESP32_URL = os.getenv("ESP32_URL", "http://192.168.69.2")
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SNAPSHOTS_DIR = os.path.join(BASE_DIR, "data", "snapshots")
 IMPAIRED_DIR  = os.path.join(SNAPSHOTS_DIR, "impaired")
-DROWSY_DIR    = os.path.join(SNAPSHOTS_DIR, "drowsy")  # fatigue = drowsy(ear)+yawning(mar) aggregated
+FATIGUE_DIR   = os.path.join(SNAPSHOTS_DIR, "fatigue")  # 3-class fatigue folder: drowsy EAR + yawning MAR aggregated
 SOBER_DIR     = os.path.join(SNAPSHOTS_DIR, "sober")
-# YAWNING_DIR removed — yawning is mar measurement not class (use DROWSY_DIR/fatigue)
+# No snapshots/yawning folder — yawning is a MAR measurement stored under snapshots/fatigue/
 
 os.makedirs(IMPAIRED_DIR, exist_ok=True)
-os.makedirs(DROWSY_DIR, exist_ok=True)
+os.makedirs(FATIGUE_DIR, exist_ok=True)
 os.makedirs(SOBER_DIR, exist_ok=True)
 
 LABEL_NAMES = {-1: "Pending", 0: "No alcohol", 1: "Breath alcohol", 2: "Others"}
@@ -135,7 +135,7 @@ async def collect_drowsy(background_tasks: BackgroundTasks, file: UploadFile = F
         row.trial_id = row.id
         db.commit()
     if frame is not None:
-        path = os.path.join(DROWSY_DIR, f"drowsy_{row.id}.jpg")
+        path = os.path.join(FATIGUE_DIR, f"fatigue_{row.id}.jpg")
         row.image_path = path
         db.commit()
         background_tasks.add_task(save_snapshot_task, path, frame)
@@ -166,7 +166,7 @@ async def collect_yawning(background_tasks: BackgroundTasks, file: UploadFile = 
         row.trial_id = row.id
         db.commit()
     if frame is not None:
-        path = os.path.join(DROWSY_DIR, f"yawning_{row.id}.jpg")
+        path = os.path.join(FATIGUE_DIR, f"yawning_{row.id}.jpg")
         row.image_path = path
         db.commit()
         background_tasks.add_task(save_snapshot_task, path, frame)
@@ -414,7 +414,7 @@ def training_summary(db: Session = Depends(get_db)):
     def count_dir(p): 
         return len([f for f in os.listdir(p) if f.lower().endswith(('.jpg','.jpeg','.png'))]) if os.path.exists(p) else 0
     # snapshots: fatigue aggregated; faces: mobilenet source
-    snapshots_fatigue = count_dir(DROWSY_DIR)  # yawning now stored in drowsy dir
+    snapshots_fatigue = count_dir(FATIGUE_DIR)  # yawning measurements are stored in the fatigue dir
     faces_dir = lambda c: os.path.join(BASE_DIR, "data", "faces", c)
     face_counts = {
         "sober": max(count_dir(SOBER_DIR), count_dir(faces_dir("sober"))),
@@ -517,6 +517,8 @@ def trigger_training(db: Session = Depends(get_db)):
     if not X:
         return {"message": "No data with sensor features", "samples": 0}
     clf_results = sensor_models.train(X, y, groups=groups)
+    if isinstance(clf_results, dict) and clf_results.get("error"):
+        return {"error": clf_results["error"], "samples": len(X), "trials": len(set(groups)), "results": clf_results}
     bac_results = None
     if X_bac:
         bac_results = sensor_models.train_bac(X_bac, y_bac, groups=g_bac)
@@ -575,6 +577,15 @@ def train_fusion(db: Session = Depends(get_db)):
         if len(rows) < 10:
             return {"error": f"Not enough paired training_data: {len(rows)} — need 10+ with sensor+visual", "counts": {"rows": len(rows)}}
 
+        # FIX A7: refuse a single-class set up front rather than deep inside a
+        # half-built feature matrix.
+        distinct_row_labels = sorted({int(r.label) for r in rows})
+        if len(distinct_row_labels) < 2:
+            return {"error": (f"Fusion refused: training rows carry {len(distinct_row_labels)} distinct "
+                              f"label(s) {distinct_row_labels} — need >= 2 (e.g. clear air and breath "
+                              "alcohol). Collect and label more data first."),
+                    "labels": distinct_row_labels, "rows": len(rows)}
+
         # ---- Build raw sensor feature matrix for OOF ----
         X_sensor = []
         y_sensor = []
@@ -620,65 +631,118 @@ def train_fusion(db: Session = Depends(get_db)):
                 for i, idx in enumerate(test_idx):
                     oof_sensor_class[idx] = int(preds[i])
                     oof_sensor_conf[idx] = float(np.max(probs[i]))
-        # fallback if not enough groups or any None remains: use ground truth with low conf + warning
-        for i in range(len(rows)):
-            if oof_sensor_class[i] is None:
-                oof_sensor_class[i] = int(y_sensor[i])
-                oof_sensor_conf[i] = 0.6
-                use_oof = False
+        # FIX A7: refuse rather than substitute ground truth into feature[0].
+        missing_oof = [i for i in range(len(rows)) if oof_sensor_class[i] is None]
+        if missing_oof:
+            return {"error": (f"Fusion refused: {len(missing_oof)} of {len(rows)} rows have no out-of-fold "
+                              "sensor prediction (needs >= 3 distinct trial_id and >= 10 rows). Refusing to "
+                              "substitute the ground-truth label into feature[0]."),
+                    "missing_oof_rows": len(missing_oof)}
+        use_oof = True
 
-        # ---- OOF visual predictions (direct MobileNet inference per image — reflects real model error) ----
+        # ---- OOF BAC regressor estimate (feature[6]) — FIX A6 ----
+        # feature[6] must be a MODEL ESTIMATE. Feeding the measured breathalyzer value
+        # that also builds the label makes the target a pure function of the feature
+        # (RF scores ~100% from feature[6] alone and learns nothing). If no OOF
+        # estimate can be produced for any row, refuse.
+        # Runs BEFORE the per-row MobileNet pass: this is a cheap data-level check and
+        # should not cost N model forward passes before it fires.
+        from sklearn.ensemble import RandomForestRegressor
+        MIN_BAC_OOF_ROWS = 10
+        n_missing_bac = sum(1 for r in rows if r.bac is None)
+        if n_missing_bac:
+            return {"error": (f"Fusion refused: {n_missing_bac} of {len(rows)} rows have no measured BAC, so "
+                              "no out-of-fold BAC estimate exists for feature[6]. Attach a breathalyzer value "
+                              "via PATCH /training/label/{row_id} first."),
+                    "rows_missing_bac": n_missing_bac}
+        if len(rows) < MIN_BAC_OOF_ROWS:
+            return {"error": (f"Fusion refused: need >= {MIN_BAC_OOF_ROWS} rows for the grouped OOF BAC "
+                              f"estimate, have {len(rows)}.")}
+        y_bac = np.array([float(r.bac) for r in rows], dtype=float)
+        distinct_bac = np.unique(np.round(y_bac, 4))
+        if len(distinct_bac) < 2:
+            return {"error": (f"Fusion refused: need >= 2 distinct measured BAC levels to fit the OOF regressor, "
+                              f"have {len(distinct_bac)} ({distinct_bac.tolist()[:5]})."),
+                    "distinct_bac_levels": int(len(distinct_bac))}
+        n_bac_splits = min(5, len(np.unique(groups_arr)))
+        if n_bac_splits < 2:
+            return {"error": (f"Fusion refused: need >= 2 distinct trial_id for the grouped OOF BAC estimate, "
+                              f"have {len(np.unique(groups_arr))}.")}
+        oof_bac = [None] * len(rows)
+        for tr_i, te_i in GroupKFold(n_splits=n_bac_splits).split(X_sensor, y_bac, groups_arr):
+            reg = RandomForestRegressor(n_estimators=100, random_state=42)
+            reg.fit(X_sensor[tr_i], y_bac[tr_i])
+            for j, idx in enumerate(te_i):
+                oof_bac[idx] = float(reg.predict(X_sensor[te_i][j:j + 1])[0])
+        if any(v is None for v in oof_bac):
+            return {"error": "Fusion refused: incomplete out-of-fold BAC estimate."}
+
+        # ---- Visual predictions: real MobileNet inference only (FIX A7) ----
+        # No ground-truth fallback: a row with no image, an unreadable image, or an
+        # out-of-range class index refuses the run rather than borrowing r.label.
+        try:
+            from models.train.mobilenet import (
+                predict_frame as _predict_frame, SAVE_DIR as _mob_save, CLASSES as _mob_classes,
+            )
+            mobilenet_available = os.path.exists(os.path.join(_mob_save, "mobilenet.h5"))
+        except Exception as e:
+            return {"error": f"Fusion refused: MobileNet inference unavailable ({e})."}
+        if not mobilenet_available:
+            return {"error": ("Fusion refused: models/saved/mobilenet.h5 not found. Train the 3-class face "
+                              "model first (POST /training/train/mobilenet). Fusion will not substitute "
+                              "ground-truth labels for visual features.")}
         oof_visual_class = []
         oof_visual_conf = []
-        mobilenet_available = False
-        try:
-            from models.train.mobilenet import predict_frame as _predict_frame, SAVE_DIR as _mob_save
-            mobilenet_available = os.path.exists(os.path.join(_mob_save, "mobilenet.h5"))
-        except Exception:
-            mobilenet_available = False
-        def infer_visual(r):
-            p = r.image_path or ""
-            # try actual image inference if model exists and file present
-            if mobilenet_available and p and os.path.exists(p):
-                try:
-                    img = cv2.imread(p)
-                    if img is not None:
-                        res = _predict_frame(img)
-                        return int(res["class_index"]), float(res["confidence"])
-                except Exception:
-                    pass
-            # fallback ground-truth mapping (marked as non-OOF)
-            if "/sober" in p: return 0, 0.6
-            if "/drowsy" in p or "/fatigue" in p or r.sub_label in ("drowsy","yawning"): return 1, 0.6
-            if "/impaired" in p: return 2, 0.6
-            if r.label==0: return 0, 0.6
-            if r.sub_label in ("drowsy","yawning"): return 1, 0.6
-            if r.label==1: return 2, 0.6
-            return 0, 0.6
         for r in rows:
-            vc, vconf = infer_visual(r)
-            oof_visual_class.append(vc); oof_visual_conf.append(vconf)
+            p = r.image_path or ""
+            if not p or not os.path.exists(p):
+                return {"error": (f"Fusion refused: training row id={getattr(r, 'id', '?')} has no image on "
+                                  f"disk (image_path={p!r}); cannot run MobileNet for visual features.")}
+            img = cv2.imread(p)
+            if img is None:
+                return {"error": f"Fusion refused: could not read image for row id={getattr(r, 'id', '?')} ({p!r})."}
+            try:
+                res = _predict_frame(img)
+            except Exception as e:
+                return {"error": f"Fusion refused: MobileNet inference failed for row id={getattr(r, 'id', '?')}: {e}"}
+            vc, vconf = int(res["class_index"]), float(res["confidence"])
+            if not (0 <= vc < len(_mob_classes)):
+                return {"error": (f"Fusion refused: MobileNet returned out-of-range class_index {vc} for row "
+                                  f"id={getattr(r, 'id', '?')} (expected 0..{len(_mob_classes) - 1}).")}
+            oof_visual_class.append(vc)
+            oof_visual_conf.append(vconf)
 
         # ---- Build fusion X from OOF predictions ----
         X = []; y = []; groups = []
+        class_counts = {0: 0, 1: 0, 2: 0}
         for idx, r in enumerate(rows):
             ear = float(r.ear) if r.ear is not None else 0.28
             mar = float(r.mar) if r.mar is not None else 0.30
-            bac_val = float(r.bac) if r.bac is not None else 0.0
+            bac_val = float(r.bac)            # ground truth — LABEL ONLY, never a feature
+            bac_est = float(oof_bac[idx])     # FIX A6: feature[6] is the regressor's OOF estimate
             if bac_val >= 0.05: fl = 2
             elif bac_val >= 0.01 or (r.ear is not None and r.ear < 0.20) or (r.mar is not None and r.mar > 0.55): fl = 1
             elif r.label == 2: fl = 0
             else: fl = 0 if oof_sensor_class[idx]==0 and oof_visual_class[idx]==0 else 1 if oof_visual_class[idx]==1 else 2 if oof_sensor_class[idx]==1 else 0
-            X.append([oof_sensor_class[idx], oof_sensor_conf[idx], oof_visual_class[idx], oof_visual_conf[idx], ear, mar, bac_val, float(r.temperature or 27.0)])
+            class_counts[fl] += 1
+            # feature[6] = bac_est (estimate). bac_val deliberately does NOT appear here.
+            X.append([oof_sensor_class[idx], oof_sensor_conf[idx], oof_visual_class[idx], oof_visual_conf[idx], ear, mar, bac_est, float(r.temperature or 27.0)])
             y.append(fl)
             groups.append(r.trial_id if r.trial_id is not None else r.id)
 
+        if sum(1 for c in class_counts.values() if c > 0) < 2:
+            return {"error": (f"Fusion refused: rows collapse to a single fusion class. per-class counts "
+                              f"{class_counts}. Need >= 2 distinct fusion labels."),
+                    "class_counts": class_counts}
         if len(X) < 10:
             return {"error": f"Not enough OOF fusion rows: {len(X)}", "counts": {"rows": len(X)}}
         res = fusion_model.train(X, y, groups=groups if len(set(groups))>=3 else None)
         from models.train.metrics_store import load_metrics
         m = load_metrics().get("fusion", {})
-        return {"message": f"Fusion training complete via OOF (sensor_oof={use_oof}, mobilenet={'oof_infer' if mobilenet_available else 'fallback'})", "samples": len(X), "source": "training_data_oof", "oof": {"sensor_oof": use_oof, "visual_oof": mobilenet_available}, "metrics": m, "results": res}
+        return {"message": "Fusion training complete via OOF (sensor_oof, mobilenet_infer, bac_oof — no ground truth in features)",
+                "samples": len(X), "source": "training_data_oof",
+                "oof": {"sensor_oof": use_oof, "visual_oof": True, "bac_oof": True},
+                "class_counts": class_counts, "metrics": m, "results": res}
     except Exception as e:
         import traceback
         return {"error": str(e), "trace": traceback.format_exc()[:2000]}

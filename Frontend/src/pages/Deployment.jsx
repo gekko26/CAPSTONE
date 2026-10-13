@@ -107,8 +107,8 @@ export default function Deployment() {
         }
       } catch {}
       
-      // 2. Wait 3 seconds for breathalyzer payload
-      await new Promise(res => setTimeout(res, 3000));
+      // 2. Wait 6 seconds for breathalyzer payload (5s ESP32 buffer + POST margin)
+      await new Promise(res => setTimeout(res, 6000));
 
       // 3. Hit the Deployment Gatekeeper! reading_id is required (FIX 2 staleness check)
       if (!readingId) {
