@@ -35,7 +35,6 @@ export default function ModelStatistics(){
   const metrics=data?.metrics || {};
   const sensor=metrics.sensor || {};
   const mobilenet=metrics.mobilenet || null;
-  const fusion=metrics.fusion || null;
   const reliability=data?.reliability || {};
   const failures=data?.failures || [];
 
@@ -89,8 +88,7 @@ export default function ModelStatistics(){
             </>}
           </div>
           <div className="rounded-xl p-4" style={{background:"var(--bg-card)", border:"1px solid var(--border-subtle)"}}>
-            <div className="flex items-center gap-1.5 text-sm font-medium mb-2" style={{color:"var(--text-primary)"}}><GitMerge size={14}/> Fusion + BAC</div>
-            {metricFailed(fusion) ? <MetricErr e={fusion}/> : <><MetricRow k="Fusion acc" v={`${fusion.accuracy}%`} /><MetricRow k="Prec/Rec/F1" v={`${fusion.precision}%/${fusion.recall}%/${fusion.f1}%`} /></>}
+            <div className="flex items-center gap-1.5 text-sm font-medium mb-2" style={{color:"var(--text-primary)"}}><GitMerge size={14}/> BAC regressor</div>
             {bac && bac.mae != null ? <><MetricRow k="BAC MAE/RMSE/R²" v={`${bac.mae}/${bac.rmse}/${bac.r2}`} /><MetricRow k="BAC tier acc" v={`${bac.tier_accuracy}%`} /></> : <div className="text-xs mt-2" style={{color:"var(--text-muted)"}}>BAC: {bac?.error || "not trained / needs 100+ Breath rows"}</div>}
           </div>
         </div>
@@ -123,7 +121,7 @@ export default function ModelStatistics(){
       {tab==="failures" && (
         <div className="rounded-xl p-4" style={{background:"var(--bg-card)", border:"1px solid var(--border-subtle)"}}>
           <div className="text-sm font-medium mb-2 flex items-center gap-1.5" style={{color: failures.length?"var(--over)":"var(--pass)"}}>{failures.length?<AlertTriangle size={14}/> : <Check size={14}/>} {failures.length ? `${failures.length} failure(s) / warning(s)` : "No failures — all transparent"}</div>
-          {failures.length? failures.map((f,i)=><div key={i} className="text-xs py-1.5 border-b last:border-0" style={{color:"var(--over)"}}>• {f}</div>) : <div className="text-xs" style={{color:"var(--text-muted)"}}>Pending 0, sensor trained, mobilenet/fusion may still need hidden trainers.</div>}
+          {failures.length? failures.map((f,i)=><div key={i} className="text-xs py-1.5 border-b last:border-0" style={{color:"var(--over)"}}>• {f}</div>) : <div className="text-xs" style={{color:"var(--text-muted)"}}>Pending 0, sensor trained, mobilenet may still need the hidden trainer.</div>}
         </div>
       )}
 

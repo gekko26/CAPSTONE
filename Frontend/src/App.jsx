@@ -9,7 +9,6 @@ import About from "./pages/About";
 import Report from "./pages/Report";
 import Training from "./pages/Training";
 import MobileNetTrainer from "./pages/MobileNetTrainer";
-import FusionTrainer from "./pages/FusionTrainer";
 import ModelStatistics from "./pages/ModelStatistics";
 
 // ALCOGATE terminal pages (new IA) — re-use existing logic initially
@@ -57,7 +56,6 @@ function App() {
 
             {/* ── Hidden trainers — URL only, not in sidebar ── */}
             <Route path="/mobilenet" element={<MobileNetTrainer />} />
-            <Route path="/fusion" element={<FusionTrainer />} />
             <Route path="/models/statistics" element={<ModelStatistics />} />
 
             <Route path="*" element={<Navigate to="/" replace />} />

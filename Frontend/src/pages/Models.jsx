@@ -20,11 +20,6 @@ const MODELS = [
     name: "MobileNetV2",
     desc: "Vision model — classifies a face image as sober or impaired using transfer learning.",
   },
-  {
-    key: "fusion",
-    name: "Fusion Model",
-    desc: "Final decision model — combines sensor results, vision result and eye metrics into Pass / Near Limit / Over Limit.",
-  },
 ];
 
 function MetricRow({ label, value }) {
@@ -37,7 +32,7 @@ function MetricRow({ label, value }) {
 }
 
 export default function Models() {
-  const [selectedKey, setSelectedKey] = useState("fusion");
+  const [selectedKey, setSelectedKey] = useState("random_forest");
   const [statusMap, setStatusMap] = useState({});
   const [offline, setOffline] = useState(false);
 

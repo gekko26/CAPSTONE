@@ -13,8 +13,6 @@ ARTIFACTS = {
     "scaler":         ("scaler.pkl",         "Sensor feature scaler"),
     "bac_regressor":  ("bac_regressor.pkl",  "BAC regressor — estimated %BAC inside Breath (PH 0.05)"),
     "bac_scaler":     ("bac_scaler.pkl",     "BAC scaler"),
-    "fusion":         ("fusion_model.pkl",   "Fusion classifier — sensor + visual"),
-    "fusion_scaler":  ("fusion_scaler.pkl",  "Fusion feature scaler"),
     "mobilenet":      ("mobilenet.h5",       "Visual classifier — impaired vs sober (MobileNetV2)"),
 }
 
@@ -28,7 +26,6 @@ def models_status():
     SECTION_FOR = {
         "random_forest": ("sensor", "random_forest"),
         "xgboost":       ("sensor", "xgboost"),
-        "fusion":        ("fusion", None),
         "mobilenet":     ("mobilenet", None),
     }
 

@@ -104,7 +104,7 @@ function Homes() {
         </h2>
 
         <p className="text-lg" style={{ color: "var(--text-muted)", maxWidth: "560px" }}>
-          Real-time BAC monitoring using ESP32 sensor fusion and machine learning models for accurate, fast detection.
+          Real-time BAC monitoring using ESP32 sensors and machine learning models, with a rule-based PASS / WARN / FAIL decision.
         </p>
 
         <div className="flex gap-4">
@@ -136,7 +136,7 @@ function Homes() {
       <div className="flex gap-3 w-full" style={{ minHeight: "120px" }}>
         {navCard("/camera",    CameraIcon, "Live Camera",  "Start Detection")}
         {navCard("/dashboard", BarChart3,  "Dashboard",    "Live analytics")}
-        {navCard("/models",    Cpu,        "ML models",    "Fusion engine ready")}
+        {navCard("/models",    Cpu,        "ML models",    "Sensor, BAC & face models")}
         {navCard("/about",     InfoIcon,   "About us",     "Team & tech stack")}
       </div>
 

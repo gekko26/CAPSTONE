@@ -20,7 +20,7 @@ const STEPS = [
   { icon: Camera, color: "var(--accent)", title: "Capture", desc: "Camera detects the subject's face" },
   { icon: Radar, color: "var(--near)", title: "Sense", desc: "ESP32 reads MQ-3 sensor output" },
   { icon: Sparkles, color: "var(--accent)", title: "Predict", desc: "ML models classify the result" },
-  { icon: AlertTriangle, color: "var(--over)", title: "Decide", desc: "Pass / Near Limit / Over Limit" },
+  { icon: AlertTriangle, color: "var(--over)", title: "Decide", desc: "Rule-based decision: PASS / WARN / FAIL from the sensor models, BAC estimate and face model" },
 ];
 
 function About() {

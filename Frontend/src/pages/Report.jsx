@@ -38,7 +38,7 @@ function Report() {
     ? (((totalInterrogations - aboveLimitBreaches - traceAlerts) / totalInterrogations) * 100).toFixed(1) + "%"
     : "—";
 
-  // Categorical classification buckets mapping back to the Fusion Model endpoints
+  // Categorical classification buckets from the rule-based PASS / WARN / FAIL decision
   // Backend renamed Sanitizer -> Others (label 2) — handle both for backward compat with old logs
   const decisionMatrixBuckets = [
     { label: "Pass", color: "var(--pass)", count: Math.max(totalInterrogations - aboveLimitBreaches - traceAlerts - sanitizersBlocked, 0) },

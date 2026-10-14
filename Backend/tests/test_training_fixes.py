@@ -2,8 +2,6 @@
 Regression tests for the training-side fixes confirmed by the architecture audit.
 
 A2  - sensor_models.train() fit every model in MODELS; scaler saved only after success
-A6  - fusion feature[6] is the BAC regressor's OOF estimate, never the ground-truth label value
-A7  - fusion refuses when mobilenet.h5 is missing / rows lack labels / visual inference fails
 H1  - class_indices pinned to ["sober","fatigue","impaired"]; registered/ excluded
 H2  - training gated on per-class image counts
 5   - MobileNet metrics report the final epoch, not max(val_accs)
@@ -120,10 +118,6 @@ def test_a2_single_class_guard_still_works(tmp_path, monkeypatch):
     assert not (tmp_path / "scaler.pkl").exists()
 
 
-# ----------------------------------------------------------------------------------
-# A7 — fusion refuses without mobilenet.h5
-# ----------------------------------------------------------------------------------
-
 # ------------------------------------------------------------------------------
 # helpers: a throwaway SQLite file (tmp_path) + real ORM rows
 # ------------------------------------------------------------------------------
@@ -159,37 +153,6 @@ def _jpeg(tmp_path, name, value=120):
     return path
 
 
-def _seed(session, bacs, tmp_path, prefix="i", with_images=True, subject_id=None,
-          trial_ids=None, ear=None, mar=None, labels=None):
-    """Insert one TrainingData row per BAC value, wired to a real image on disk."""
-    rows = []
-    for i, b in enumerate(bacs):
-        img = _jpeg(tmp_path, f"{prefix}_{i}.jpg", i * 7) if with_images else None
-        tid = trial_ids[i] if trial_ids else i
-        r = TrainingData(
-            label=(labels[i] if labels else (1 if b >= 0.01 else 0)),
-            sub_label=None,
-            bac=b,
-            trial_id=tid,
-            subject_id=subject_id,
-            image_path=img,
-            ear=ear,
-            mar=mar,
-            mq3_1_max=10.0 + i, mq3_1_avg=9.0, mq3_1_std=0.5,
-            mq3_2_max=11.0 + i, mq3_2_avg=10.0, mq3_2_std=0.5,
-            mq3_3_max=12.0 + i, mq3_3_avg=11.0, mq3_3_std=0.5,
-            rise_time=1.0, decay_time=1.0,
-            spatial_variance=2.0, spatial_variance_avg=2.0,
-            temperature=27.0, humidity=60.0,
-        )
-        session.add(r)
-        rows.append(r)
-    session.commit()
-    for r in rows:
-        session.refresh(r)
-    return rows
-
-
 class _BG:
     def add_task(self, *a, **k):
         pass
@@ -222,145 +185,6 @@ def _quiet_collect(monkeypatch, tmp_path):
     monkeypatch.setattr(tr, "analyze_frame", lambda f: {"ear": 0.3, "mar": 0.2, "pitch": 1.0})
     monkeypatch.setattr(tr, "BASE_DIR", str(tmp_path))
     return tr, buf.tobytes()
-
-
-# ------------------------------------------------------------------------------
-# A7 — fusion refuses without mobilenet.h5
-# ------------------------------------------------------------------------------
-
-def _stub_mobilenet(tmp_path, monkeypatch, present=True):
-    import routes.training as tr
-    from models.train import mobilenet, fusion_model
-    save = tmp_path / "mob"
-    save.mkdir(exist_ok=True)
-    if present:
-        (save / "mobilenet.h5").write_bytes(b"stub")
-    monkeypatch.setattr(mobilenet, "SAVE_DIR", str(save))
-    monkeypatch.setattr(mobilenet, "predict_frame",
-                        lambda img: {"label": "sober", "confidence": 0.9, "class_index": 0})
-    fus = tmp_path / "fus"
-    fus.mkdir(exist_ok=True)
-    monkeypatch.setattr(fusion_model, "SAVE_DIR", str(fus))
-    monkeypatch.setattr("models.train.metrics_store.save_metrics",
-                        lambda *a, **k: None, raising=True)
-    return tr
-
-
-def test_a7_fusion_refuses_without_mobilenet(db, tmp_path, monkeypatch):
-    """A7: with no mobilenet.h5 on disk, fusion must refuse — not fall back to labels."""
-    tr = _stub_mobilenet(tmp_path, monkeypatch, present=False)
-    _seed(db, [0.0] * 6 + [0.02] * 3 + [0.07] * 3, tmp_path)
-
-    out = tr.train_fusion(db)
-    assert "error" in out, f"expected refusal, got {out}"
-    assert "mobilenet.h5" in out["error"]
-
-
-def test_a7_fusion_refuses_single_label(db, tmp_path, monkeypatch):
-    """A7: refuse when the training rows carry fewer than 2 distinct labels."""
-    tr = _stub_mobilenet(tmp_path, monkeypatch)
-    _seed(db, [0.0] * 12, tmp_path)
-
-    out = tr.train_fusion(db)
-    assert "error" in out
-    assert "distinct" in out["error"]
-
-
-def test_a7_fusion_refuses_rows_without_measured_bac(db, tmp_path, monkeypatch):
-    """A6 follow-on: no measured BAC -> no OOF estimate -> refuse."""
-    tr = _stub_mobilenet(tmp_path, monkeypatch)
-    _seed(db, [0.0] * 6 + [0.02] * 3 + [0.07] * 3, tmp_path)
-    db.query(TrainingData).update({"bac": None})
-    db.commit()
-
-    out = tr.train_fusion(db)
-    assert "error" in out
-    assert "BAC" in out["error"]
-
-
-def test_a7_fusion_refuses_single_distinct_bac_level(db, tmp_path, monkeypatch):
-    """A6: a constant BAC column cannot fit an OOF regressor -> refuse."""
-    tr = _stub_mobilenet(tmp_path, monkeypatch)
-    # two distinct sensor labels, but every measured BAC identical
-    _seed(db, [0.0] * 12, tmp_path, labels=[0] * 6 + [1] * 6)
-
-    out = tr.train_fusion(db)
-    assert "error" in out
-    assert "distinct measured BAC levels" in out["error"]
-
-
-# ------------------------------------------------------------------------------
-# item 1 — fusion pairs only rows that have an image on disk
-# ------------------------------------------------------------------------------
-
-def test_fusion_excludes_imageless_rows_and_trains_the_rest(db, tmp_path, monkeypatch):
-    """clear_air / sanitizer captures have no image: they are EXCLUDED, not refused,
-    and the response reports both counts."""
-    tr = _stub_mobilenet(tmp_path, monkeypatch)
-    _seed(db, [0.0] * 6 + [0.02] * 3 + [0.07] * 3, tmp_path, prefix="paired")
-    _seed(db, [0.0] * 4, tmp_path, prefix="imgless", with_images=False)
-
-    total = db.query(TrainingData).count()
-    assert total == 16
-
-    out = tr.train_fusion(db)
-    assert "error" not in out, out
-    assert out["counts"]["rows_total"] == 16
-    assert out["counts"]["rows_paired"] == 12
-    assert out["counts"]["rows_excluded_no_image"] == 4
-    assert out["samples"] == 12
-
-
-def test_fusion_refuses_when_too_few_paired_rows(db, tmp_path, monkeypatch):
-    tr = _stub_mobilenet(tmp_path, monkeypatch)
-    _seed(db, [0.0] * 15, tmp_path, with_images=False)
-
-    out = tr.train_fusion(db)
-    assert "error" in out
-    assert out["counts"]["rows_paired"] == 0
-    assert out["counts"]["rows_total"] == 15
-    assert "paired" in out["error"]
-
-
-# ------------------------------------------------------------------------------
-# item 2 — fusion label is a pure function of measured BAC
-# ------------------------------------------------------------------------------
-
-def test_fusion_label_depends_only_on_bac(db, tmp_path, monkeypatch):
-    """Flipping ear/mar (and the visual class) must not move the label."""
-    tr = _stub_mobilenet(tmp_path, monkeypatch)
-    from models.train import mobilenet
-
-    bacs = [0.0] * 6 + [0.02] * 3 + [0.06] * 3
-
-    def run(ear, mar, visual):
-        monkeypatch.setattr(mobilenet, "predict_frame",
-                            lambda img, _v=visual: {"label": "sober", "confidence": 0.9,
-                                                   "class_index": _v})
-        db.query(TrainingData).delete()
-        db.commit()
-        _seed(db, bacs, tmp_path, prefix=f"e{visual}", ear=ear, mar=mar)
-        out = tr.train_fusion(db)
-        assert "error" not in out, out
-        return out["class_counts"]
-
-    baseline = run(None, None, 0)      # open eyes, sober visual
-    stressed = run(0.05, 0.95, 2)     # eyes shut, gaping, "impaired" visual
-    assert baseline == stressed, f"label rule leaked non-BAC inputs: {baseline} != {stressed}"
-    assert baseline == {0: 6, 1: 3, 2: 3}, baseline
-
-
-def test_fusion_reports_per_class_counts(db, tmp_path, monkeypatch):
-    tr = _stub_mobilenet(tmp_path, monkeypatch)
-    bacs = [0.0] * 6 + [0.03] * 3 + [0.07] * 3
-    _seed(db, bacs, tmp_path)
-
-    out = tr.train_fusion(db)
-    assert "error" not in out, out
-    assert sum(out["class_counts"].values()) == out["samples"]
-    assert out["class_counts"][0] == 6
-    assert out["class_counts"][1] == 3
-    assert out["class_counts"][2] == 3
 
 
 # ------------------------------------------------------------------------------
@@ -481,8 +305,7 @@ def test_subject_id_survives_window_expansion(db, tmp_path, monkeypatch):
 
 def test_all_non_alcohol_collect_endpoints_store_bac_zero(db, tmp_path, monkeypatch):
     """sober / drowsy / yawning / perfume / clear_air / sanitizer must all store
-    bac = 0.0 rather than NULL, so the BAC-only fusion label and the OOF regressor
-    always have a value."""
+    bac = 0.0 rather than NULL, so the BAC regressor always has a value."""
     import asyncio
     tr, png = _quiet_collect(monkeypatch, tmp_path)
     _seed_subject(db, 1, 2)
@@ -662,54 +485,6 @@ def test_trigger_training_reports_group_by_trial_id_when_any_row_lacks_subject(d
 
 
 # ------------------------------------------------------------------------------
-# item 3 — fusion predict_single maps proba columns through model.classes_
-# ------------------------------------------------------------------------------
-
-def test_fusion_predict_single_with_two_class_model(tmp_path, monkeypatch):
-    """A fusion model trained only on labels {0, 2} must still report the right
-    tier name. predict_proba then has 2 columns, so indexing it by the tier index
-    (2) used to raise IndexError."""
-    from models.train import fusion_model
-
-    save = tmp_path / "fus"
-    save.mkdir()
-    monkeypatch.setattr(fusion_model, "SAVE_DIR", str(save))
-    monkeypatch.setattr("models.train.metrics_store.save_metrics",
-                        lambda *a, **k: None, raising=True)
-
-    rng = np.random.default_rng(3)
-    n = 40
-    X, y = [], []
-    for i in range(n):
-        high = i >= n // 2
-        y.append(2 if high else 0)
-        X.append([1 if high else 0, 0.9, 0, 0.8, 0.30, 0.20,
-                  0.09 if high else 0.0, 27.0])
-    X = np.array(X, dtype=float)
-
-    res = fusion_model.train(X, np.array(y))
-    assert "error" not in res, res
-    model = fusion_model.load()
-    assert list(model.classes_) == [0, 2], "precondition: model should have 2 classes"
-
-    # over_limit input — must not raise, must not be mislabelled near_limit
-    out = fusion_model.predict_single(
-        sensor_class=1, sensor_confidence=0.9, visual_class=0, visual_confidence=0.8,
-        ear=0.30, mar=0.20, estimated_bac=0.09, temperature=27.0)
-    assert out["class"] == 2, out
-    assert out["label"] == "over_limit", out
-    assert out["action"] == "deny", out
-    assert set(out["all_probs"]) == {"pass", "over_limit"}, out["all_probs"]
-
-    # pass input
-    out0 = fusion_model.predict_single(
-        sensor_class=0, sensor_confidence=0.9, visual_class=0, visual_confidence=0.8,
-        ear=0.30, mar=0.20, estimated_bac=0.0, temperature=27.0)
-    assert out0["class"] == 0, out0
-    assert out0["label"] == "pass", out0
-
-
-# ------------------------------------------------------------------------------
 # item 4 — metrics consumer tolerates error entries
 # ------------------------------------------------------------------------------
 
@@ -845,74 +620,6 @@ def test_bac_constants_define_the_intended_tiers():
     assert BAC_NEAR_LIMIT == 0.02
     assert BAC_OVER_LIMIT == 0.05
     assert BAC_OVER_LIMIT == PH_LIMIT
-
-
-@pytest.mark.parametrize("bac,expected", [
-    (0.0,    0),   # pass
-    (0.0199, 0),   # pass — just under near
-    (0.02,   1),   # near_limit — inclusive lower edge
-    (0.0499, 1),   # near_limit — just under over
-    (0.05,   2),   # over_limit — inclusive upper edge
-    (0.09,   2),   # over_limit
-])
-def test_fusion_label_rule_boundaries(db, tmp_path, monkeypatch, bac, expected):
-    """train_fusion's label must flip exactly at BAC_NEAR_LIMIT / BAC_OVER_LIMIT.
-
-    Observes the REAL label vector by intercepting the (X, y) that train_fusion
-    hands to fusion_model.train — the last row is the probe row.
-    """
-    import cv2
-    from routes import training as tr
-    from models.train import mobilenet, fusion_model
-    from models.train.sensor_models import BAC_NEAR_LIMIT, BAC_OVER_LIMIT
-
-    save = tmp_path / "mob"; save.mkdir()
-    (save / "mobilenet.h5").write_bytes(b"stub")
-    monkeypatch.setattr(mobilenet, "SAVE_DIR", str(save))
-    monkeypatch.setattr(mobilenet, "predict_frame",
-                        lambda img: {"label": "sober", "confidence": 0.9, "class_index": 0})
-    fus = tmp_path / "fus"; fus.mkdir()
-    monkeypatch.setattr(fusion_model, "SAVE_DIR", str(fus))
-    monkeypatch.setattr("models.train.metrics_store.save_metrics", lambda *a, **k: None)
-
-    captured = {}
-
-    def _capture_train(X, y, groups=None):
-        captured["X"] = list(X)
-        captured["y"] = list(y)
-        return {"accuracy": 50.0, "evaluation": "random_holdout"}
-    monkeypatch.setattr(fusion_model, "train", _capture_train)
-
-    # 11 filler rows keep every fusion class populated (the endpoint requires >= 10
-    # paired rows); row 12 is the probe carrying the boundary BAC under test.
-    bacs = [0.0, 0.02, 0.07, 0.0, 0.0, 0.0, 0.03, 0.03, 0.08, 0.08, 0.03, bac]
-    for i, b in enumerate(bacs):
-        p = str(tmp_path / f"b_{i}.jpg")
-        cv2.imwrite(p, np.full((16, 16, 3), i * 9, dtype=np.uint8))
-        db.add(TrainingData(
-            label=0 if b < 0.01 else 1, sub_label=None, bac=b, trial_id=i,
-            subject_id=None, image_path=p,
-            mq3_1_max=10.0 + i, mq3_1_avg=9.0, mq3_1_std=0.5,
-            mq3_2_max=11.0, mq3_2_avg=10.0, mq3_2_std=0.5,
-            mq3_3_max=12.0, mq3_3_avg=11.0, mq3_3_std=0.5,
-            rise_time=1.0, decay_time=1.0,
-            spatial_variance=2.0, spatial_variance_avg=2.0,
-            temperature=27.0, humidity=60.0))
-    db.commit()
-
-    out = tr.train_fusion(db)
-    assert "error" not in out, out
-    assert "y" in captured, "fusion_model.train was never reached"
-
-    # the probe row is last, so its label is the last element of the real y vector
-    assert len(captured["y"]) == 12
-    assert captured["y"][-1] == expected, (
-        f"bac={bac} -> label {captured['y'][-1]}, expected {expected}")
-
-    # label_rule echo is built from the constants, not literals
-    assert out["label_rule"]["over_limit"] == f">={BAC_OVER_LIMIT}"
-    assert out["label_rule"]["near_limit"] == f">={BAC_NEAR_LIMIT}"
-    assert out["label_rule"]["pass"] == f"<{BAC_NEAR_LIMIT}"
 
 
 # ------------------------------------------------------------------------------
@@ -1137,43 +844,3 @@ def test_partial_tagging_warning_caps_row_ids_at_50():
     assert w["untagged_row_ids"][0] == 100
 
 
-def test_train_fusion_warns_on_partial_tagging(db, tmp_path, monkeypatch):
-    import routes.training as tr
-    from models.train import fusion_model
-    _seed_subject(db, 1, 2)
-    sids = [1, 1, 2, None, 1, 2, None, 1, 2, None, 1, None]
-    for i, b in enumerate([0.0, 0.02, 0.07] * 4):
-        import cv2
-        p = str(tmp_path / f"g_{i}.jpg")
-        cv2.imwrite(p, np.full((16, 16, 3), i * 5, dtype=np.uint8))
-        db.add(TrainingData(
-            label=0 if b < 0.01 else 1, sub_label=None, bac=b, trial_id=i,
-            subject_id=sids[i], image_path=p,
-            mq3_1_max=10.0 + i, mq3_1_avg=9.0, mq3_1_std=0.5,
-            mq3_2_max=11.0, mq3_2_avg=10.0, mq3_2_std=0.5,
-            mq3_3_max=12.0, mq3_3_avg=11.0, mq3_3_std=0.5,
-            rise_time=1.0, decay_time=1.0,
-            spatial_variance=2.0, spatial_variance_avg=2.0,
-            temperature=27.0, humidity=60.0))
-    db.commit()
-
-    save = tmp_path / "mob"; save.mkdir()
-    (save / "mobilenet.h5").write_bytes(b"stub")
-    from models.train import mobilenet
-    monkeypatch.setattr(mobilenet, "SAVE_DIR", str(save))
-    monkeypatch.setattr(mobilenet, "predict_frame",
-                        lambda img: {"label": "sober", "confidence": 0.9, "class_index": 0})
-    fus = tmp_path / "fus"; fus.mkdir()
-    monkeypatch.setattr(fusion_model, "SAVE_DIR", str(fus))
-    monkeypatch.setattr("models.train.metrics_store.save_metrics", lambda *a, **k: None)
-    monkeypatch.setattr(fusion_model, "train",
-                        lambda X, y, groups=None: {"accuracy": 50.0, "evaluation": "random_holdout"})
-
-    out = tr.train_fusion(db)
-    assert "error" not in out, out
-    assert out["group_by"] == "trial_id"
-    w = out["warning"]
-    assert w["partial_subject_tagging"] is True
-    assert w["tagged"] == 8
-    assert w["untagged"] == 4
-    assert len(w["untagged_row_ids"]) == 4
