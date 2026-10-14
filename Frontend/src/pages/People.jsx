@@ -3,6 +3,8 @@ import { useState, useEffect, useMemo } from "react";
 import { API_BASE } from "../api";
 
 const GROUPS = ["Student", "Staff", "Visitor", "Security", "Admin"];
+const MAX_PHOTOS = 10;
+const fileKey = (f) => `${f.name}:${f.size}:${f.lastModified}`;
 
 export default function People() {
   const [q, setQ] = useState("");
@@ -14,8 +16,11 @@ export default function People() {
   const [showAdd, setShowAdd] = useState(false);
   const [enrolling, setEnrolling] = useState(false);
   const [form, setForm] = useState({ name: "", id_number: "", group: "Student" });
-  const [files, setFiles] = useState(null);
-  const [previews, setPreviews] = useState([]);
+  // one entry per selected photo, holding both the File and its object URL so the
+  // two can never drift apart when an image is removed
+  const [picks, setPicks] = useState([]);
+  const files = picks.map((p) => p.file);
+  const previews = picks.map((p) => p.url);
   const [toast, setToast] = useState("");
   const [showEdit, setShowEdit] = useState(false);
   const [editForm, setEditForm] = useState({ name: "", id_number: "", group: "Student" });
@@ -68,16 +73,33 @@ export default function People() {
   }, [filtered, selected]);
 
   const onFiles = (fl) => {
-    setFiles(fl);
-    if (!fl) { setPreviews([]); return; }
-    const urls = Array.from(fl).map((f) => URL.createObjectURL(f));
-    setPreviews((prev) => { prev.forEach((u) => URL.revokeObjectURL(u)); return urls; });
+    if (!fl || !fl.length) return;
+    // ADD to the current selection instead of replacing it, capped at MAX_PHOTOS
+    const incoming = Array.from(fl);
+    const seen = new Set(picks.map((p) => fileKey(p.file)));
+    const fresh = incoming.filter((f) => !seen.has(fileKey(f)));
+    const room = Math.max(MAX_PHOTOS - picks.length, 0);
+    const added = fresh.slice(0, room).map((f) => ({ file: f, url: URL.createObjectURL(f) }));
+    setPicks([...picks, ...added]);
+    if (fresh.length > room) setToast(`Up to ${MAX_PHOTOS} photos per enrollment`);
+  };
+
+  const removeFile = (i) => {
+    const target = picks[i];
+    if (target?.url) URL.revokeObjectURL(target.url);
+    setPicks(picks.filter((_, idx) => idx !== i));
+  };
+
+  const clearFiles = () => {
+    picks.forEach((p) => URL.revokeObjectURL(p.url));
+    setPicks([]);
   };
 
   const handleEnroll = async () => {
     if (!form.name.trim()) { setToast("Name required"); setTimeout(() => setToast(""), 2500); return; }
     if (!form.id_number.trim()) { setToast("ID Number required"); setTimeout(() => setToast(""), 2500); return; }
-    if (!files?.length) { setToast("At least 1 photo required"); setTimeout(() => setToast(""), 2500); return; }
+    if (!files.length) { setToast("At least 1 photo required"); setTimeout(() => setToast(""), 2500); return; }
+    if (files.length > MAX_PHOTOS) { setToast(`At most ${MAX_PHOTOS} photos`); setTimeout(() => setToast(""), 2500); return; }
     setEnrolling(true);
     try {
       const fd = new FormData();
@@ -88,13 +110,11 @@ export default function People() {
       const r = await fetch(`${API_BASE}/recognition/enroll`, { method: "POST", body: fd });
       const j = await r.json();
       if (j.error) throw new Error(j.error);
-      setToast(`${j.message} — ${j.images} photos`);
+      setToast(`${j.message} — ${j.images} photo${j.images === 1 ? "" : "s"} saved`);
       setTimeout(() => setToast(""), 2500);
       setShowAdd(false);
       setForm({ name: "", id_number: "", group: "Student" });
-      setFiles(null);
-      previews.forEach((u) => URL.revokeObjectURL(u));
-      setPreviews([]);
+      clearFiles();
       load();
     } catch (e) {
       setToast(e.message || "Enroll failed");
@@ -187,17 +207,35 @@ export default function People() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-[10px]" style={{ color: "var(--text-muted)" }}>Photos * (1–5, face visible)</label>
+              <label className="text-[10px]" style={{ color: "var(--text-muted)" }}>Photos * (1–{MAX_PHOTOS})</label>
               <label className="rounded-[4px] border-dashed border px-3 py-3 text-center cursor-pointer text-[11px] flex flex-col items-center gap-1" style={{ borderColor: "var(--border)", color: "var(--text-muted)", background: "var(--bg-card-alt)" }}>
-                <span>Click to select photos</span>
-                <span className="text-[10px]">{files ? `${files.length} selected` : "No files"}</span>
-                <input type="file" multiple accept="image/*" className="hidden" onChange={(e) => onFiles(e.target.files)} />
+                <span>Click to add photos</span>
+                <span className="text-[10px]">{files.length ? `${files.length} of ${MAX_PHOTOS} selected` : "No files"}</span>
+                <input type="file" multiple accept="image/*" className="hidden" onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
               </label>
+              <div className="flex items-center justify-between">
+                <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>Recommended: 3–5 clear frontal photos with different lighting. You can add more photos later.</p>
+                {files.length > 0 && (
+                  <button type="button" onClick={clearFiles} className="text-[10px] px-2 py-0.5 rounded-[3px] border shrink-0" style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>Clear all</button>
+                )}
+              </div>
               {previews.length > 0 && (
                 <div className="grid grid-cols-5 gap-1.5">
                   {previews.map((u, i) => (
-                    <div key={i} className="aspect-square rounded-[4px] overflow-hidden" style={{ border: "1px solid var(--border-subtle)", background: "#080C10" }}>
-                      <img src={u} alt={`preview ${i}`} className="w-full h-full object-cover" />
+                    <div key={u} className="relative aspect-square rounded-[4px] overflow-hidden" style={{ border: "1px solid var(--border-subtle)", background: "#080C10" }}>
+                      <img src={u} alt={files[i]?.name || `preview ${i}`} className="w-full h-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => removeFile(i)}
+                        title={files[i]?.name || "Remove photo"}
+                        className="absolute top-0 right-0 text-[9px] leading-none px-1 py-0.5 rounded-bl-[3px] font-bold"
+                        style={{ background: "rgba(0,0,0,0.65)", color: "var(--over)" }}
+                      >
+                        ✕
+                      </button>
+                      <span className="absolute bottom-0 left-0 right-0 text-[8px] px-1 py-0.5 truncate" style={{ background: "rgba(0,0,0,0.65)", color: "var(--text-muted)" }}>
+                        {files[i]?.name}
+                      </span>
                     </div>
                   ))}
                 </div>

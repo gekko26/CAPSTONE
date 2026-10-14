@@ -89,7 +89,14 @@ export default function ModelStatistics(){
           </div>
           <div className="rounded-xl p-4" style={{background:"var(--bg-card)", border:"1px solid var(--border-subtle)"}}>
             <div className="flex items-center gap-1.5 text-sm font-medium mb-2" style={{color:"var(--text-primary)"}}><GitMerge size={14}/> BAC regressor</div>
-            {bac && bac.mae != null ? <><MetricRow k="BAC MAE/RMSE/R²" v={`${bac.mae}/${bac.rmse}/${bac.r2}`} /><MetricRow k="BAC tier acc" v={`${bac.tier_accuracy}%`} /></> : <div className="text-xs mt-2" style={{color:"var(--text-muted)"}}>BAC: {bac?.error || "not trained / needs 100+ Breath rows"}</div>}
+            {!bac || bac.error || bac.mae == null
+              ? <MetricErr e={{ error: bac?.error || "Not trained / needs 100+ Breath rows" }}/>
+              : <>
+                <MetricRow k="MAE / RMSE" v={`${bac.mae} / ${bac.rmse}`} />
+                <MetricRow k="R²" v={`${bac.r2}`} />
+                <MetricRow k="Tier accuracy" v={`${bac.tier_accuracy}%`} />
+                <MetricRow k="Samples / Trials" v={`${bac.samples} / ${bac.trials ?? "—"}`} />
+              </>}
           </div>
         </div>
       )}

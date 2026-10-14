@@ -42,7 +42,7 @@ PH_LIMIT = 0.05
 
 # Canonical BAC band edges. Every threshold comparison in the backend must read
 # these instead of repeating a literal, so the tiers cannot drift between the
-# classifier, the fusion label rule and the /training response echo.
+# sensor classifier, the rule-based decision and the /training response echo.
 #   pass       bac <  BAC_NEAR_LIMIT
 #   near_limit BAC_NEAR_LIMIT <= bac < BAC_OVER_LIMIT
 #   over_limit bac >= BAC_OVER_LIMIT

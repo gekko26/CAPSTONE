@@ -43,16 +43,34 @@ except Exception as e:
     print(f"[FACE RECOGNITION] Pre-warm notice: {e}")
 
 
+def _next_free_path(subject_dir, taken):
+    """Lowest unused NN.jpg slot inside subject_dir.
+
+    A slot is free only when it is neither already written by this call (`taken`) nor
+    present on disk. Numbering from 01 on every call used to overwrite a person's
+    earlier photos when they were enrolled again.
+    """
+    n = 1
+    while True:
+        path = os.path.join(subject_dir, f"{n:02d}.jpg")
+        if path not in taken and not os.path.exists(path):
+            return path
+        n += 1
+
+
 def enroll(name, images):
     subject_dir = os.path.join(REGISTERED, name)
     os.makedirs(subject_dir, exist_ok=True)
 
-    for i, img in enumerate(images):
+    taken = set()
+    for img in images:
+        dest = _next_free_path(subject_dir, taken)
         if isinstance(img, str):
             import shutil
-            shutil.copy(img, os.path.join(subject_dir, f"{i+1:02d}.jpg"))
+            shutil.copy(img, dest)
         else:
-            cv2.imwrite(os.path.join(subject_dir, f"{i+1:02d}.jpg"), img)
+            cv2.imwrite(dest, img)
+        taken.add(dest)
 
     pkl_path = os.path.join(REGISTERED, "representations_facenet.pkl")
     if os.path.exists(pkl_path):

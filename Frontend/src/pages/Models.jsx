@@ -20,6 +20,12 @@ const MODELS = [
     name: "MobileNetV2",
     desc: "Vision model — classifies a face image as sober or impaired using transfer learning.",
   },
+  {
+    key: "bac_regressor",
+    name: "BAC Regressor",
+    desc: "Estimates the breath alcohol percentage from the MQ-3 window, used by the rule-based decision.",
+    metricsNote: "BAC regression metrics (MAE, RMSE, R², tier accuracy) are on the Models Statistics page.",
+  },
 ];
 
 function MetricRow({ label, value }) {
@@ -59,7 +65,8 @@ export default function Models() {
 
   const entry   = statusMap[selectedKey];
   const detail  = MODELS.find((m) => m.key === selectedKey);
-  const trainedCount = Object.values(statusMap).filter((s) => s.trained).length;
+  // count only the cards actually rendered, so n/N cannot exceed N
+  const trainedCount = MODELS.filter((m) => statusMap[m.key]?.trained).length;
   // Real peak accuracy across all trained models that reported metrics
   const accuracies = Object.values(statusMap)
     .filter((s) => s.trained && s.metrics?.accuracy != null)
@@ -178,7 +185,7 @@ export default function Models() {
                   </>
                 ) : (
                   <p className="text-xs mt-4" style={{ color: "var(--text-muted)" }}>
-                    Model file exists but no recorded evaluation metrics were found.
+                    {detail.metricsNote || "Model file exists but no recorded evaluation metrics were found."}
                   </p>
                 )}
               </div>

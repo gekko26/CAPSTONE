@@ -249,7 +249,7 @@ def analyze_frame(frame):
 
     # Fusion of EAR + MAR + head pose into a single rule-based status.
     # This stays a lightweight pre-trigger heuristic — it does NOT touch
-    # the trained fusion RF, which still only consumes sensor + MobileNetV2 outputs.
+    # the trained face model, whose outputs only ever feed the rule-based decision.
     # Unified to 3-class: normal / fatigue (was drowsy) / impaired — fatigue = drowsy(ear)+yawning(mar)+head_down
     if avg_ear > float(EAR_NORMAL_THRESHOLD) and not yawning and not head_down:
         status, impaired = "normal", False
