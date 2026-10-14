@@ -8,7 +8,8 @@ import {
 
 import { API_BASE as BASE } from "../api";
 const FRAME_MS    = 60;   // 15 FPS max for stream1 — max fps without affecting other functionalities, quality 78
-const ANALYZE_MS  = 380;  // decoupled analysis — keeps autocapture responsive   
+const ANALYZE_MS  = 380;  // decoupled analysis — keeps autocapture responsive
+const FACE_MIN_SIZE = 0.05;  // mirror of Backend FACE_MATCH/FACE_MIN_SIZE (fraction of frame width)   
 
 const LABEL_NAMES = { "-1": "Pending", 0: "No alcohol", 1: "Breath alcohol", 2: "Others" };
 const SUB_NAMES   = { sanitizer: "Rubbing alcohol", perfume: "Perfume / cologne", drowsy: "Drowsy (Fake Sleep)", clear_air: "Clear Air (Empty)" };
@@ -793,7 +794,13 @@ export default function Training() {
   const isClose = analysis?.is_close ?? false;
   const isMedium = analysis?.proximity === "medium";
   const isIdentified = !!analysis?.identified;
-  const readyToCapture = (isClose || isMedium || isIdentified) && analysis?.status !== "no_face" || isIdentified;
+  // A face must actually be present. An identity must NEVER override "no_face":
+  // a false identity used to arm auto-capture and save an empty frame.
+  const hasFace = !!analysis && analysis.status !== "no_face" && analysis.status != null
+    && (analysis.face_width ?? 0) >= FACE_MIN_SIZE;
+  const readyToCapture = hasFace && (isClose || isMedium || isIdentified);
+  const identityReason = analysis?.reason ?? (analysis?.status === "no_face" ? "no_face" : "unknown");
+  const identityText = isIdentified ? analysis.name : identityReason;
   const proximityStr = analysis?.proximity ?? "far";
 
   const proximityColorMap = {
@@ -1104,17 +1111,11 @@ export default function Training() {
                         style={{ background: "rgba(0,0,0,0.6)", color: readyToCapture ? "#34d399" : "rgba(255,255,255,0.7)" }}>
                         EAR {analysis.ear?.toFixed(3) ?? "--"} · {analysis.status?.toUpperCase() ?? "--"} · {analysis.proximity ?? "--"} {readyToCapture ? "✓ READY" : ""}
                       </div>
-                      {analysis.identified && (
-                        <div className="text-[11px] font-medium px-2 py-0.5 rounded-full"
-                          style={{ background: "rgba(0,0,0,0.6)", color: "var(--pass)" }}>
-                          ✓ {analysis.name}
-                        </div>
-                      )}
-                      {analysis.status === "no_face" && !analysis.identified && (
-                        <div className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }}>
-                          No face — step into center
-                        </div>
-                      )}
+                      <div className="text-[11px] font-medium px-2 py-0.5 rounded-full"
+                        style={{ background: "rgba(0,0,0,0.6)",
+                                 color: isIdentified ? "var(--pass)" : "#fbbf24" }}>
+                        {isIdentified ? `✓ ${analysis.name}` : identityText}
+                      </div>
                     </div>
                   )}
                   {readyToCapture && collecting && (
@@ -1133,6 +1134,7 @@ export default function Training() {
                       {!analysis?.is_close && analysis?.proximity === "far" && <span className="text-[9px] opacity-70">— move closer (needs close/medium)</span>}
                       {analysis?.status === "no_face" && !analysis?.identified && <span className="text-[9px] opacity-70">— no face</span>}
                       {analysis?.identified && <span className="text-[9px] opacity-70">— {analysis.name} detected, will auto-capture</span>}
+                      {!analysis?.identified && hasFace && <span className="text-[9px] opacity-70">— {identityReason}</span>}
                     </div>
                   )}
                   {collecting && (

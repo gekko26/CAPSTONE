@@ -11,7 +11,11 @@ from dotenv import load_dotenv
 from database.db import get_db
 from database.models import Reading, Subject
 from models.train.cv_model import analyze_frame, draw_overlay
-from models.train.face_recognition import identify, enroll
+from models.train.face_recognition import (
+    identify, enroll, FACE_MATCH_THRESHOLD, FACE_MATCH_MARGIN,
+    FACE_MIN_SIZE, FACE_CONSECUTIVE_FRAMES, FACE_IDENT_MAX_HZ,
+)
+from models.train.identity_matching import IdentitySmoother
 import numpy as np
 import cv2
 import time
@@ -116,6 +120,68 @@ def get_rtsp_frame() -> np.ndarray | None:
 
 _analyze_lock = threading.Lock()
 _last_analysis = None
+
+# ── Identity smoothing + rate limiting ────────────────────────────────────────
+# One smoother per camera stream. It is guarded by its own lock and is deliberately
+# NOT the _analyze_lock, so identification can never stall the video stream or a
+# concurrent /analyze call.
+FACE_ANALYSIS_TTL_S = float(os.getenv("FACE_ANALYSIS_TTL_S", "2.0"))
+_ident_state = {
+    "smoother": IdentitySmoother(consecutive=FACE_CONSECUTIVE_FRAMES),
+    "frame": 0,
+    "last_ident_at": 0.0,
+    "current": {"identified": False, "name": None, "confidence": 0.0, "reason": "no_face"},
+}
+_ident_lock = threading.Lock()
+
+
+def _identify_gated(frame, ear_result):
+    """Identify at a bounded rate and smooth the result.
+
+    * no face / face too small -> unknown WITHOUT calling DeepFace
+    * at most FACE_IDENT_MAX_HZ DeepFace calls per second; between calls the last
+      smoothed identity is reused
+    Returns (smoothed, raw). `smoothed` is what /camera/analyze reports.
+    """
+    status = ear_result.get("status")
+    face_width = float(ear_result.get("face_width") or 0.0)
+
+    if status == "no_face" or face_width < FACE_MIN_SIZE:
+        reason = "no_face" if status == "no_face" else "too_small"
+        raw = {"identified": False, "name": None, "confidence": 0.0, "reason": reason}
+    else:
+        with _ident_lock:
+            now = time.time()
+            interval = 1.0 / FACE_IDENT_MAX_HZ if FACE_IDENT_MAX_HZ > 0 else 0.0
+            due = (now - _ident_state["last_ident_at"]) >= interval
+            if due:
+                _ident_state["last_ident_at"] = now
+                _ident_state["frame"] += 1
+                # pass the MediaPipe result down so identify() gates on it too
+                raw = identify(frame, face_info=ear_result)
+            else:
+                raw = dict(_ident_state["current"])
+                raw["reason"] = "throttled"
+            smoother = _ident_state["smoother"]
+            frame_idx = _ident_state["frame"]
+            smoothed = smoother.update(frame_idx, raw.get("name"), raw.get("reason"))
+            if raw.get("identified"):
+                _ident_state["current"] = dict(raw)
+            out = {
+                "identified": smoothed["identified"],
+                "name": smoothed["name"],
+                "confidence": float(raw.get("confidence") or 0.0) if smoothed["identified"] else 0.0,
+                "reason": smoothed["reason"],
+            }
+        return out, raw
+
+    with _ident_lock:
+        smoothed = _ident_state["smoother"].update(_ident_state["frame"], None, raw["reason"])
+        _ident_state["current"] = dict(raw)
+    return {
+        "identified": False, "name": None, "confidence": 0.0,
+        "reason": raw["reason"],
+    }, raw
 
 
 # ── Quality knob (D) — FINAL: 82 as sweet spot before 85→88 inflection
@@ -285,6 +351,26 @@ def stream_frame(overlay: str = "1", quality: int | None = None):
     )
 
 
+def _with_freshness(result):
+    """Never hand back an identity computed from an old frame.
+
+    An analysis older than FACE_ANALYSIS_TTL_S is reported as unknown with reason
+    "stale". Every original key is preserved.
+    """
+    if not isinstance(result, dict):
+        return result
+    ts = result.get("ts") or 0.0
+    if (time.time() - ts) > FACE_ANALYSIS_TTL_S and result.get("identified"):
+        out = dict(result)
+        out["identified"] = False
+        out["name"] = None
+        out["confidence"] = 0.0
+        out["reason"] = "stale"
+        return out
+    return result
+
+
+
 # ── Analyze endpoint ──────────────────────────────────────────
 @router.post("/analyze")
 def analyze(file: UploadFile = File(None), db: Session = Depends(get_db)):
@@ -308,7 +394,7 @@ def analyze(file: UploadFile = File(None), db: Session = Depends(get_db)):
 
     try:
         ear_result = analyze_frame(frame)
-        face_result = identify(frame)
+        face_result, identity_raw = _identify_gated(frame, ear_result)
 
         result = {
             "proximity":  ear_result["proximity"],
@@ -328,9 +414,14 @@ def analyze(file: UploadFile = File(None), db: Session = Depends(get_db)):
             "identified": face_result["identified"],
             "name":       face_result["name"],
             "confidence": face_result["confidence"],
+            "reason":     face_result.get("reason", "unknown"),
+            "identity_raw": {"identified": identity_raw.get("identified", False),
+                             "name": identity_raw.get("name"),
+                             "reason": identity_raw.get("reason")},
+            "ts": time.time(),
         }
         _last_analysis = result
-        return result
+        return _with_freshness(result)
     except Exception as exc:
         logger.error(f"[POST /analyze] CRITICAL exception caught during processing loop: {exc}")
         return {"error": f"Internal processing crash: {str(exc)}"}
@@ -356,7 +447,8 @@ def register_subject(
     if frame is None:
         return {"error": "No frame available"}
 
-    face_result = identify(frame)
+    # gated the same way as /analyze: no face -> unknown, never a guess
+    face_result = identify(frame, face_info=analyze_frame(frame))
 
     if face_result["identified"] and face_result["confidence"] > 0.7:
         existing = db.query(Subject).filter(Subject.face_id == face_result["name"]).first()

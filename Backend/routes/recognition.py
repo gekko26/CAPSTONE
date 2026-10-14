@@ -160,6 +160,7 @@ async def identify_subject(
         "name":       result["name"],
         "confidence": result["confidence"],
         "subject_id": subject_id,
+        "reason":     result.get("reason", "unknown"),
     }
 
 
@@ -190,6 +191,8 @@ async def verify_subject(
         "verified":   result["verified"],
         "confidence": result.get("confidence"),
         "error":      result.get("error"),
+        "distance":   result.get("distance"),
+        "reason":     result.get("reason"),
     }
 
 

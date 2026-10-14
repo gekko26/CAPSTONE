@@ -17,6 +17,7 @@ os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1" 
 
 from deepface import DeepFace
+from models.train.identity_matching import decide_identity, confidence_for_distance
 import tensorflow.keras.backend as K
 
 # ── Paths ──────────────────────────────────────────────────────
@@ -28,6 +29,33 @@ os.makedirs(SNAPSHOTS,  exist_ok=True)
 
 _deepface_lock = threading.RLock()
 
+# ── Identity tuning — defined ONCE here, never duplicated ────────────────────
+# Model in use is DeepFace Facenet with the library's default cosine distance
+# metric (see MODEL_NAME / DISTANCE_METRIC). DeepFace's own documented default
+# threshold for Facenet+cosine is 0.40.
+#
+# The defaults below are DELIBERATELY STRICTER than that library default: a gate
+# that lets the wrong person through is worse than one that says "unknown", so we
+# prefer false negatives. They are PLACEHOLDERS — run
+# `python scripts/calibrate_face_threshold.py` against the real gallery and set the
+# printed FACE_MATCH_THRESHOLD / FACE_MATCH_MARGIN in the environment.
+FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.32"))
+# Two different people must differ by at least this much to call one of them.
+FACE_MATCH_MARGIN = float(os.getenv("FACE_MATCH_MARGIN", "0.08"))
+# Minimum face width as a FRACTION of frame width (same units cv_model's
+# estimate_face_width/estimate_proximity use). Below this the frame is not even
+# sent to DeepFace.
+FACE_MIN_SIZE = float(os.getenv("FACE_MIN_SIZE", "0.05"))
+# Frames the same name must win before it is reported, and the HTT-request rate.
+FACE_CONSECUTIVE_FRAMES = int(os.getenv("FACE_CONSECUTIVE_FRAMES", "3"))
+FACE_IDENT_MAX_HZ = float(os.getenv("FACE_IDENT_MAX_HZ", "2"))
+
+MODEL_NAME = "Facenet"
+DISTANCE_METRIC = "cosine"
+# A REAL detector: DeepFace must actually locate a face before it will embed
+# anything, so an empty frame can never produce an embedding and a match.
+DETECTOR_BACKEND = os.getenv("FACE_DETECTOR_BACKEND", "opencv")
+
 print("[FACE RECOGNITION] Pre-warming DeepFace models on main thread...")
 try:
     with _deepface_lock:
@@ -36,7 +64,14 @@ try:
         # We use 'skip' to force it to ignore OpenCV/MTCNN detectors completely 
         # and just compile the Keras graph in memory.
         dummy_img = np.zeros((224, 224, 3), dtype=np.uint8)
-        _ = DeepFace.represent(img_path=dummy_img, model_name="Facenet", enforce_detection=False, detector_backend='skip')
+        # pre-warm with the SAME real detector the live path uses, so the detector
+        # graph is hot too (a black dummy frame legitimately raises "no face")
+        try:
+            _ = DeepFace.represent(img_path=dummy_img, model_name=MODEL_NAME,
+                                   detector_backend=DETECTOR_BACKEND,
+                                   enforce_detection=False, silent=True)
+        except Exception:
+            pass
         
     print("[FACE RECOGNITION] Models fully pre-warmed and ready.")
 except Exception as e:
@@ -83,76 +118,133 @@ def enroll(name, images):
     return subject_dir
 
 
-def identify(frame):
+def _unknown(reason="unknown"):
+    """Fail-safe result: identified False, name None, plus the reason.
+
+    The `name` key is unchanged, only its value for an unknown face is now None
+    (the frontend already renders its own "Unknown" placeholder).
+    """
+    return {"identified": False, "name": None, "confidence": 0.0,
+            "reason": reason, "face_name": None}
+
+
+def identify(frame, face_info=None):
+    """Identify the person in `frame`, or return unknown.
+
+    `face_info` is the MediaPipe result from cv_model.analyze_frame (the caller
+    already has it, so we do not pay for a second pass). When it says there is no
+    face, or the face is too small to be trusted, DeepFace is NOT called at all.
+
+    Thresholds: a candidate must be within FACE_MATCH_THRESHOLD, and if a SECOND
+    distinct person is closer than FACE_MATCH_MARGIN the answer is "ambiguous" ->
+    unknown. A wrong name is worse than no name.
+    """
+    # ---- gate 1: a face must actually be present and big enough -------------
+    if face_info is not None:
+        status = face_info.get("status")
+        if status == "no_face":
+            return _unknown("no_face")
+        width = float(face_info.get("face_width") or 0.0)
+        if width < FACE_MIN_SIZE:
+            return _unknown("too_small")
+
     if not os.path.exists(REGISTERED) or not os.listdir(REGISTERED):
-        return {"identified": False, "name": "Unknown", "confidence": 0.0}
+        return _unknown("no_candidates")
 
     fd, temp_path = tempfile.mkstemp(suffix=".jpg", dir=SNAPSHOTS)
-    os.close(fd) 
+    os.close(fd)
 
     try:
         cv2.imwrite(temp_path, frame)
     except Exception as e:
         print(f"Failed to write identify temp frame: {e}")
-        return {"identified": False, "name": "Unknown", "confidence": 0.0}
+        return _unknown("write_failed")
 
-    result_data = {"identified": False, "name": "Unknown", "confidence": 0.0}
-
-    with _deepface_lock:
-        try:
-            # NOTE: per-call K.clear_session() removed — benchmarked flat RSS over 25 sequential identify()
-            # calls (886.1 MB, Δ 0.0 MB, no leak on this DeepFace/TF version). Clearing every call
-            # defeated the pre-warm at import (lines 31-39) and cost ~15% latency (~60 ms/call).
-            
-            # Bypass OpenCV detector entirely using 'skip'
+    try:
+        with _deepface_lock:
+            # enforce_detection=True + a real detector: DeepFace itself must find a
+            # face. With detector_backend="skip" it embedded whatever the camera saw,
+            # which is why an empty room still produced an identity.
             results = DeepFace.find(
-                img_path=temp_path, 
+                img_path=temp_path,
                 db_path=REGISTERED,
-                model_name="Facenet",
-                enforce_detection=False,
-                detector_backend="skip", 
-                silent=True
+                model_name=MODEL_NAME,
+                detector_backend=DETECTOR_BACKEND,
+                distance_metric=DISTANCE_METRIC,
+                enforce_detection=True,
+                silent=True,
             )
+            candidates = _collect_candidates(results)
+    except Exception as e:
+        # DeepFace raises ValueError("Face could not be detected") for a frame with
+        # no face — that is an ordinary "unknown", never an error and never a guess.
+        print(f"[IDENTIFY] DeepFace returned no match: {e}")
+        return _unknown("no_face" if _is_no_face_error(e) else "error")
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception as e:
+                print(f"[IDENTIFY] temp file cleanup failed: {e}")
 
-            if len(results) > 0 and not results[0].empty:
-                best      = results[0].iloc[0]
-                file_path = best["identity"]
-                
-                # ---------------------------------------------------------
-                # FIX: Smart Name Extraction
-                parent_folder = os.path.basename(os.path.dirname(file_path))
-                
-                if parent_folder.lower() == "registered":
-                    # It's a direct file (e.g., registered/Edrian.jpg) -> Extract "Edrian"
-                    name = os.path.splitext(os.path.basename(file_path))[0]
-                else:
-                    # It's inside a user folder (e.g., registered/Edrian/01.jpg) -> Extract "Edrian"
-                    name = parent_folder
-                # ---------------------------------------------------------
+    person, reason, info = decide_identity(
+        candidates, FACE_MATCH_THRESHOLD, FACE_MATCH_MARGIN)
+    if person is None:
+        return _unknown(reason)
 
-                distance  = best.get("distance", 1.0)
-                confidence = max(0.0, min(1.0, 1.0 - (distance / 0.4)))
+    distance = info.get("distance", FACE_MATCH_THRESHOLD)
+    return {
+        "identified": True,
+        "name": person,
+        "confidence": round(confidence_for_distance(distance, FACE_MATCH_THRESHOLD), 4),
+        "reason": reason,
+        "face_name": person,
+        "distance": distance,
+        "candidates": len(candidates),
+    }
 
-                result_data = {
-                    "identified": True,
-                    "name":       name,
-                    "confidence": confidence
-                }
 
-        except Exception as e:
-            print(f"DeepFace processing error: {e}")
-        
-        finally:
-            # per-call K.clear_session() removed — see note above (pre-warm stays hot)
-            pass
+def _is_no_face_error(exc):
+    """DeepFace's 'Face could not be detected' is an unknown, not a failure."""
+    msg = str(exc).lower()
+    return "could not be detected" in msg or "no face" in msg or "face could not" in msg
 
-    if os.path.exists(temp_path):
-        try:
-            os.remove(temp_path)
-        except:
-            pass
 
-    return result_data
+def _collect_candidates(results):
+    """Turn DeepFace.find output into [(person, distance), ...], one per gallery IMAGE.
+
+    Every row is kept (not just the best) so decide_identity can apply the margin
+    against a genuinely different person. Distances are read from the `distance`
+    column, which is already in DISTANCE_METRIC's units because find() was given the
+    same metric.
+    """
+    if results is None or len(results) == 0:
+        return []
+    try:
+        if results[0].empty:
+            return []
+    except (AttributeError, IndexError):
+        return []
+
+    out = []
+    for _, row in results[0].iterrows():
+        file_path = row.get("identity")
+        if not file_path:
+            continue
+        person = _person_from_path(file_path)
+        if person is None:
+            continue
+        out.append((person, row.get("distance")))
+    return out
+
+
+def _person_from_path(file_path):
+    """Gallery images live at registered/<person>/NN.jpg; older ones at registered/<person>.jpg."""
+    parent = os.path.basename(os.path.dirname(file_path))
+    if parent.lower() == "registered":
+        stem = os.path.splitext(os.path.basename(file_path))[0]
+        return stem or None
+    return parent or None
 
 
 def verify(frame, name):
@@ -177,19 +269,26 @@ def verify(frame, name):
         try:
             # per-call K.clear_session() removed — same benchmark logic as identify() (no leak)
 
-            # Bypass OpenCV detector entirely using 'skip'
+            # real detector + enforce_detection, same as identify()
             result = DeepFace.verify(
                 img1_path=temp_path,
                 img2_path=ref_img,
-                model_name="Facenet",
-                enforce_detection=False,
-                detector_backend="skip",
+                model_name=MODEL_NAME,
+                detector_backend=DETECTOR_BACKEND,
+                distance_metric=DISTANCE_METRIC,
+                enforce_detection=True,
                 silent=True
             )
-                
+
+            distance = float(result.get("distance", 1.0))
+            # verify() is a one-to-one claim, so only the threshold applies here.
+            # A distance above it is NOT this person, whatever the library said.
+            within = distance <= FACE_MATCH_THRESHOLD
             result_data = {
-                "verified":   result["verified"],
-                "confidence": round(1 - result["distance"], 4)
+                "verified":   bool(result.get("verified")) and within,
+                "confidence": round(confidence_for_distance(distance, FACE_MATCH_THRESHOLD), 4),
+                "distance":   round(distance, 4),
+                "reason":     "matched" if within else "above_threshold",
             }
             
         except Exception as e:
