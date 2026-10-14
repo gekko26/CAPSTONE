@@ -2,15 +2,38 @@ from fastapi import APIRouter, Depends, File, UploadFile, Form
 from sqlalchemy.orm import Session
 from database.db import get_db
 from database.models import Subject
-from models.train.face_recognition import enroll, identify, verify
+from models.train.face_recognition import enroll, identify, verify, REGISTERED as FACES_REGISTERED
 from pydantic import BaseModel
 from typing import Optional
 import os
 import shutil
+from pathlib import Path
+
 import numpy as np
 import cv2
+from fastapi.responses import FileResponse, JSONResponse
 
 router = APIRouter(prefix="/recognition", tags=["recognition"])
+
+
+def _subject_dir(name):
+    """Folder enroll() writes this person's photos into (shared constant)."""
+    return os.path.join(FACES_REGISTERED, name)
+
+
+def _latest_photo(name):
+    """Newest photo on disk for `name`, or None when there is none.
+
+    Returns an absolute path. Returns None on any filesystem problem so enrollment
+    still succeeds — the person is simply recorded without an avatar.
+    """
+    try:
+        pics = (sorted(Path(_subject_dir(name)).glob("*.jpg"))
+                + sorted(Path(_subject_dir(name)).glob("*.png")))
+        return str(pics[-1]) if pics else None
+    except Exception as e:
+        print(f"[ENROLL] avatar lookup failed for {name!r}: {e}")
+        return None
 
 
 @router.post("/enroll")
@@ -49,16 +72,10 @@ async def enroll_subject(
     # 3. Save subject to DB if not already registered — path-based image storage (not blob)
     import os
     face_ref = id_number.strip() if id_number and id_number.strip() else name
-    # avatar_path: first image saved to data/faces/{name} via enroll()
-    avatar_path = None
-    try:
-        from pathlib import Path
-        base = Path(__file__).resolve().parent.parent / "data" / "faces" / name
-        if base.exists():
-            pics = sorted(base.glob("*.jpg")) + sorted(base.glob("*.png"))
-            if pics:
-                avatar_path = str(pics[-1])
-    except: pass
+    # avatar_path: the newest photo enroll() wrote for this person. enroll() stores
+    # under FACES_REGISTERED (data/faces/registered/{name}), so the lookup has to use
+    # that same folder — looking in data/faces/{name} always missed and left NULL.
+    avatar_path = _latest_photo(name)
 
     existing = db.query(Subject).filter(Subject.name == name).first()
     if not existing:
@@ -90,6 +107,20 @@ async def enroll_subject(
         "group":      group,
         "images":     len(frames),
     }
+
+
+@router.get("/avatar/{name}")
+def get_avatar(name: str):
+    """Serve a subject's newest photo.
+
+    Keyed by subject NAME rather than by the stored path, so a request can only ever
+    reach that one person's folder — there is no path to traverse. The People page
+    requests this instead of building a URL out of avatar_path.
+    """
+    photo = _latest_photo(name)
+    if not photo or not os.path.isfile(photo):
+        return JSONResponse({"error": "No avatar for this person"}, status_code=404)
+    return FileResponse(photo)
 
 
 @router.post("/identify")

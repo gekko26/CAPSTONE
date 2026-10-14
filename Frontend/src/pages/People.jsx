@@ -267,7 +267,7 @@ export default function People() {
               {filtered.map((p) => (
                 <button key={p.id} data-interactive onClick={() => setSelected(p)} className="w-full text-left flex items-center gap-2.5 px-3 py-2.5 cursor-pointer" style={{ background: active?.id === p.id ? "var(--bg-active)" : "transparent", borderLeft: active?.id === p.id ? "2px solid var(--pass)" : "2px solid transparent" }}>
                   <div className="w-8 h-8 rounded-full bg-[#080C10] shrink-0 flex items-center justify-center overflow-hidden" style={{ border: "1px solid var(--border-subtle)" }}>
-                    {p.avatar_path ? <img src={`${API_BASE}/${p.avatar_path}`} alt={p.name} className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = "none"} /> : <span className="text-[9px] font-bold" style={{ color: "var(--text-muted)" }}>{p.name.slice(0, 2).toUpperCase()}</span>}
+                    {p.avatar_path ? <img src={`${API_BASE}/recognition/avatar/${encodeURIComponent(p.name)}`} alt={p.name} className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = "none"} /> : <span className="text-[9px] font-bold" style={{ color: "var(--text-muted)" }}>{p.name.slice(0, 2).toUpperCase()}</span>}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-[11px] font-medium truncate leading-none" style={{ color: "var(--text-primary)" }}>{p.name}</div>
@@ -296,7 +296,7 @@ export default function People() {
           ) : (
             <div className="flex gap-3">
               <div className="w-16 h-16 rounded-[6px] overflow-hidden bg-[#080C10] shrink-0 flex items-center justify-center" style={{ border: "1px solid var(--border-subtle)" }}>
-                {active.avatar_path ? <img src={`${API_BASE}/${active.avatar_path}`} alt={active.name} className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = "none"} /> : <span className="text-[11px] font-bold" style={{ color: "var(--text-muted)" }}>{active.name.slice(0, 2).toUpperCase()}</span>}
+                {active.avatar_path ? <img src={`${API_BASE}/recognition/avatar/${encodeURIComponent(active.name)}`} alt={active.name} className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = "none"} /> : <span className="text-[11px] font-bold" style={{ color: "var(--text-muted)" }}>{active.name.slice(0, 2).toUpperCase()}</span>}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
