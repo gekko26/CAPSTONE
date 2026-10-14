@@ -49,6 +49,11 @@ PH_LIMIT = 0.05
 BAC_NEAR_LIMIT = 0.02
 BAC_OVER_LIMIT = PH_LIMIT
 
+# Only alcohol captures at or above this BAC contribute an "impaired" face image.
+# Faces captured below it usually still look sober, so mirroring them would teach
+# MobileNet that a sober face belongs to the impaired class.
+IMPAIRED_FACE_MIN_BAC = BAC_OVER_LIMIT
+
 BAC_TIERS = {
     "sober": {"range": (0.00, 0.00), "risk": "none",     "ph_verdict": "PASS",    "color": "green",  "label": "Sober"},
     "trace": {"range": (0.01, 0.02), "risk": "low",      "ph_verdict": "PASS",    "color": "yellow", "label": "Trace"},

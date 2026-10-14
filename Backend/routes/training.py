@@ -4,7 +4,11 @@ from sqlalchemy.orm import Session
 from database.db import get_db
 from database.models import Subject, TrainingData
 from models.train import sensor_models
-from models.train.sensor_models import BAC_NEAR_LIMIT, BAC_OVER_LIMIT
+from models.train.sensor_models import (
+    BAC_NEAR_LIMIT,
+    BAC_OVER_LIMIT,
+    IMPAIRED_FACE_MIN_BAC,
+)
 from models.train.cv_model import analyze_frame
 from pydantic import BaseModel
 from typing import List, Optional
@@ -13,11 +17,36 @@ import cv2
 import os
 import csv
 import io
+import logging
 import httpx                  
 import requests               
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger("AlcoDetect.Training")
+
+# ── Collection readiness targets ─────────────────────────────────────────────
+# Defined once here and echoed to the frontend so no page hardcodes a number.
+# FACE_MIN_IMAGES_PER_CLASS mirrors mobilenet.MIN_IMAGES_PER_CLASS, which is the
+# value the trainer itself enforces.
+SENSOR_MIN_ROWS_PER_CLASS   = 30
+SENSOR_TARGET_ROWS_PER_CLASS = 60
+FACE_TARGET_IMAGES_PER_CLASS = 100
+
+
+def FACE_MIN_IMAGES_PER_CLASS():
+    """Sourced from mobilenet.MIN_IMAGES_PER_CLASS so the two can never drift.
+
+    Imported lazily: a module-level mobilenet import would pull TensorFlow into every
+    process (and every test run) that merely imports this router.
+    """
+    from models.train import mobilenet
+    return int(mobilenet.MIN_IMAGES_PER_CLASS)
+MIN_SUBJECTS   = 3
+TARGET_SUBJECTS = 5
+BAC_BAND_MIN_ROWS = 8
+BAC_BAND_MIN_SUBJECTS = 2
 
 router = APIRouter(prefix="/training", tags=["Training"])
 
@@ -141,6 +170,172 @@ def partial_tagging_warning(rows, group_by):
         "untagged_row_ids": [r.id for r in untagged[:50]],
     }
 
+def readiness_targets():
+    """Single source of truth for the frontend. No page hardcodes a number."""
+    return {
+        "sensor_min_rows_per_class": SENSOR_MIN_ROWS_PER_CLASS,
+        "sensor_target_rows_per_class": SENSOR_TARGET_ROWS_PER_CLASS,
+        "face_min_images_per_class": FACE_MIN_IMAGES_PER_CLASS(),
+        "face_target_images_per_class": FACE_TARGET_IMAGES_PER_CLASS,
+        "min_subjects": MIN_SUBJECTS,
+        "target_subjects": TARGET_SUBJECTS,
+        "bac_band_min_rows": BAC_BAND_MIN_ROWS,
+        "bac_band_min_subjects": BAC_BAND_MIN_SUBJECTS,
+    }
+
+
+# ── Face-mirror ownership ────────────────────────────────────────────────────
+# TrainingData rows own their images through a filename suffix: "<prefix>_<row.id>.jpg".
+# Only the three classes MobileNet trains on are ever candidates for a mirror.
+FACE_TRAINED_CLASSES = ("sober", "fatigue", "impaired")
+
+# Snapshot prefixes that can appear per class. mirrors are only ever written for the
+# class the row belongs to, but the snapshot folder holds a couple of extra prefixes.
+SNAPSHOT_PREFIXES = {
+    "sober":     ("sober",),
+    "fatigue":   ("fatigue", "drowsy", "yawning"),
+    "impaired":  ("impaired", "impaired_perfume"),
+}
+
+
+def _faces_dir(class_name):
+    return os.path.realpath(os.path.join(BASE_DIR, "data", "faces", class_name))
+
+
+def _snapshots_dir(class_name):
+    return os.path.realpath(os.path.join(BASE_DIR, "data", "snapshots", class_name))
+
+
+def _contained(path, allowed_root):
+    """True only when `path` resolves inside `allowed_root`. Guards every delete."""
+    try:
+        root = os.path.realpath(allowed_root)
+        target = os.path.realpath(path)
+        return os.path.commonpath([root, target]) == root and target != root
+    except (ValueError, OSError):
+        return False
+
+
+def safe_delete(path):
+    """Delete one image, but only inside a trained faces/ or snapshots/ class folder.
+
+    Never touches data/faces/registered, never deletes a directory, and returns
+    whether the file was actually removed.
+    """
+    if not path or not os.path.isfile(path):
+        return False
+    allowed = [_faces_dir(c) for c in FACE_TRAINED_CLASSES] + \
+              [_snapshots_dir(c) for c in FACE_TRAINED_CLASSES]
+    if not any(_contained(path, root) for root in allowed):
+        logger.warning("refusing to delete %s — outside the permitted class folders", path)
+        return False
+    try:
+        os.remove(path)
+        logger.info("removed %s", path)
+        return True
+    except OSError:
+        logger.exception("could not remove %s", path)
+        return False
+
+
+def _owned_face_files(row):
+    """Every data/faces file this row could own. Names are derived from the row id, so
+    a row never touches another row's image."""
+    out = []
+    for class_name in FACE_TRAINED_CLASSES:
+        for prefix in SNAPSHOT_PREFIXES[class_name]:
+            out.append((class_name, os.path.join(_faces_dir(class_name), f"{prefix}_{row.id}.jpg")))
+    return out
+
+
+def _owned_snapshot_files(row):
+    """Snapshot files this row owns, taken from the recorded image_path and from the
+    class naming patterns."""
+    out = []
+    if getattr(row, "image_path", None):
+        out.append(row.image_path)
+    return out
+
+
+def _remove_row_images(row):
+    """Delete this row's mirrored face copies and snapshot. Returns the list removed."""
+    removed = []
+    for _cls, path in _owned_face_files(row):
+        if safe_delete(path):
+            removed.append(path)
+    for path in _owned_snapshot_files(row):
+        if safe_delete(path):
+            removed.append(path)
+    return removed
+
+
+def reconcile_face_mirror(row, frame=None):
+    """Re-evaluate whether this row's image belongs in the MobileNet face dataset.
+
+    Runs after the caller has applied the new label/bac, so the "still valid" test
+    always reflects the CURRENT row state.
+
+    * sober / fatigue mirrors are valid only while the row is a non-alcohol capture
+      of that sub_label. Anything else is stale and gets removed.
+    * an alcohol row contributes an "impaired" image only at or above
+      IMPAIRED_FACE_MIN_BAC. Below that the mirror is removed.
+    * a new class folder is never guessed: if a stale mirror is removed the caller is
+      told, so the operator can re-capture into the right class.
+
+    Removals only need the filename. The frame is read solely when a NEW mirror has to
+    be written.
+    """
+    # ---- sweep the sober / fatigue mirrors against the current label ----------
+    still_valid = {
+        # clear_air is the pre-drinking baseline: still a sober-class capture, so its
+        # mirror must never be treated as stale just because sub_label is not "sober".
+        ("sober", "sober"):      (row.label == 0 and row.sub_label in (None, "sober", "clear_air")),
+        ("fatigue", "drowsy"):   (row.label == 0 and row.sub_label == "drowsy"),
+        ("fatigue", "yawning"):  (row.label == 0 and row.sub_label == "yawning"),
+    }
+    stale = []
+    for (class_name, prefix), valid in still_valid.items():
+        if valid:
+            continue
+        dest = os.path.join(_faces_dir(class_name), f"{prefix}_{row.id}.jpg")
+        if safe_delete(dest):
+            stale.append(dest)
+    if stale:
+        return {"face_dataset": "removed_from_face_dataset", "removed": stale}
+
+    # ---- alcohol rows: the impaired mirror is BAC-gated ----------------------
+    if row.label == 1:
+        mirror = os.path.join(_faces_dir("impaired"), f"impaired_{row.id}.jpg")
+        at_or_over = row.bac is not None and float(row.bac) >= IMPAIRED_FACE_MIN_BAC
+        if at_or_over:
+            if os.path.isfile(mirror):
+                return {"face_dataset": "impaired", "removed": []}
+            if frame is None:
+                snap = getattr(row, "image_path", None)
+                if not (snap and os.path.isfile(snap)):
+                    return {"face_dataset": "no_image", "removed": []}
+                try:
+                    import cv2 as _cv2
+                    frame = _cv2.imread(snap)
+                except Exception:
+                    logger.exception("could not read snapshot for row %s", row.id)
+                    return {"face_dataset": "no_image", "removed": []}
+            if frame is None:
+                return {"face_dataset": "no_image", "removed": []}
+            try:
+                os.makedirs(os.path.dirname(mirror), exist_ok=True)
+                import cv2 as _cv2
+                _cv2.imwrite(mirror, frame)
+                return {"face_dataset": "impaired", "removed": []}
+            except Exception:
+                logger.exception("could not mirror row %s into faces/impaired", row.id)
+                return {"face_dataset": "impaired", "removed": [], "error": "mirror_failed"}
+        removed = [mirror] if safe_delete(mirror) else []
+        return {"face_dataset": "excluded_below_threshold", "removed": removed}
+
+    return {"face_dataset": "unchanged", "removed": []}
+
+
 @router.post("/collect/clear_air")
 async def collect_clear_air(subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     row = build_pending_row(label=0, sub_label="clear_air", bac=0.00, subject_id=subject_id, db=db)
@@ -256,24 +451,32 @@ async def collect_alcohol(background_tasks: BackgroundTasks, file: UploadFile = 
     if row.trial_id is None:
         row.trial_id = row.id
         db.commit()
+    face_dataset = "excluded_below_threshold"
     if frame is not None:
         path = os.path.join(IMPAIRED_DIR, f"impaired_{row.id}.jpg")
         row.image_path = path
         db.commit()
         background_tasks.add_task(save_snapshot_task, path, frame)
-        # H3: mirror into data/faces/impaired/ so the MobileNet trainer can see the
-        # class. Without this the impaired class can never accumulate training
-        # images, because the trainer globs data/faces/ and not data/snapshots/.
-        try:
-            from pathlib import Path as _P
-            faces_impaired = os.path.join(BASE_DIR, "data", "faces", "impaired")
-            _P(faces_impaired).mkdir(parents=True, exist_ok=True)
-            import cv2 as _cv2
-            _cv2.imwrite(os.path.join(faces_impaired, f"impaired_{row.id}.jpg"), frame)
-        except Exception as _e:
-            print(f"⚠️ [H3] faces/impaired mirror failed for row {row.id}: {_e}")
+        # Only a genuinely high-BAC capture is an "impaired" face. Below
+        # IMPAIRED_FACE_MIN_BAC the face usually still looks sober, so mirroring it
+        # would poison the MobileNet class. No other faces folder is written.
+        if bac >= IMPAIRED_FACE_MIN_BAC:
+            try:
+                from pathlib import Path as _P
+                faces_impaired = os.path.join(BASE_DIR, "data", "faces", "impaired")
+                _P(faces_impaired).mkdir(parents=True, exist_ok=True)
+                import cv2 as _cv2
+                _cv2.imwrite(os.path.join(faces_impaired, f"impaired_{row.id}.jpg"), frame)
+                face_dataset = "impaired"
+            except Exception as _e:
+                logger.warning("faces/impaired mirror failed for row %s: %s", row.id, _e)
+        else:
+            logger.info("alcohol row %s at bac=%s is below IMPAIRED_FACE_MIN_BAC=%s — not mirrored to data/faces",
+                        row.id, bac, IMPAIRED_FACE_MIN_BAC)
     trigger_result = await trigger_esp32_async(row_id=row.id)
-    return {"message": "Alcohol captured", "id": row.id, "subject_id": row.subject_id, "image_path": row.image_path, "trigger": trigger_result}
+    return {"message": "Alcohol captured", "id": row.id, "subject_id": row.subject_id,
+            "image_path": row.image_path, "face_dataset": face_dataset,
+            "trigger": trigger_result}
 
 @router.post("/collect/sanitizer")
 async def collect_sanitizer(subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
@@ -398,11 +601,16 @@ def attach_label(row_id: int, payload: LabelPayload, db: Session = Depends(get_d
     if not row: raise HTTPException(status_code=404, detail="Not found")
     validate_subject_id(payload.subject_id, db)
     if row.label == 1:
+        old_bac = row.bac
         row.bac = payload.bac
         if payload.subject_id is not None:
             row.subject_id = payload.subject_id
         db.commit()
-        return {"id": row.id, "label": row.label, "label_name": LABEL_NAMES[row.label]}
+        # A BAC crossing IMPAIRED_FACE_MIN_BAC moves the image in or out of the
+        # impaired face class.
+        face = reconcile_face_mirror(row) if old_bac != payload.bac else {"face_dataset": "unchanged", "removed": []}
+        return {"id": row.id, "label": row.label, "label_name": LABEL_NAMES[row.label],
+                "face_dataset": face["face_dataset"], "removed_files": face["removed"]}
     # Support 18D stored vector for assign_label (needs at least 15)
     stored = [row.mq3_1_max, row.mq3_1_avg, row.mq3_1_std, row.mq3_2_max, row.mq3_2_avg, row.mq3_2_std, row.mq3_3_max, row.mq3_3_avg, row.mq3_3_std, row.rise_time, row.decay_time, row.spatial_variance, row.spatial_variance_avg, row.temperature, row.humidity]
     # append Plan A directional if available
@@ -421,7 +629,9 @@ def attach_label(row_id: int, payload: LabelPayload, db: Session = Depends(get_d
         row.label_confirmed = True
     except Exception: pass
     db.commit()
-    return {"id": row.id, "label": label, "label_name": LABEL_NAMES[label]}
+    face = reconcile_face_mirror(row)
+    return {"id": row.id, "label": label, "label_name": LABEL_NAMES[label],
+            "face_dataset": face["face_dataset"], "removed_files": face["removed"]}
 
 class RelabelPayload(BaseModel):
     label: int; sub_label: Optional[str] = None; subject_id: Optional[int] = None; reason: Optional[str] = None
@@ -431,19 +641,29 @@ def relabel(row_id: int, payload: RelabelPayload, db: Session = Depends(get_db))
     row = db.query(TrainingData).filter(TrainingData.id == row_id).first()
     if not row: raise HTTPException(status_code=404, detail="Not found")
     validate_subject_id(payload.subject_id, db)
+    old_label = row.label
+    old_sub = row.sub_label
     row.label = payload.label
     if payload.sub_label: row.sub_label = payload.sub_label
     if payload.subject_id is not None:
         row.subject_id = payload.subject_id
     db.commit()
-    return {"id": row.id, "new_label": LABEL_NAMES[payload.label]}
+    # The new class folder is NOT guessed. A stale mirror is removed and reported so
+    # the operator can re-capture into the right class.
+    face = {"face_dataset": "unchanged", "removed": []}
+    if old_label != payload.label or old_sub != row.sub_label:
+        face = reconcile_face_mirror(row)
+    return {"id": row.id, "new_label": LABEL_NAMES[payload.label],
+            "face_dataset": face["face_dataset"], "removed_files": face["removed"]}
 
 @router.delete("/delete/{row_id}")
 def delete_row(row_id: int, db: Session = Depends(get_db)):
     row = db.query(TrainingData).filter(TrainingData.id == row_id).first()
     if not row: raise HTTPException(status_code=404, detail="Not found")
+    # Collect the row's own files before the delete: after it, image_path is gone.
+    removed_files = _remove_row_images(row)
     db.delete(row); db.commit()
-    return {"message": "deleted"}
+    return {"message": "deleted", "id": row_id, "removed_files": removed_files}
 
 @router.get("/data")
 def get_training_data(db: Session = Depends(get_db)):
@@ -476,6 +696,168 @@ def subject_coverage(db: Session = Depends(get_db)):
         "per_label": per_label,
         "will_group_by": group_by,
         "warning": partial_tagging_warning(rows, group_by),
+    }
+
+
+# Rows that are SUPPOSED to have a captured frame. clear_air and sanitizer are
+# manual gas triggers with no camera frame, so they are never "missing" an image.
+_NO_IMAGE_SUB_LABELS = {"clear_air", "sanitizer"}
+
+
+def _row_expects_image(row):
+    if getattr(row, "sub_label", None) in _NO_IMAGE_SUB_LABELS:
+        return False
+    return True
+
+
+@router.get("/collection-progress")
+def collection_progress(db: Session = Depends(get_db)):
+    """What is still missing before training. Read-only: no writes, no deletes."""
+    rows = db.query(TrainingData).filter(TrainingData.label >= 0).all()
+    row_ids = {r.id for r in rows}
+
+    # ── sensor rows per class ──
+    sensor = {}
+    for cls in (0, 1, 2):
+        n = sum(1 for r in rows if r.label == cls and r.mq3_1_max is not None)
+        sensor[str(cls)] = {
+            "class": LABEL_NAMES.get(cls, cls),
+            "rows": n,
+            "min": SENSOR_MIN_ROWS_PER_CLASS,
+            "target": SENSOR_TARGET_ROWS_PER_CLASS,
+            "met_min": n >= SENSOR_MIN_ROWS_PER_CLASS,
+            "met_target": n >= SENSOR_TARGET_ROWS_PER_CLASS,
+        }
+
+    # ── face images on disk + which subjects own them ──
+    import glob
+    faces = {}
+    subjects_by_class = {}
+    subject_classes = {}
+    orphan_files = []
+    owned_by_row = {}
+    for class_name in FACE_TRAINED_CLASSES:
+        d = _faces_dir(class_name)
+        files = sorted(glob.glob(os.path.join(d, "*"))) if os.path.isdir(d) else []
+        files = [f for f in files if f.lower().endswith((".jpg", ".jpeg", ".png"))
+                 and os.path.isfile(f)]
+        n = len(files)
+        faces[class_name] = {
+            "images": n,
+            "min": FACE_MIN_IMAGES_PER_CLASS(),
+            "target": FACE_TARGET_IMAGES_PER_CLASS,
+            "met_min": n >= FACE_MIN_IMAGES_PER_CLASS(),
+            "met_target": n >= FACE_TARGET_IMAGES_PER_CLASS,
+        }
+        for f in files:
+            stem = os.path.splitext(os.path.basename(f))[0]
+            rid = None
+            for prefix in SNAPSHOT_PREFIXES[class_name]:
+                if stem.startswith(f"{prefix}_"):
+                    tail = stem[len(prefix) + 1:]
+                    if tail.isdigit():
+                        rid = int(tail)
+                    break
+            if rid is None or rid not in row_ids:
+                orphan_files.append(f)
+            else:
+                owned_by_row.setdefault(rid, set()).add(class_name)
+        subjects_by_class[class_name] = set()
+
+    for r in rows:
+        for class_name in owned_by_row.get(r.id, set()):
+            subjects_by_class[class_name].add(r.subject_id)
+    for class_name in FACE_TRAINED_CLASSES:
+        subjects_by_class[class_name].discard(None)
+
+    all_subjects = set()
+    for class_name in FACE_TRAINED_CLASSES:
+        all_subjects |= subjects_by_class[class_name]
+    per_class_subject_count = {c: len(subjects_by_class[c]) for c in FACE_TRAINED_CLASSES}
+    single_class = sorted(
+        sid for sid in all_subjects
+        if sum(1 for c in FACE_TRAINED_CLASSES if sid in subjects_by_class[c]) == 1
+    )
+
+    # ── BAC bands over label-1 rows with a measured BAC ──
+    bands = {
+        "below_near":  {"label": f"< {BAC_NEAR_LIMIT}",     "rows": 0, "subjects": 0, "min": BAC_BAND_MIN_ROWS, "min_subjects": BAC_BAND_MIN_SUBJECTS},
+        "near":        {"label": f"{BAC_NEAR_LIMIT}-{BAC_OVER_LIMIT}", "rows": 0, "subjects": 0, "min": BAC_BAND_MIN_ROWS, "min_subjects": BAC_BAND_MIN_SUBJECTS},
+        "over":        {"label": f">= {BAC_OVER_LIMIT}",    "rows": 0, "subjects": 0, "min": BAC_BAND_MIN_ROWS, "min_subjects": BAC_BAND_MIN_SUBJECTS},
+    }
+    band_subs = {"below_near": set(), "near": set(), "over": set()}
+    for r in rows:
+        if r.label != 1 or r.bac is None:
+            continue
+        try:
+            v = float(r.bac)
+        except (TypeError, ValueError):
+            continue
+        key = "over" if v >= BAC_OVER_LIMIT else ("near" if v >= BAC_NEAR_LIMIT else "below_near")
+        bands[key]["rows"] += 1
+        if r.subject_id is not None:
+            band_subs[key].add(r.subject_id)
+    for key in band_subs:
+        bands[key]["subjects"] = len(band_subs[key])
+        bands[key]["met_min"] = bands[key]["rows"] >= BAC_BAND_MIN_ROWS
+        bands[key]["met_min_subjects"] = bands[key]["subjects"] >= BAC_BAND_MIN_SUBJECTS
+
+    # ── grouping (same helper as the trainers) ──
+    usable = [r for r in rows if not getattr(r, 'auto_labeled', False) or getattr(r, 'label_confirmed', True)]
+    group_by, _key = resolve_group_by(usable)
+
+    # ── rows whose image is missing ──
+    rows_missing = []
+    for r in rows:
+        if not _row_expects_image(r):
+            continue
+        snap_ok = bool(r.image_path) and os.path.isfile(r.image_path)
+        if not snap_ok:
+            rows_missing.append(r.id)
+            continue
+        if r.label == 1 and r.bac is not None and float(r.bac) >= IMPAIRED_FACE_MIN_BAC:
+            if "impaired" not in owned_by_row.get(r.id, set()):
+                rows_missing.append(r.id)
+
+    # ── readiness ──
+    sensor_missing = [f"{LABEL_NAMES.get(c)} rows: {sensor[str(c)]['rows']} of {SENSOR_MIN_ROWS_PER_CLASS}"
+                      for c in (0, 1, 2) if not sensor[str(c)]["met_min"]]
+    bac_missing = []
+    for key, band in bands.items():
+        if not band["met_min"]:
+            bac_missing.append(f"BAC band {band['label']}: {band['rows']} of {BAC_BAND_MIN_ROWS} rows")
+        elif not band["met_min_subjects"]:
+            bac_missing.append(f"BAC band {band['label']}: {band['subjects']} of {BAC_BAND_MIN_SUBJECTS} subjects")
+    face_missing = [f"{c} images: {faces[c]['images']} of {FACE_MIN_IMAGES_PER_CLASS()}"
+                    for c in FACE_TRAINED_CLASSES if not faces[c]["met_min"]]
+    subject_missing = (["need %d subjects with data, have %d" % (MIN_SUBJECTS, len(all_subjects))]
+                       if len(all_subjects) < MIN_SUBJECTS else [])
+
+    return {
+        "targets": readiness_targets(),
+        "sensor": sensor,
+        "faces": faces,
+        "subjects": {
+            "total_with_data": len(all_subjects),
+            "per_class": per_class_subject_count,
+            "single_class_subject_ids": single_class,
+            "single_class_subjects_warning": bool(single_class),
+        },
+        "bac_bands": bands,
+        "grouping": {"group_by": group_by,
+                     "warning": partial_tagging_warning(usable, group_by)},
+        "ready": {
+            "sensor_models": {"ready": not sensor_missing, "missing": sensor_missing},
+            "bac_regressor": {"ready": not bac_missing, "missing": bac_missing},
+            "mobilenet": {"ready": not (face_missing or subject_missing),
+                          "missing": face_missing + subject_missing},
+        },
+        "integrity": {
+            "orphan_files": len(orphan_files),
+            "orphan_file_names": [os.path.basename(f) for f in orphan_files[:50]],
+            "rows_missing_image": len(rows_missing),
+            "rows_missing_image_ids": rows_missing[:50],
+        },
     }
 
 
@@ -528,16 +910,17 @@ def training_summary(db: Session = Depends(get_db)):
         "yawning": 0,  # deprecated: yawning is measurement
         "impaired": max(count_dir(IMPAIRED_DIR), count_dir(faces_dir("impaired"))),
     }
-    # also compute ready_to_train (rows with complete sensor features) and balanced flag
-    # Plan: 1000 per sensor event (3000 total) + 200 per face (600 total: sober/fatigue/impaired)
+    # ready_to_train = rows with complete sensor features.
     ready = sum(1 for r in rows if r.label>=0 and r.mq3_1_max is not None)
-    # Sensor: 1000 each, Face: 200 each (sober/fatigue/impaired, fatigue = drowsy+yawning, 600 total)
+    # balanced = every MIN target met (not the aspirational TARGET values).
     balanced = (
-        counts[0] >= 1000 and counts[1] >= 1000 and counts[2] >= 1000
-        and face_counts["sober"] >= 200
-        and face_counts["fatigue"] >= 200
-        and face_counts["impaired"] >= 200
-    ) if ready >= 3000 else False
+        counts[0] >= SENSOR_MIN_ROWS_PER_CLASS
+        and counts[1] >= SENSOR_MIN_ROWS_PER_CLASS
+        and counts[2] >= SENSOR_MIN_ROWS_PER_CLASS
+        and face_counts["sober"] >= FACE_MIN_IMAGES_PER_CLASS()
+        and face_counts["fatigue"] >= FACE_MIN_IMAGES_PER_CLASS()
+        and face_counts["impaired"] >= FACE_MIN_IMAGES_PER_CLASS()
+    )
 
     # trial counts per label for grouped k-fold visibility (frontend mirror)
     trial_counts = {}
@@ -563,6 +946,7 @@ def training_summary(db: Session = Depends(get_db)):
         "ready_to_train": ready,
         "ready_trials": len({r.trial_id for r in rows if r.label>=0 and r.mq3_1_max is not None and r.trial_id is not None}),
         "balanced": balanced,
+        "targets": readiness_targets(),
         "trial_counts": {str(k): v for k,v in trial_counts.items()},
         "label_names": LABEL_NAMES,
         "bac_stats": {"count": len(bac_rows), "levels": bac_levels, "by_tier": bac_by_tier, "metrics": bac_metrics, "ph_limit": BAC_OVER_LIMIT},
@@ -660,7 +1044,10 @@ def train_mobilenet(payload: MobilenetPayload):
             counts = {k: len([f for f in os.listdir(p) if f.lower().endswith(('.jpg','.jpeg','.png'))]) if os.path.exists(p) else 0 for k,p in face_dirs.items()}
             total = sum(counts.values())
             if total < 10:
-                return {"error": f"Not enough face data: {counts} — need 200 each (600 total sober/fatigue/impaired)", "counts": counts}
+                _fmin = FACE_MIN_IMAGES_PER_CLASS()
+                return {"error": (f"Not enough face data: {counts} — need {_fmin} each "
+                                  f"in every class ({_fmin * len(mobilenet.CLASSES)} total)"),
+                        "counts": counts, "targets": readiness_targets()}
             history = mobilenet.train()
             # history returned, metrics saved inside train()
             from models.train.metrics_store import load_metrics
@@ -919,7 +1306,7 @@ def training_statistics(db: Session = Depends(get_db)):
     if bac_m and isinstance(bac_m, dict) and bac_m.get("error"):
         failures.append(f"BAC regressor: {bac_m.get('error')}")
     if not metrics.get("mobilenet"):
-        failures.append("MobileNet not trained — /mobilenet hidden trainer needed (200 each)")
+        failures.append(f"MobileNet not trained — /mobilenet hidden trainer needed ({FACE_MIN_IMAGES_PER_CLASS()} images per class)")
     if not metrics.get("fusion"):
         failures.append("Fusion not trained — /fusion hidden trainer needed")
     # Check stale

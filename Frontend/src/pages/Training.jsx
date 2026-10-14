@@ -42,7 +42,7 @@ function Toasts({ toasts }) {
   );
 }
 
-function ProgressBar({ value, target = 1000, color = "var(--pass)" }) {
+function ProgressBar({ value, target = 1, color = "var(--pass)" }) {
   const pct = Math.min(Math.round((value / target) * 100), 100);
   return (
     <div className="flex items-center gap-3">
@@ -366,12 +366,20 @@ export default function Training() {
   // subject coverage from GET /training/subject-coverage.
   const [trainResult, setTrainResult] = useState(null);
   const [coverage, setCoverage]   = useState(null);
+  const [progress, setProgress]   = useState(null);
 
   const loadCoverage = useCallback(async () => {
     try {
       const r = await fetch(`${BASE}/training/subject-coverage`);
       if (r.ok) setCoverage(await r.json());
     } catch { /* coverage is advisory only */ }
+  }, []);
+
+  const loadProgress = useCallback(async () => {
+    try {
+      const r = await fetch(`${BASE}/training/collection-progress`);
+      if (r.ok) setProgress(await r.json());
+    } catch { /* checklist is advisory only */ }
   }, []);
 
   const appendSubject = (fd) => {
@@ -399,7 +407,8 @@ export default function Training() {
     finally { setLoadingData(false); }
   }, [toast]);
 
-  const loadAll = useCallback(() => { loadSummary(); loadData(); loadCoverage(); }, [loadSummary, loadData, loadCoverage]);
+  const loadAll = useCallback(() => { loadSummary(); loadData(); loadCoverage(); loadProgress(); },
+                      [loadSummary, loadData, loadCoverage, loadProgress]);
   useEffect(() => { loadAll(); }, [loadAll]);
 
   // ── ESP32 ─────────────────────────────────────────────────
@@ -871,8 +880,8 @@ export default function Training() {
                 { label: "Others",      val: summary?.sanitizer,     color: "var(--text-secondary)" },
               ].map(({ label, val, color }) => (
                 <div key={label}>
-                  <div className="text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>{label} <span style={{ color: "var(--text-muted)" }} className="text-[10px]">({val ?? 0}/1000)</span></div>
-                  <ProgressBar value={val ?? 0} target={1000} color={color}/>
+                  <div className="text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>{label} <span style={{ color: "var(--text-muted)" }} className="text-[10px]">({val ?? 0}/{progress?.targets?.sensor_target_rows_per_class ?? "—"})</span></div>
+                  <ProgressBar value={val ?? 0} target={progress?.targets?.sensor_target_rows_per_class ?? 1} color={color}/>
                 </div>
               ))}
             </div>
@@ -912,8 +921,8 @@ export default function Training() {
                 { label: "Impaired", val: summary?.face_images?.impaired, color: "var(--over)" },
               ].map(({ label, val, color }) => (
                 <div key={label}>
-                  <div className="text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>{label} <span style={{ color: "var(--text-muted)" }} className="text-[10px]">({val ?? 0}/200)</span></div>
-                  <ProgressBar value={val ?? 0} target={200} color={color}/>
+                  <div className="text-xs mb-1.5" style={{ color: "var(--text-secondary)" }}>{label} <span style={{ color: "var(--text-muted)" }} className="text-[10px]">({val ?? 0}/{progress?.targets?.face_target_images_per_class ?? "—"})</span></div>
+                  <ProgressBar value={val ?? 0} target={progress?.targets?.face_target_images_per_class ?? 1} color={color}/>
                 </div>
               ))}
             </div>
@@ -926,8 +935,8 @@ export default function Training() {
                 borderColor: summary.balanced ? "color-mix(in srgb, var(--pass) 30%, transparent)" : "color-mix(in srgb, var(--near) 30%, transparent)",
               }}>
               {summary.balanced
-                ? <><Check size={11}/> Balanced — 3000 sensor + 600 faces ready</>
-                : <><AlertTriangle size={11}/> Unbalanced — need 1000/event (3000) + 200/face (600) • {summary?.ready_to_train ?? 0}/3000 rows</>}
+                ? <><Check size={11}/> Balanced — every minimum target met</>
+                : <><AlertTriangle size={11}/> Not balanced yet — still collecting • {summary?.ready_to_train ?? 0} sensor rows</>}
             </div>
           )}
         </div>
@@ -1006,6 +1015,59 @@ export default function Training() {
               </span>
             )}
           </button>
+          {/* ── Collection checklist (TASK 5) — driven only by /training/collection-progress ── */}
+          <div className="p-2 rounded-lg border text-xs space-y-1" style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
+            <div className="text-[11px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Collection checklist</div>
+            {!progress ? (
+              <div className="font-mono text-[10px]" style={{ color: "var(--text-muted)" }}>—</div>
+            ) : (
+              <>
+                {[
+                  ["Sensor models", progress.ready?.sensor_models],
+                  ["BAC regressor", progress.ready?.bac_regressor],
+                  ["MobileNet",     progress.ready?.mobilenet],
+                ].map(([name, item]) => (
+                  <div key={name} className="flex items-start gap-1.5">
+                    {item?.ready
+                      ? <Check size={11} style={{ color: "var(--pass)", flexShrink: 0, marginTop: 1 }}/>
+                      : <AlertTriangle size={11} style={{ color: "var(--near)", flexShrink: 0, marginTop: 1 }}/>}
+                    <span style={{ color: item?.ready ? "var(--text-secondary)" : "var(--near)" }}>
+                      {name}: {item?.ready ? "ready" : (item?.missing?.[0] ?? "not ready")}
+                    </span>
+                  </div>
+                ))}
+                {progress.subjects?.single_class_subjects_warning && (
+                  <div className="flex items-start gap-1.5">
+                    <AlertTriangle size={11} style={{ color: "var(--near)", flexShrink: 0, marginTop: 1 }}/>
+                    <span style={{ color: "var(--near)" }}>
+                      {progress.subjects.single_class_subject_ids.length} subject(s) contributed to only one face class — the subject split needs ≥{progress.targets?.min_subjects ?? 3}
+                    </span>
+                  </div>
+                )}
+                {progress.grouping?.warning && (
+                  <div className="flex items-start gap-1.5">
+                    <AlertTriangle size={11} style={{ color: "var(--near)", flexShrink: 0, marginTop: 1 }}/>
+                    <span style={{ color: "var(--near)" }}>
+                      Grouping fell back to trial_id — {progress.grouping.warning.untagged} untagged row(s)
+                    </span>
+                  </div>
+                )}
+                {progress.integrity?.orphan_files > 0 && (
+                  <div className="flex items-start gap-1.5">
+                    <AlertTriangle size={11} style={{ color: "var(--near)", flexShrink: 0, marginTop: 1 }}/>
+                    <span style={{ color: "var(--near)" }}>{progress.integrity.orphan_files} orphan face file(s) with no row</span>
+                  </div>
+                )}
+                {progress.integrity?.rows_missing_image > 0 && (
+                  <div className="flex items-start gap-1.5">
+                    <AlertTriangle size={11} style={{ color: "var(--near)", flexShrink: 0, marginTop: 1 }}/>
+                    <span style={{ color: "var(--near)" }}>{progress.integrity.rows_missing_image} row(s) missing their image</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
           {/* ── REAL-TIME TRANSACTION METRIC PIPELINE VISUALIZER ── */}
           <div className="grid grid-cols-2 gap-2 p-2 rounded-lg border text-xs" 
                style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
@@ -1137,7 +1199,7 @@ export default function Training() {
               <Cpu size={15}/> Train sensor models
             </div>
             <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Plan A: nose (mq1) + jaw mouth+neck (mq2) + upperChest clavicle (mq3) • 18D features (incl. breath/sanitizer ratios). Trains classifier (0/1/2) + BAC regressor inside <b>Breath</b> (PH 0.05). Needs <b>1000+ per event</b> (3000 total) + <b>200 per face</b> (800 total: sober/drowsy/yawning/impaired) + ≥100 alcohol rows with ≥3 BAC levels. EAR/MAR yawning is rule-based (no training).
+              Plan A: nose (mq1) + jaw mouth+neck (mq2) + upperChest clavicle (mq3) • 18D features (incl. breath/sanitizer ratios). Trains classifier (0/1/2) + BAC regressor inside <b>Breath</b>. Targets come from the checklist below and are returned by <code>/training/collection-progress</code>. Only alcohol captures at or over the PH limit contribute an <b>impaired</b> face image. EAR/MAR yawning is rule-based (no training).
             </div>
             {summary?.bac_stats && (
               <div className="flex flex-wrap gap-2 mt-2 text-[11px]">
