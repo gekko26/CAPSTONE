@@ -8,8 +8,8 @@ import { ShieldCheck, ShieldAlert, Eye, Cpu } from "lucide-react";
 import { API_BASE } from "../api";
 
 function getRiskStyles(label) {
-  if (label === "Over Limit") return { text: "var(--over)", bg: "color-mix(in srgb, var(--over) 10%, transparent)", border: "var(--over)" };
-  if (label === "Near Limit") return { text: "var(--near)", bg: "color-mix(in srgb, var(--near) 10%, transparent)", border: "var(--near)" };
+  if (label === "FAIL") return { text: "var(--over)", bg: "color-mix(in srgb, var(--over) 10%, transparent)", border: "var(--over)" };
+  if (label === "WARN") return { text: "var(--near)", bg: "color-mix(in srgb, var(--near) 10%, transparent)", border: "var(--near)" };
   if (label === "Others" || label === "Sanitizer" || label?.includes("Others") || label?.includes("Sanitizer")) return { text: "var(--text-secondary)", bg: "var(--bg-active)", border: "var(--border-subtle)" };
   return { text: "var(--pass)", bg: "color-mix(in srgb, var(--pass) 10%, transparent)", border: "var(--pass)" };
 }
@@ -17,8 +17,8 @@ function getRiskStyles(label) {
 const CustomTelemetryDot = (props) => {
   const { cx, cy, payload } = props;
   let color = "var(--pass)";
-  if (payload.label === "Over Limit") color = "var(--over)";
-  if (payload.label === "Near Limit") color = "var(--near)";
+  if (payload.label === "FAIL") color = "var(--over)";
+  if (payload.label === "WARN") color = "var(--near)";
   if (payload.label === "Others" || payload.label === "Sanitizer" || payload.label?.includes("Others") || payload.label?.includes("Sanitizer")) color = "var(--text-secondary)";
   return <circle cx={cx} cy={cy} r={5} fill={color} stroke="var(--bg-card)" strokeWidth={1.5} />;
 };
@@ -70,7 +70,7 @@ export default function MockBACChart() {
 
   // Compute metric accumulations from real deployment logs
   const totalAttempts = history.length;
-  const criticalViolations = history.filter(r => r.label === "Over Limit").length;
+  const criticalViolations = history.filter(r => r.label === "FAIL").length;
   const sanitizersNeutralized = history.filter(r => r.label?.includes("Sanitizer") || r.label?.includes("Others")).length;
   const avgConfidence = totalAttempts
     ? (history.reduce((acc, r) => acc + (r.confidence || 0), 0) / totalAttempts).toFixed(2)
@@ -78,9 +78,9 @@ export default function MockBACChart() {
 
   // Convert categorical variables into distribution matrices for bar rendering
   const distributionData = [
-    { name: "Pass", count: history.filter(r => r.label === "Pass").length, color: "var(--pass)" },
-    { name: "Near Limit", count: history.filter(r => r.label === "Near Limit").length, color: "var(--near)" },
-    { name: "Over Limit", count: history.filter(r => r.label === "Over Limit").length, color: "var(--over)" },
+    { name: "Pass", count: history.filter(r => r.label === "PASS").length, color: "var(--pass)" },
+    { name: "Warn", count: history.filter(r => r.label === "WARN").length, color: "var(--near)" },
+    { name: "Fail", count: history.filter(r => r.label === "FAIL").length, color: "var(--over)" },
     { name: "Others", count: history.filter(r => r.label?.includes("Others") || r.label?.includes("Sanitizer")).length, color: "var(--text-secondary)" }
   ];
 

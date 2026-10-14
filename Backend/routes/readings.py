@@ -37,8 +37,9 @@ def get_deployment_logs(
     db: Session = Depends(get_db),
 ):
     logs = db.query(DeploymentLog).order_by(DeploymentLog.date.desc()).limit(limit).all()
-    over  = sum(1 for l in logs if l.prediction == "Over Limit")
-    near  = sum(1 for l in logs if l.prediction == "Near Limit")
+    # New vocabulary: prediction holds the decision status PASS / WARN / FAIL.
+    over  = sum(1 for l in logs if l.prediction == "FAIL")
+    near  = sum(1 for l in logs if l.prediction == "WARN")
 
     # Last-7-day categorical breakdown for the Report weekly chart
     from datetime import datetime, timedelta
@@ -59,12 +60,10 @@ def get_deployment_logs(
     for day, prediction, count in rows:
         key = day.isoformat() if hasattr(day, "isoformat") else str(day)
         bucket = per_day.setdefault(key, {"clear": 0, "alert": 0, "breach": 0, "intercepted": 0})
-        if prediction == "Over Limit":
+        if prediction == "FAIL":
             bucket["breach"] += count
-        elif prediction == "Near Limit":
+        elif prediction == "WARN":
             bucket["alert"] += count
-        elif prediction and ("Sanitizer" in prediction or "Others" in prediction):
-            bucket["intercepted"] += count
         else:
             bucket["clear"] += count
     weekly = []
@@ -97,7 +96,7 @@ def get_deployment_logs(
     for month_key, prediction, count in mrows:
         bucket = per_month.setdefault(month_key, {"total": 0, "breach": 0})
         bucket["total"] += count
-        if prediction == "Over Limit":
+        if prediction == "FAIL":
             bucket["breach"] += count
 
     monthly = []
@@ -136,13 +135,16 @@ def get_deployment_logs(
             "total":      len(logs),
             "over_limit": over,
             "near_limit": near,
-            "sanitizer":  sum(1 for l in logs if l.prediction and ("Sanitizer" in l.prediction or "Others" in l.prediction)),
-            "others":     sum(1 for l in logs if l.prediction and ("Others" in l.prediction or "Sanitizer" in l.prediction)),
+            "sanitizer":  0,
+            "others":     0,
             "deduped":    len({getattr(l, "reading_id", None) for l in logs if getattr(l, "reading_id", None) is not None}) if logs else 0,
             "by_reason": {
-                "alcohol": sum(1 for l in logs if getattr(l, "denial_reason", None)=="alcohol"),
-                "fatigue": sum(1 for l in logs if getattr(l, "denial_reason", None)=="fatigue"),
-                "both":    sum(1 for l in logs if getattr(l, "denial_reason", None)=="both"),
+                "alcohol_confirmed": sum(1 for l in logs if getattr(l, "denial_reason", None) and "alcohol_confirmed" in l.denial_reason),
+                "near_limit":        sum(1 for l in logs if getattr(l, "denial_reason", None) and "near_limit" in l.denial_reason),
+                "sensor_face_mismatch": sum(1 for l in logs if getattr(l, "denial_reason", None) and "sensor_face_mismatch" in l.denial_reason),
+                "fatigue":           sum(1 for l in logs if getattr(l, "denial_reason", None) and "fatigue" in l.denial_reason),
+                "models_disagree":   sum(1 for l in logs if getattr(l, "denial_reason", None) and "models_disagree" in l.denial_reason),
+                "bac_unavailable":   sum(1 for l in logs if getattr(l, "denial_reason", None) and "bac_unavailable" in l.denial_reason),
             },
             "pass_rate":  round(((len(logs) - over - near) / len(logs)) * 100, 1) if logs else 0,
         },

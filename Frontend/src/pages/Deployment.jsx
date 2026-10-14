@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { 
   ShieldCheck, ShieldAlert, ScanFace, Activity, 
-  CheckCircle, XCircle, Camera, Lock, Unlock 
+  CheckCircle, XCircle, Camera, Lock, Unlock, AlertTriangle 
 } from "lucide-react";
 
 import { API_BASE as BASE } from "../api";
@@ -134,7 +134,7 @@ export default function Deployment() {
         setSystemState("DENIED");
         setLastResult({
           name: cvData.identified ? cvData.name : "Unknown",
-          reason: "Evaluation Failed — Access Withheld",
+          reason: "WARN: Evaluation Failed — Access Withheld",
           color: "var(--over)",
           bg: "var(--over-bg)"
         });
@@ -147,26 +147,14 @@ export default function Deployment() {
         }, 1500);
         return;
       } else {
-        const isImpaired = prediction.final_label === "Over Limit" || prediction.final_label === "Near Limit";
-        const isDrowsy = prediction.impaired || prediction.eye_status === "drowsy";
+        // The server owns the decision. This page no longer derives PASS/DENY from
+        // impaired / eye_status / EAR / MAR / pitch — it renders decision.status.
+        const dec = (prediction && prediction.decision) || null;
+        const status = dec && typeof dec.status === "string" ? dec.status.toUpperCase() : null;
+        const labels = dec && Array.isArray(dec.labels) ? dec.labels.filter(Boolean) : [];
+        const reasonText = labels.length ? labels.join(" · ") : "No decision";
 
-        if (isImpaired || isDrowsy) {
-          // FIX 7: use backend denial_reason so fatigue isn't reported as alcohol
-          const dr = prediction.denial_reason || prediction.reason || null;
-          let denyReason = isImpaired ? "Alcohol Detected" : "Fatigue Detected";
-          if (dr === "fatigue") denyReason = "Fatigue Detected";
-          else if (dr === "alcohol") denyReason = "Alcohol Detected";
-          else if (dr === "both") denyReason = "Alcohol + Fatigue Detected";
-          else if (dr === "other") denyReason = "Other Substance Detected";
-          setSystemState("DENIED");
-          setLastResult({
-            name: cvData.identified ? cvData.name : "Unknown",
-            reason: denyReason + (dr ? ` (${dr})` : ""),
-            color: "var(--over)",
-            bg: "var(--over-bg)"
-          });
-          addLog(`Access Denied: ${cvData.name || "Subject"} (${denyReason})`, "error");
-        } else {
+        if (status === "PASS") {
           setSystemState("PASSED");
           setLastResult({
             name: cvData.identified ? cvData.name : "Unknown",
@@ -175,6 +163,34 @@ export default function Deployment() {
             bg: "var(--pass-bg)"
           });
           addLog(`Access Granted: ${cvData.name || "Subject"}`, "success");
+        } else if (status === "FAIL") {
+          setSystemState("DENIED");
+          setLastResult({
+            name: cvData.identified ? cvData.name : "Unknown",
+            reason: reasonText,
+            color: "var(--over)",
+            bg: "var(--over-bg)"
+          });
+          addLog(`Access Denied: ${cvData.name || "Subject"} (${reasonText})`, "error");
+        } else if (status === "WARN") {
+          setSystemState("WARNED");
+          setLastResult({
+            name: cvData.identified ? cvData.name : "Unknown",
+            reason: reasonText,
+            color: "var(--near)",
+            bg: "var(--near-bg)"
+          });
+          addLog(`Access Warning: ${cvData.name || "Subject"} (${reasonText})`, "warn");
+        } else {
+          // Missing or malformed decision object: never PASS.
+          setSystemState("WARNED");
+          setLastResult({
+            name: cvData.identified ? cvData.name : "Unknown",
+            reason: "WARN: No decision",
+            color: "var(--near)",
+            bg: "var(--near-bg)"
+          });
+          addLog("No decision returned by the server — treated as a warning", "warn");
         }
       }
 
@@ -208,6 +224,7 @@ export default function Deployment() {
     IDLE:     { text: "System armed",      sub: "Waiting for a subject…", color: "var(--pass)", Icon: ShieldCheck, glow: "0 0 0 3px var(--pass-bg)" },
     SCANNING: { text: "Analyzing…",         sub: "Please stand still",     color: "var(--near)", Icon: ScanFace,   glow: "0 0 0 3px var(--near-bg)" },
     PASSED:   { text: "Access granted",     sub: "Door unlocked",          color: "var(--pass)", Icon: Unlock,     glow: "0 0 0 3px var(--pass-bg)" },
+    WARNED:   { text: "Access warning",     sub: "Review required",         color: "var(--near)", Icon: AlertTriangle, glow: "0 0 0 3px var(--near-bg)" },
     DENIED:   { text: "Access denied",      sub: "Security notified",      color: "var(--over)", Icon: Lock,       glow: "0 0 0 3px var(--over-bg)" },
   };
 

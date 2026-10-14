@@ -128,38 +128,11 @@ def test_a2_single_class_guard_still_works(tmp_path, monkeypatch):
 # helpers: a throwaway SQLite file (tmp_path) + real ORM rows
 # ------------------------------------------------------------------------------
 
+# The shared `db` fixture now lives in tests/conftest.py so every module uses it.
 import pytest
-from sqlalchemy import create_engine, event, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text
 
-from database.db import Base
 from database.models import Subject, TrainingData
-
-
-@pytest.fixture()
-def db(tmp_path):
-    """Real ORM rows against a throwaway SQLite file in tmp_path.
-
-    SQLite ignores FOREIGN KEY constraints unless you switch them on, and MariaDB
-    (production) always enforces them — so the PRAGMA below is what makes this
-    fixture behave like the real database. Without it a test can happily store a
-    subject_id that has no subjects row, which MariaDB rejects with error 1452.
-    """
-    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}",
-                           connect_args={"check_same_thread": False})
-
-    @event.listens_for(engine, "connect")
-    def _fk_on(dbapi_conn, _rec):
-        cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA foreign_keys=ON")
-        cur.close()
-
-    Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine)()
-    try:
-        yield session
-    finally:
-        session.close()
 
 
 def _seed_subject(session, *ids):

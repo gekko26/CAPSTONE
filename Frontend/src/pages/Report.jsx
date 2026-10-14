@@ -42,8 +42,8 @@ function Report() {
   // Backend renamed Sanitizer -> Others (label 2) — handle both for backward compat with old logs
   const decisionMatrixBuckets = [
     { label: "Pass", color: "var(--pass)", count: Math.max(totalInterrogations - aboveLimitBreaches - traceAlerts - sanitizersBlocked, 0) },
-    { label: "Near Limit", color: "var(--near)", count: traceAlerts },
-    { label: "Over Limit", color: "var(--over)", count: aboveLimitBreaches },
+    { label: "Warn", color: "var(--near)", count: traceAlerts },
+    { label: "Fail", color: "var(--over)", count: aboveLimitBreaches },
     { label: "Others", color: "var(--text-muted)", count: sanitizersBlocked },
   ];
 
