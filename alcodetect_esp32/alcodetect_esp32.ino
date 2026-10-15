@@ -62,6 +62,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
+#include "relay_sequence.h"
 
 // ── WiFi credentials ──────────────────────────────────────────
 const char* WIFI_SSID     = "Bayot kaba?";
@@ -86,13 +87,51 @@ const char* DEPLOYMENT_ENDPOINT = "/sensor";
 
 
 // ── Sampling config ───────────────────────────────────────────
+#define FAN_RELAY_PIN     27   // suction fan relay IN (ADC2, but used as OUTPUT only)
+#define BLOWER_RELAY_PIN  25   // one relay driving all three 5015 helper blowers
+// Relay modules are active-LOW: the coil energises when the input is pulled LOW.
+// Flip this single constant if the modules are wired the other way round.
+const bool RELAY_ACTIVE_LOW = true;
+const bool FAN_ENABLED     = true;   // per-channel enable flags
+const bool BLOWER_ENABLED  = true;
+
+// ── Relay sequence timing ────────────────────────────────────────────────────
+//   PREROLL  0..3000   relays ON, no sampling yet (airflow must settle first)
+//   SAMPLING 3000..8000 relays ON, the existing 5 s window (unchanged)
+//   POSTROLL after the window, 2000 ms, relays still ON
+//   IDLE     relays OFF
+#define PREROLL_MS          3000
+#define POSTROLL_MS         2000
+#define MAX_RELAY_ON_MS     (PREROLL_MS + BUFFER_DURATION_MS + POSTROLL_MS + 2000)
+
 #define SAMPLE_INTERVAL_MS   100   // 100ms between samples = 10 samples/sec
 #define BUFFER_DURATION_MS  5000   // 5 second window (50 samples at 100ms)
 #define MIN_SAMPLES            5   // minimum samples required by backend
 
+// Bridge RelaySequence's injected callback to the real ESP32 pins.
+void relayWritePin(uint8_t channel, uint8_t level) {
+  uint8_t pin = (channel == 0) ? FAN_RELAY_PIN : BLOWER_RELAY_PIN;
+  digitalWrite(pin, level);
+}
+
+RelaySequence::Config makeRelayConfig() {
+  RelaySequence::Config c;
+  c.prerollMs  = PREROLL_MS;
+  c.bufferMs   = BUFFER_DURATION_MS;
+  c.postrollMs = POSTROLL_MS;
+  c.maxOnMs    = MAX_RELAY_ON_MS;
+  c.fanEnabled = FAN_ENABLED;
+  c.blowerEnabled = BLOWER_ENABLED;
+  c.activeLow  = RELAY_ACTIVE_LOW;
+  return c;
+}
+
+// Declared early so its constructor (which drives the relays OFF) runs before setup().
+RelaySequence relays(relayWritePin, makeRelayConfig());
+
 // ── Mode ──────────────────────────────────────────────────────
-// true  = training mode  → posts to /training/collect/sensor-data
-// false = deployment mode → posts to /sensor
+// true  = training mode  → posts to /training/collect/sensor-data (training_data)
+// false = deployment mode → posts to /sensor                    (sensor_readings)
 bool TRAINING_MODE = true;   // ← change to false for deployment
 
 // ── Objects ───────────────────────────────────────────────────
@@ -103,6 +142,9 @@ DHT dht(DHT_PIN, DHT_TYPE);
 bool    isBuffering   = false;
 int     targetRowId   = -1;    // row_id sent by backend trigger, -1 if not provided
 unsigned long bufferStart = 0;
+// start of the SAMPLING window — the pre-roll is already over by then
+unsigned long samplingStart = 0;
+bool         samplingBegun = false;
 
 // Sample buffers
 std::vector<float> buf1, buf2, buf3;
@@ -170,14 +212,22 @@ void handleTrigger() {
     }
   }
 
-  if (isBuffering) {
-    // Already buffering — reject without clobbering targetRowId
-    String busyBody = "{\"status\":\"busy\",\"message\":\"Already buffering — wait for current window to finish\",\"busy\":true,\"busy_row_id\":" + String(targetRowId) + ",\"incoming_row_id\":" + String(incomingId) + "}";
+  // Busy means the relay sequence is mid-flight (pre-roll, sampling, post-roll or a
+  // bench test) — not merely that the buffer is filling.
+  if (isBuffering || relays.busy()) {
+    // Already busy — reject without clobbering targetRowId
+    String busyBody = "{\"status\":\"busy\",\"message\":\"Relay sequence busy — wait for the current run to finish\",\"busy\":true,\"busy_row_id\":" + String(targetRowId) + ",\"incoming_row_id\":" + String(incomingId) + ",\"sequence_state\":\"" + String(RelaySequence::stateName(relays.state())) + "\"}";
     server.send(409, "application/json", busyBody);
     Serial.println("⚠ Trigger rejected — already buffering (busy_row_id=" + String(targetRowId) + " incoming=" + String(incomingId) + ")");
     return;
   }
   targetRowId = incomingId;
+  // Relays ON now; sampling only begins once the pre-roll has elapsed.
+  // Identical in training and deployment mode — airflow must not vary by mode.
+  if (!relays.start(millis())) {
+    server.send(409, "application/json", "{\"status\":\"busy\",\"busy\":true}");
+    return;
+  }
 
   // Start buffering
   buf1.clear();
@@ -186,14 +236,14 @@ void handleTrigger() {
   isBuffering  = true;
   bufferStart  = millis();
 
-  Serial.println("▶ Trigger received — buffering MQ3 for " + String(BUFFER_DURATION_MS) + "ms");
+  Serial.println("▶ Trigger received — relays ON, pre-roll " + String(PREROLL_MS) + "ms, then sampling MQ3 for " + String(BUFFER_DURATION_MS) + "ms");
   if (targetRowId > 0) Serial.println("  row_id: " + String(targetRowId));
 
   ledOn();  // LED stays on during buffering
 
   server.send(200, "application/json",
-    "{\"status\":\"ok\",\"message\":\"Buffering started\",\"duration_ms\":" +
-    String(BUFFER_DURATION_MS) + "}");
+    "{\"status\":\"ok\",\"message\":\"Relay sequence started\",\"duration_ms\":" +
+    String(BUFFER_DURATION_MS) + ",\"preroll_ms\":" + String(PREROLL_MS) + ",\"postroll_ms\":" + String(POSTROLL_MS) + "}");
 }
 
 // GET /status
@@ -209,6 +259,12 @@ void handleStatus() {
   body += "\"temperature\":" + (isnan(temp) ? "null" : String(temp, 1)) + ",";
   body += "\"humidity\":"    + (isnan(hum)  ? "null" : String(hum, 1))  + ",";
   body += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+  body += "\"sequence_state\":\"" + String(RelaySequence::stateName(relays.state())) + "\",";
+  body += "\"preroll_ms\":" + String(PREROLL_MS) + ",";
+  body += "\"buffer_ms\":" + String(BUFFER_DURATION_MS) + ",";
+  body += "\"postroll_ms\":" + String(POSTROLL_MS) + ",";
+  body += "\"fan_on\":" + String(relays.fanOn() ? "true" : "false") + ",";
+  body += "\"blower_on\":" + String(relays.blowerOn() ? "true" : "false") + ",";
   body += "\"uptime_s\":" + String(millis() / 1000);
   body += "}";
 
@@ -226,6 +282,29 @@ void handleMode() {
       "{\"mode\":\"" + mode + "\",\"message\":\"Mode updated\"}");
   } else {
     server.send(400, "application/json", "{\"error\":\"Pass ?training=1 or ?training=0\"}");
+  }
+}
+
+// GET /relay_test?fan=0|1&blower=0|1&ms=N
+// Bench/wiring check only. Idle-only, ms clamped by the state machine, auto-offs.
+void handleRelayTest() {
+  if (!relays.busy()) {
+    bool fan    = server.hasArg("fan")    && server.arg("fan") == "1";
+    bool blower = server.hasArg("blower") && server.arg("blower") == "1";
+    unsigned long ms = 2000;
+    if (server.hasArg("ms")) ms = (unsigned long)atol(server.arg("ms").c_str());
+    if (relays.test(fan, blower, ms, millis())) {
+      server.send(200, "application/json",
+        "{\"status\":\"ok\",\"message\":\"Relay test started\",\"test_ms\":" +
+        String(relays.testMs()) + "}");
+      Serial.println("◉ Relay test — fan=" + String(fan) + " blower=" + String(blower) +
+                     " for " + String(relays.testMs()) + "ms");
+    } else {
+      server.send(409, "application/json", "{\"status\":\"busy\",\"busy\":true}");
+    }
+  } else {
+    server.send(409, "application/json",
+      "{\"status\":\"busy\",\"message\":\"Sequence busy\",\"busy\":true}");
   }
 }
 
@@ -277,7 +356,7 @@ void postSensorData() {
   String payload;
   serializeJson(doc, payload);
 
-  // Choose endpoint based on mode
+  // Choose endpoint from the mode PINNED at trigger time (not the live mode).
   String endpoint = TRAINING_MODE ? TRAINING_ENDPOINT : DEPLOYMENT_ENDPOINT;
   String url = "http://" + String(BACKEND_IP) + ":" + String(BACKEND_PORT) + endpoint;
 
@@ -312,12 +391,24 @@ void postSensorData() {
 
 // ── Setup ─────────────────────────────────────────────────────
 void setup() {
+  // ── Relays OFF first ──────────────────────────────────────────────
+  // Before Serial, Wi-Fi and everything else, so the pins are never floating and the
+  // external pull-ups hold the relays off while the ESP32 boots.
+  pinMode(FAN_RELAY_PIN, OUTPUT);
+  pinMode(BLOWER_RELAY_PIN, OUTPUT);
+
+  uint8_t offLevel = RELAY_ACTIVE_LOW ? HIGH : LOW;
+  digitalWrite(FAN_RELAY_PIN, offLevel);
+  digitalWrite(BLOWER_RELAY_PIN, offLevel);
+  relays.tick(millis());   // re-assert OFF through the state machine too
+
   Serial.begin(115200);
   delay(1000);
 
   Serial.println("\n=============================");
   Serial.println(" AlcoDetect ESP32 Firmware");
   Serial.println("=============================");
+
 
   // Pin modes
   pinMode(LED_PIN, OUTPUT);
@@ -348,6 +439,7 @@ void setup() {
   // HTTP server routes
   server.on("/trigger", HTTP_POST, handleTrigger);
   server.on("/status",  HTTP_GET,  handleStatus);
+  server.on("/relay_test", HTTP_GET, handleRelayTest);
   server.on("/mode",    HTTP_GET,  handleMode);
   server.onNotFound(handleNotFound);
   server.begin();
@@ -369,6 +461,9 @@ void loop() {
   // Always handle HTTP requests
   server.handleClient();
 
+  // Advance the relay sequence (non-blocking). Never delays the web server.
+  relays.tick(millis());
+
   // WiFi watchdog — reconnect if dropped
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("⚠ WiFi disconnected — reconnecting...");
@@ -378,31 +473,40 @@ void loop() {
 
   // ── Buffering loop ──────────────────────────────────────────
   if (isBuffering) {
-    unsigned long elapsed = millis() - bufferStart;
+    // Sampling starts only after the pre-roll; samples taken during the
+    // pre-roll must never reach the buffer.
+    if (!relays.mayBeginSampling(millis())) {
+      // pre-roll still running — relays are ON, but nothing is sampled yet
+    } else {
+      if (!samplingBegun) { samplingBegun = true; samplingStart = millis(); }
+      unsigned long elapsed = millis() - samplingStart;
 
-    if (elapsed < BUFFER_DURATION_MS) {
-      // Still within window — sample sensors
-      float v1 = readMQ3(MQ3_PIN_1);
-      float v2 = readMQ3(MQ3_PIN_2);
-      float v3 = readMQ3(MQ3_PIN_3);
-      Serial.print("MQ1: ");
-      Serial.println(v1);
-       Serial.print("MQ2: ");
-      Serial.println(v2);
-       Serial.print("MQ3: ");
-      Serial.println(v3);
-      buf1.push_back(v1);
-      buf2.push_back(v2);
-      buf3.push_back(v3);
+      if (elapsed < BUFFER_DURATION_MS) {
+        // Still within window — sample sensors
+        float v1 = readMQ3(MQ3_PIN_1);
+        float v2 = readMQ3(MQ3_PIN_2);
+        float v3 = readMQ3(MQ3_PIN_3);
+        Serial.print("MQ1: ");
+        Serial.println(v1);
+         Serial.print("MQ2: ");
+        Serial.println(v2);
+         Serial.print("MQ3: ");
+        Serial.println(v3);
+        buf1.push_back(v1);
+        buf2.push_back(v2);
+        buf3.push_back(v3);
 
-      // Debug print every 500ms
-      if (buf1.size() % 5 == 0) {
-        Serial.printf("  [%lu ms] MQ3: %.0f | %.0f | %.0f  (%d samples)\n",
-          elapsed, v1, v2, v3, (int)buf1.size());
-      }
+        // Debug print every 500ms
+        if (buf1.size() % 5 == 0) {
+          Serial.printf("  [%lu ms] MQ3: %.0f | %.0f | %.0f  (%d samples)\n",
+            elapsed, v1, v2, v3, (int)buf1.size());
+        }
 
-      delay(SAMPLE_INTERVAL_MS);
+        delay(SAMPLE_INTERVAL_MS);
 
+      // window elapsed — hand over to POSTROLL (relays stay on)
+      relays.finishSampling(millis());
+      samplingBegun = false;
     } else {
       // Window complete — stop buffering
       isBuffering = false;
@@ -421,6 +525,7 @@ void loop() {
 
       Serial.println("\nReady — waiting for next trigger...\n");
     }
+  }
   }
 
   // ── Idle monitoring — prints sensor + DHT every 2s when not buffering ──

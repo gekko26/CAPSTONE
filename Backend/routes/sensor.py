@@ -3,6 +3,10 @@ from sqlalchemy.orm import Session
 from database.db import get_db
 from database.models import Reading, TrainingData, DeploymentLog
 from models.train import sensor_models
+from config.sensor_timing import (
+    SENSOR_PREROLL_MS, SENSOR_WINDOW_MS, SENSOR_POSTROLL_MS,
+    SENSOR_SETTLE_MARGIN_MS, SENSOR_READY_AFTER_MS, SENSOR_BUSY_UNTIL_MS, as_dict,
+)
 from pydantic import BaseModel
 from typing import List
 import os
@@ -37,11 +41,32 @@ def trigger_esp32(db: Session = Depends(get_db)):
     reading_id = pending.id
     try:
         r = requests.post(f"{ESP32_URL}/trigger", timeout=3, json={"reading_id": reading_id})
+        if r.status_code == 409:
+            # The relay sequence is still running (pre-roll / sampling / post-roll).
+            # This used to be reported as a success, which left the frontend waiting
+            # for a window that would never arrive.
+            body = {}
+            try:
+                body = r.json()
+            except ValueError:
+                body = {}
+            return {
+                "triggered":    False,
+                "busy":         True,
+                "esp32_status": r.status_code,
+                "message":      body.get("message", "ESP32 busy — relay sequence still running"),
+                "reading_id":   reading_id,
+                "busy_row_id":      body.get("busy_row_id"),
+                "incoming_row_id":  body.get("incoming_row_id"),
+                "sequence_state":   body.get("sequence_state"),
+                "busy_until_ms":    SENSOR_BUSY_UNTIL_MS,
+            }
         return {
             "triggered":    True,
             "esp32_status": r.status_code,
-            "message":      "ESP32 triggered — buffering MQ3 window",
+            "message":      "ESP32 triggered — relay sequence started",
             "reading_id":   reading_id,
+            "busy_until_ms": SENSOR_BUSY_UNTIL_MS,
         }
     except requests.exceptions.ConnectionError:
         return {
@@ -57,6 +82,29 @@ def trigger_esp32(db: Session = Depends(get_db)):
             "message":      "ESP32 timeout — device may be busy",
             "reading_id":   reading_id,
         }
+
+
+@router.get("/sensor/timing")
+def sensor_timing():
+    """Timing the web side uses, plus a best-effort comparison against the firmware.
+
+    Read-only. A failure to reach the ESP32 is reported as firmware=None, matches=None
+    with HTTP 200 — it never turns into an error status.
+    """
+    out = as_dict()
+    firmware = None
+    try:
+        r = requests.get(f"{ESP32_URL}/status", timeout=1)
+        r.raise_for_status()
+        firmware = r.json()
+    except Exception:
+        return {**out, "firmware": None, "matches": None, "diff": None}
+
+    diff = {}
+    for key in ("preroll_ms", "buffer_ms", "postroll_ms"):
+        if key in firmware and firmware[key] != out[key]:
+            diff[key] = {"firmware": firmware[key], "backend": out[key]}
+    return {**out, "firmware": firmware, "matches": len(diff) == 0, "diff": diff or None}
 
 
 @router.get("/sensor/status")
@@ -78,6 +126,7 @@ class SensorData(BaseModel):
     mq3_2:       List[float]
     mq3_3:       List[float]
     reading_id: int | None = None
+
 
 
 @router.post("/sensor")

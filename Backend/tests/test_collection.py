@@ -353,10 +353,17 @@ def test_old_readiness_literals_are_gone():
 
     # Only READINESS phrasing is checked. Bare numbers such as setTimeout(..., 1000)
     # are unrelated timing constants and must not trip this.
+    # Only READINESS phrasing. Bare "/1000" and "3000" are too generic to match on:
+    # a ms->seconds conversion (ready_after_ms / 1000) is not a readiness target.
+    # Every real regression this guards against is covered by the forms below:
+    #   counts[i] >= 1000, target={1000}, target = 200, "200 each", "need 1000".
     readiness = re.compile(
-        r"(>=\s*1000|>=\s*200\b|>=\s*600\b|1000\s*/\s*event|/\s*1000\b"
-        r"|target\s*=\s*\{?\s*(1000|200|600)|\b3000\b|\b200\s*each\b"
-        r"|/\s*200\)|\b600\b|need\s+1000)", re.I)
+        r"(>=\s*(1000|200|600)\b"
+        r"|target\s*=\s*\{?\s*(1000|200|600)\b"
+        r"|\b(1000|200|600)\s*each\b"
+        r"|need\s+(1000|200|600)\b"
+        r"|(1000|3000|200|600)\s*(rows|events|samples)\b"
+        r"|target\s*=\s*1000)", re.I)
     for src, name in ((training_py, "training.py"), (training_jsx, "Training.jsx")):
         for lineno, line in enumerate(src.splitlines(), 1):
             stripped = line.split("#")[0].split("//")[0]

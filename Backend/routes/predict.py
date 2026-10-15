@@ -12,10 +12,21 @@ from models.train import sensor_models
 from models.train.cv_model import analyze_frame
 from models.train.mobilenet import predict_frame
 from models.decision import decide, decision_to_dict, missing_inputs
+from config.sensor_timing import (SENSOR_PREROLL_MS, SENSOR_WINDOW_MS,
+                                    SENSOR_SETTLE_MARGIN_MS)
 
 logger = logging.getLogger("AlcoDetect.Predict")
 
-STALE_SECONDS = 10
+# How old a reading row may be before it is rejected as stale.
+#
+# This is measured from Reading.date, and that column is stamped when the PENDING
+# row is created by POST /sensor/trigger — i.e. at TRIGGER time, not when the ESP32's
+# data arrives (the ESP32 later UPDATES that same row). With the relay pre-roll the
+# window therefore no longer completes at trigger+5 s but at trigger+8 s, so the
+# limit must grow by exactly the pre-roll:
+#     10 s (old 5 s window + 5 s slack) + 3 s pre-roll = 13 s
+# See Backend/config/sensor_timing.py for the full timeline.
+STALE_SECONDS = 10 + SENSOR_PREROLL_MS / 1000.0
 
 # Existing column widths (VARCHAR(20)); no schema change is made.
 STATUS_COL_LEN = 20

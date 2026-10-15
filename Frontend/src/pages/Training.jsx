@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 
 import { API_BASE as BASE } from "../api";
+import { getTiming, busySeconds, phaseAt, FALLBACK_TIMING } from "../config/timing";
 const FRAME_MS    = 60;   // 15 FPS max for stream1 — max fps without affecting other functionalities, quality 78
 const ANALYZE_MS  = 380;  // decoupled analysis — keeps autocapture responsive
 const FACE_MIN_SIZE = 0.05;  // mirror of Backend FACE_MATCH/FACE_MIN_SIZE (fraction of frame width)   
@@ -342,6 +343,8 @@ export default function Training() {
   };
 
   const [countdown, setCountdown]       = useState(0);
+  const [timing, setTiming]             = useState(FALLBACK_TIMING);
+  const [phaseLabel, setPhaseLabel]     = useState("");
   const [hardwareState, setHardwareState] = useState("idle");
 
   const [bacModal, setBacModal]           = useState(null);
@@ -426,12 +429,20 @@ export default function Training() {
     return () => clearInterval(t);
   }, [checkEsp32]);
 
+  // ── Timing (single source: /sensor/timing, falls back to defaults) ──
+  useEffect(() => { let alive = true; getTiming().then(t => { if (alive) setTiming(t); });
+    return () => { alive = false; }; }, []);
+
   // ── Countdown Timer Ticker ────────────────────────────────
   useEffect(() => {
     if (countdown <= 0) return;
-    const timer = setTimeout(() => setCountdown(c => c - 1), 1000);
+    const timer = setTimeout(() => {
+      setCountdown(c => Math.max(0, c - 1));
+      const elapsedMs = (Math.ceil(timing.ready_after_ms / 1000) - Math.max(0, countdown - 1)) * 1000;
+      setPhaseLabel(phaseAt(elapsedMs, timing));
+    }, 1000);
     return () => clearTimeout(timer);
-  }, [countdown]);
+  }, [countdown, timing]);
 
   // ── Stable max 60ms — self-scheduling recursion + single-flight guard (A) — camera-only
   const fetchFrameLoop = async () => {
@@ -525,7 +536,8 @@ export default function Training() {
   // ── FIX: CRASH-PROOF DATA PIPELINE ────────────────────────────
   const handleCameraCapture = async (blob) => {
     setHardwareState("buffering");
-    setCountdown(5);
+    setCountdown(Math.ceil(timing.ready_after_ms / 1000));
+    setPhaseLabel("preroll");
 
     try {
       const fd = new FormData();
@@ -537,7 +549,7 @@ export default function Training() {
 
       const checkTrigger = (d, rowId) => {
         if (d.trigger && d.trigger.busy) {
-          toast(`Row #${rowId} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} (incoming #${d.trigger.row_id || rowId}). Wait 5s and retry.`, "error");
+          toast(`Row #${rowId} busy — ESP32 running #${d.trigger.busy_row_id || d.trigger.sequence_state || "?"} (incoming #${d.trigger.row_id || rowId}). wait ${busySeconds(timing)}s and retry.`, "error");
           setHardwareState("idle");
           setCollectingSync(false);
           capturedRef.current = false;
@@ -596,7 +608,7 @@ export default function Training() {
         setHardwareState("completed");
         loadAll();
         setTimeout(() => setHardwareState("idle"), 2000);
-      }, 6000);
+      }, timing.ready_after_ms);
 
     } catch (e) {
       toast(readableErr(e, "Capture verification error"), "error");
@@ -609,7 +621,8 @@ export default function Training() {
   const handleManualCollect = async () => {
     setCollectingSync(true);
     setHardwareState("buffering");
-    setCountdown(5);
+    setCountdown(Math.ceil(timing.ready_after_ms / 1000));
+    setPhaseLabel("preroll");
 
     try {
       const liveEvent = activeEventRef.current;
@@ -620,7 +633,7 @@ export default function Training() {
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || d.error);
         if (d.trigger && d.trigger.busy) {
-          throw new Error(`Row #${d.id} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} . Wait 5s and retry.`);
+          throw new Error(`Row #${d.id} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} . wait ${busySeconds(timing)}s and retry.`);
         }
         toast(`Clear air baseline logged — Row #${d.id}.`);
       } else if (liveEvent === "sanitizer") {
@@ -629,7 +642,7 @@ export default function Training() {
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || d.error);
         if (d.trigger && d.trigger.busy) {
-          throw new Error(`Row #${d.id} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} . Wait 5s and retry.`);
+          throw new Error(`Row #${d.id} busy — ESP32 buffering #${d.trigger.busy_row_id || "?"} . wait ${busySeconds(timing)}s and retry.`);
         }
         toast(`Vapor reference logged — Row #${d.id}. Keep compound active.`);
       }
@@ -639,7 +652,7 @@ export default function Training() {
         loadAll();
         setCollectingSync(false);
         setTimeout(() => setHardwareState("idle"), 2000);
-      }, 6000);
+      }, timing.ready_after_ms);
     } catch (e) {
       toast(e.message || "Collection execution drop", "error");
       setCollectingSync(false);
@@ -812,7 +825,7 @@ export default function Training() {
   const hardwareStateConfig = {
     idle: { label: "System Ready", color: "var(--text-muted)", icon: Cpu },
     triggering: { label: "Triggering ESP32...", color: "var(--near)", icon: RefreshCw },
-    buffering: { label: `ESP32 Sampling Pipeline Active (${countdown}s)`, color: "var(--over)", icon: Hourglass },
+    buffering: { label: `ESP32 ${phaseLabel || "preroll"} ${countdown}s`, color: "var(--over)", icon: Hourglass },
     completed: { label: "Matrix Synchronized Successfully! ✓", color: "var(--pass)", icon: Check }
   };
 

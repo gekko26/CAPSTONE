@@ -5,8 +5,11 @@ import {
 } from "lucide-react";
 
 import { API_BASE as BASE } from "../api";
+import { getTiming, busySeconds, FALLBACK_TIMING } from "../config/timing";
 const FRAME_MS = 60;  // 15 FPS max for stream1 — max fps, camera-only
 const ANALYZE_MS = 800;
+// post-trigger wait comes from /sensor/timing (see src/config/timing.js)
+let TIMING = FALLBACK_TIMING;
 
 export default function Deployment() {
   const [frameUrl, setFrameUrl] = useState(null);
@@ -16,6 +19,10 @@ export default function Deployment() {
   const [logs, setLogs] = useState([]);
   const [overlayOn, setOverlayOn] = useState(false);
   const overlayRef = useRef(overlayOn);
+  // ── Timing from the backend (single source) ──────────────────────
+  useEffect(() => { let alive = true; getTiming().then(t => { if (alive) TIMING = t; });
+    return () => { alive = false; }; }, []);
+
   useEffect(() => { overlayRef.current = overlayOn; }, [overlayOn]);
 
   const loopActiveRef = useRef(true);
@@ -99,16 +106,29 @@ export default function Deployment() {
     try {
       // 1. Trigger ESP32 Hardware — capture reading_id for staleness-checked /predict/full
       let readingId = null;
+      let busy = false;
       try {
         const tr = await fetch(`${BASE}/sensor/trigger`, { method: "POST" });
         if (tr.ok) {
           const tj = await tr.json();
           readingId = tj.reading_id || tj.readingId || null;
+          // The ESP32 refuses a trigger while its relay sequence is running.
+          busy = tj.busy === true || tj.triggered === false;
         }
       } catch {}
       
-      // 2. Wait 6 seconds for breathalyzer payload (5s ESP32 buffer + POST margin)
-      await new Promise(res => setTimeout(res, 6000));
+      // 1b. Busy is NOT a stale reading — do not fall into the recapture flow
+      if (busy) {
+        const waitS = busySeconds(TIMING);
+        setSystemState("IDLE");
+        setLastResult({ name: "Device busy", reason: `Relay sequence running — wait about ${waitS}s and try again`, color: "var(--near)", bg: "var(--near-bg)" });
+        addLog(`ESP32 busy (relay sequence running) — retry in about ${waitS}s`, "warn");
+        setTimeout(() => { setLastResult(null); isScanningRef.current = false; }, 4000);
+        return;
+      }
+      
+      // 2. Wait for the pre-roll + sampling window + settle margin before reading
+      await new Promise(res => setTimeout(res, TIMING.ready_after_ms));
 
       // 3. Hit the Deployment Gatekeeper! reading_id is required (FIX 2 staleness check)
       if (!readingId) {
