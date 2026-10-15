@@ -8,6 +8,8 @@ import {
 
 import { API_BASE as BASE } from "../api";
 import { getTiming, busySeconds, phaseAt, FALLBACK_TIMING } from "../config/timing";
+import { DeviceModeBadge } from "../components/DeviceMode";
+import { useDeviceMode } from "../config/deviceMode";
 const FRAME_MS    = 60;   // 15 FPS max for stream1 — max fps without affecting other functionalities, quality 78
 const ANALYZE_MS  = 380;  // decoupled analysis — keeps autocapture responsive
 const FACE_MIN_SIZE = 0.05;  // mirror of Backend FACE_MATCH/FACE_MIN_SIZE (fraction of frame width)   
@@ -345,6 +347,11 @@ export default function Training() {
   const [countdown, setCountdown]       = useState(0);
   const [timing, setTiming]             = useState(FALLBACK_TIMING);
   const [phaseLabel, setPhaseLabel]     = useState("");
+  // Which table the ESP32 will write a sampled window to.
+  const { mode: deviceMode, online: deviceOnline } = useDeviceMode();
+  // Collecting while the device is in deployment mode would strand the trial:
+  // the sensor window would land in sensor_readings instead of training_data.
+  const wrongMode = deviceOnline && deviceMode !== null && deviceMode !== "training";
   const [hardwareState, setHardwareState] = useState("idle");
 
   const [bacModal, setBacModal]           = useState(null);
@@ -535,6 +542,10 @@ export default function Training() {
 
   // ── FIX: CRASH-PROOF DATA PIPELINE ────────────────────────────
   const handleCameraCapture = async (blob) => {
+    if (wrongMode) {
+      toast(`Device is in ${deviceMode} mode — switch it to TRAINING (Settings → Sensors) before capturing`, "error");
+      return;
+    }
     setHardwareState("buffering");
     setCountdown(Math.ceil(timing.ready_after_ms / 1000));
     setPhaseLabel("preroll");
@@ -619,6 +630,10 @@ export default function Training() {
   };
 
   const handleManualCollect = async () => {
+    if (wrongMode) {
+      toast(`Device is in ${deviceMode} mode — switch it to TRAINING (Settings → Sensors) before collecting`, "error");
+      return;
+    }
     setCollectingSync(true);
     setHardwareState("buffering");
     setCountdown(Math.ceil(timing.ready_after_ms / 1000));
@@ -860,6 +875,7 @@ export default function Training() {
             }}>
             {esp32Online ? <><Wifi size={10}/> ESP32 online</> : <><WifiOff size={10}/> ESP32 offline</>}
           </div>
+          <DeviceModeBadge />
         </div>
         <div className="flex gap-2">
           <button onClick={loadAll} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border"

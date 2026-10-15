@@ -1,5 +1,6 @@
 // Settings.jsx — functional: persists to localStorage, applies instantly
 import { useState, useEffect } from "react";
+import { DeviceModeSelector } from "../components/DeviceMode";
 import { Sun, Moon, Monitor, Maximize2 } from "lucide-react";
 import { useTheme } from "../context/THEME_CONTEXT";
 import { useDisplay } from "../context/DISPLAY_CONTEXT";
@@ -205,12 +206,22 @@ export default function Settings() {
                     </select>
                   </div>
                 </>
-              ) : (
-                <div className="py-6 text-center text-[11px]" style={{ color: "var(--text-muted)" }}>
-                  <Monitor size={16} className="mx-auto mb-2 opacity-40" />
-                  {active} settings — no configurable fields yet. Switch to <b style={{ color: "var(--text-secondary)" }}>General</b> for live preferences.
-                </div>
-              )}
+                ) : active === "Sensors" ? (
+                  <div className="py-1">
+                    <div className="text-[10px] mb-3" style={{ color: "var(--text-muted)" }}>
+                      The ESP32 runs the fans for 3 s before sampling (pre-roll), samples MQ3 for 5 s,
+                      then keeps the fans on 2 s more. The mode below decides where each sampled
+                      window is written.
+                    </div>
+                    <DeviceModeSelector />
+                  </div>
+                ) : (
+                  <div className="py-6 text-center text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    <Monitor size={16} className="mx-auto mb-2 opacity-40" />
+                    {active} settings — no configurable fields yet. Switch to <b style={{ color: "var(--text-secondary)" }}>General</b> for live preferences, or <b style={{ color: "var(--text-secondary)" }}>Sensors</b> for the device mode.
+                  </div>
+                )}
+
             </div>
           </div>
 

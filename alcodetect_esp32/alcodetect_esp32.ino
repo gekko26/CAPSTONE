@@ -62,6 +62,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
+#include <Preferences.h>
 #include "relay_sequence.h"
 
 // ── WiFi credentials ──────────────────────────────────────────
@@ -132,7 +133,37 @@ RelaySequence relays(relayWritePin, makeRelayConfig());
 // ── Mode ──────────────────────────────────────────────────────
 // true  = training mode  → posts to /training/collect/sensor-data (training_data)
 // false = deployment mode → posts to /sensor                    (sensor_readings)
-bool TRAINING_MODE = true;   // ← change to false for deployment
+// The default is DEPLOYMENT: a factory-fresh or NVS-cleared device can never post a
+// live gate reading into the training table. Training mode must be opted into
+// deliberately (GET /mode?training=1, or the Settings UI), and the choice is kept in
+// NVS so it survives both a power cut and a reflash.
+bool TRAINING_MODE = false;
+
+Preferences nvs;
+static const char* NVS_NS   = "alco";
+static const char* NVS_KEY  = "mode";
+static const char* MODE_TRAINING    = "training";
+static const char* MODE_DEPLOYMENT  = "deployment";
+
+// Mode PINNED when /trigger was accepted. The destination is decided HERE, not when
+// the window is posted: a mode change mid-sequence can never redirect an in-flight
+// window into the wrong table.
+bool activeTrainingMode = false;
+
+const char* modeName() { return TRAINING_MODE ? MODE_TRAINING : MODE_DEPLOYMENT; }
+
+void loadModeFromNvs() {
+  nvs.begin(NVS_NS, true);
+  bool stored = nvs.getBool(NVS_KEY, false);
+  nvs.end();
+  TRAINING_MODE = stored;
+}
+
+void saveModeToNvs() {
+  nvs.begin(NVS_NS, false);
+  nvs.putBool(NVS_KEY, TRAINING_MODE);
+  nvs.end();
+}
 
 // ── Objects ───────────────────────────────────────────────────
 WebServer server(80);
@@ -222,6 +253,10 @@ void handleTrigger() {
     return;
   }
   targetRowId = incomingId;
+  // PIN the destination now. It is used when the window is posted, so flipping the
+  // mode during the pre-roll or sampling window cannot redirect this reading.
+  activeTrainingMode = TRAINING_MODE;
+
   // Relays ON now; sampling only begins once the pre-roll has elapsed.
   // Identical in training and deployment mode — airflow must not vary by mode.
   if (!relays.start(millis())) {
@@ -275,11 +310,20 @@ void handleStatus() {
 // Switch between training and deployment mode without reflashing
 void handleMode() {
   if (server.hasArg("training")) {
+    // Refuse while a sequence is mid-flight. Even though the destination is pinned,
+    // switching now would leave the UI claiming a mode the next reading will not use.
+    if (relays.busy()) {
+      server.send(409, "application/json",
+        "{\"error\":\"Relay sequence running — wait until idle before changing mode\",\"sequence_state\":\"" +
+        String(RelaySequence::stateName(relays.state())) + "\"}");
+      Serial.println("⚠ Mode change refused — sequence is " + String(RelaySequence::stateName(relays.state())));
+      return;
+    }
     TRAINING_MODE = server.arg("training") == "1";
-    String mode = TRAINING_MODE ? "training" : "deployment";
-    Serial.println("◉ Mode switched to: " + mode);
+    saveModeToNvs();
+    Serial.println("◉ Mode switched to: " + String(modeName()) + " (saved to NVS)");
     server.send(200, "application/json",
-      "{\"mode\":\"" + mode + "\",\"message\":\"Mode updated\"}");
+      "{\"mode\":\"" + String(modeName()) + "\",\"message\":\"Mode updated\"}");
   } else {
     server.send(400, "application/json", "{\"error\":\"Pass ?training=1 or ?training=0\"}");
   }
@@ -336,6 +380,9 @@ void postSensorData() {
 
   doc["temperature"] = temperature;
   doc["humidity"]    = humidity;
+  // Tag the payload with the mode it was sampled in, so the backend can refuse a
+  // reading that arrives at the wrong endpoint instead of trusting it blindly.
+  doc["mode"] = activeTrainingMode ? MODE_TRAINING : MODE_DEPLOYMENT;
 
   // Add both row_id and reading_id so training (/training/collect/sensor-data expects row_id)
   // and deployment (/sensor expects reading_id) both find the field they look for
@@ -357,7 +404,7 @@ void postSensorData() {
   serializeJson(doc, payload);
 
   // Choose endpoint from the mode PINNED at trigger time (not the live mode).
-  String endpoint = TRAINING_MODE ? TRAINING_ENDPOINT : DEPLOYMENT_ENDPOINT;
+  String endpoint = activeTrainingMode ? TRAINING_ENDPOINT : DEPLOYMENT_ENDPOINT;
   String url = "http://" + String(BACKEND_IP) + ":" + String(BACKEND_PORT) + endpoint;
 
   Serial.println("→ Posting to: " + url);
@@ -409,6 +456,9 @@ void setup() {
   Serial.println(" AlcoDetect ESP32 Firmware");
   Serial.println("=============================");
 
+  // Mode is loaded from NVS before the server accepts anything.
+  loadModeFromNvs();
+  Serial.println(String("  DEVICE MODE: ") + String(modeName()) + (TRAINING_MODE ? "  <<< TRAINING — readings go to training_data" : "  (readings go to sensor_readings)"));
 
   // Pin modes
   pinMode(LED_PIN, OUTPUT);
@@ -448,7 +498,16 @@ void setup() {
   Serial.println("  POST http://" + WiFi.localIP().toString() + "/trigger");
   Serial.println("  GET  http://" + WiFi.localIP().toString() + "/status");
   Serial.println("  GET  http://" + WiFi.localIP().toString() + "/mode?training=1");
-  Serial.println("\n  Mode: " + String(TRAINING_MODE ? "TRAINING" : "DEPLOYMENT"));
+  Serial.println("\n  ───────────────────────────────────────────");
+  Serial.println("  DEVICE MODE: " + String(modeName()));
+  Serial.println("  POST target: " + String(activeTrainingMode ? TRAINING_ENDPOINT : DEPLOYMENT_ENDPOINT) + " (pinned at trigger)");
+  if (TRAINING_MODE) {
+    Serial.println("  ⚠ TRAINING MODE — sampled windows are written to the TRAINING table.");
+    Serial.println("    Switch back with: GET /mode?training=0  (or the Settings page)");
+  } else {
+    Serial.println("  Deployment mode — sampled windows are written to the DEPLOYMENT table.");
+  }
+  Serial.println("  ───────────────────────────────────────────");
   Serial.println("  Backend: " + String(BACKEND_IP) + ":" + String(BACKEND_PORT));
   Serial.println("\nReady — waiting for trigger from backend...\n");
 

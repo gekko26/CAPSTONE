@@ -511,9 +511,20 @@ async def collect_perfume(background_tasks: BackgroundTasks, file: UploadFile = 
 
 class SensorPayload(BaseModel):
     temperature: float; humidity: float; mq3_1: List[float]; mq3_2: List[float]; mq3_3: List[float]; row_id: Optional[int] = None
+    # Mode the firmware PINNED when /trigger was accepted. Optional so an older
+    # firmware build still posts, but when present it must say "training" — otherwise
+    # a live gate reading would be written into the training table.
+    mode: Optional[str] = None
 
 @router.post("/collect/sensor-data")
 def receive_sensor_data(data: SensorPayload, db: Session = Depends(get_db)):
+    # Defence in depth: refuse a window that was sampled in the wrong mode. Without
+    # this, a deployment reading would be attached to the training row whose id happens
+    # to match the reading id, silently poisoning the dataset.
+    if data.mode is not None and data.mode != "training":
+        raise HTTPException(status_code=409,
+                            detail=f"Refusing a '{data.mode}'-mode window at the training endpoint — "
+                                   "switch the device to training mode and re-trigger")
     features = sensor_models.extract_features(data.mq3_1, data.mq3_2, data.mq3_3, data.temperature, data.humidity)
     if features is None:
         raise HTTPException(status_code=400, detail="No sensor data")

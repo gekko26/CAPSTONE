@@ -1,5 +1,6 @@
 // AlcoGateHeader.jsx — Terminal header: logo | nav | clock/LIVE
 import { NavLink } from "react-router-dom";
+import { DeviceModeBadge } from "./DeviceMode";
 import { Activity, Settings, Bell, Sun, Moon, Maximize2 } from "lucide-react";
 import { useTheme } from "../context/THEME_CONTEXT";
 import { useDisplay } from "../context/DISPLAY_CONTEXT";

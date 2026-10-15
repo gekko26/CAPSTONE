@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database.db import get_db
 from database.models import Reading, TrainingData, DeploymentLog
@@ -112,9 +112,75 @@ def esp32_status():
     """Check if ESP32 is reachable. Frontend polls every 10s."""
     try:
         r = requests.get(f"{ESP32_URL}/status", timeout=3)
-        return {"online": True, "esp32_status": r.status_code}
+        # Additive only — the existing keys are unchanged. The firmware tells us which
+        # table it will post a sampled window to, so the UI never has to guess.
+        info = {}
+        try:
+            info = r.json() if r.status_code == 200 else {}
+        except ValueError:
+            info = {}
+        return {
+            "online": True,
+            "esp32_status": r.status_code,
+            "mode": info.get("mode"),
+            "sequence_state": info.get("sequence_state"),
+            "fan_on": info.get("fan_on"),
+            "blower_on": info.get("blower_on"),
+        }
     except Exception:
-        return {"online": False, "esp32_url": ESP32_URL}
+        return {"online": False, "esp32_url": ESP32_URL, "mode": None, "sequence_state": None}
+
+
+# ── ESP32 device mode (training <-> deployment) ───────────────
+# The firmware decides which table a sampled window lands in, so this pair of routes
+# is how the UI changes that decision. They are proxies: the frontend never talks to
+# the ESP32 directly.
+VALID_MODES = {"training", "deployment"}
+
+
+@router.get("/sensor/mode")
+def get_sensor_mode():
+    """Read the ESP32's current mode. Never errors on an unreachable device."""
+    try:
+        r = requests.get(f"{ESP32_URL}/status", timeout=2)
+        info = r.json() if r.status_code == 200 else {}
+        return {
+            "mode": info.get("mode"),
+            "online": r.status_code == 200,
+            "sequence_state": info.get("sequence_state"),
+            "writable": info.get("sequence_state") == "idle",
+        }
+    except Exception as e:
+        return {"mode": None, "online": False, "sequence_state": None,
+                "writable": False, "error": str(e)[:200]}
+
+
+@router.post("/sensor/mode")
+def set_sensor_mode(payload: dict):
+    """Switch the ESP32 between training and deployment.
+
+    400 invalid value, 409 while a relay sequence is running, 503 device unreachable.
+    The choice is persisted by the firmware in NVS, so it survives a power cut.
+    """
+    mode = (payload or {}).get("mode")
+    if mode not in VALID_MODES:
+        raise HTTPException(status_code=400,
+                            detail=f"mode must be one of {sorted(VALID_MODES)}")
+    training = "1" if mode == "training" else "0"
+    try:
+        r = requests.get(f"{ESP32_URL}/mode?training={training}", timeout=3)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"ESP32 unreachable — {e}")
+    if r.status_code == 409:
+        raise HTTPException(status_code=409,
+                            detail="Relay sequence running — wait until idle to change mode")
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"ESP32 refused the mode change ({r.status_code})")
+    try:
+        confirmed = r.json().get("mode")
+    except ValueError:
+        confirmed = mode
+    return {"mode": confirmed, "message": "Mode updated", "persisted": True}
 
 
 # ── Deployment sensor reading (ESP32 posts here in deployment) ─
@@ -126,6 +192,10 @@ class SensorData(BaseModel):
     mq3_2:       List[float]
     mq3_3:       List[float]
     reading_id: int | None = None
+    # Mode the firmware PINNED when /trigger was accepted. Optional so an older
+    # firmware build still posts, but when present it must say "deployment" — this
+    # endpoint owns sensor_readings.
+    mode:        str | None = None
 
 
 
@@ -156,6 +226,13 @@ def receive_sensor(data: SensorData, db: Session = Depends(get_db)):
       [16] sanitizer_ratio (jaw+chest)/2 / nose
       [17] spatial_direction chest_max - nose_max
     """
+    # Defence in depth: this endpoint owns sensor_readings. A window sampled in
+    # training mode belongs to the training table and must not be logged as a gate
+    # reading here.
+    if data.mode is not None and data.mode != "deployment":
+        raise HTTPException(status_code=409,
+                            detail=f"Refusing a '{data.mode}'-mode window at the deployment endpoint — "
+                                   "switch the device to deployment mode and re-trigger")
 
     # 1. Predict (classifier 0/1/2)
     try:
