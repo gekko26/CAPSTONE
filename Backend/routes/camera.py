@@ -30,6 +30,7 @@ REGISTERED = os.path.join(os.path.dirname(__file__), "../data/faces/registered")
 os.makedirs(REGISTERED, exist_ok=True)
 
 RTSP_URL = os.getenv("RTSP_URL")
+ESP32_URL = os.getenv("ESP32_URL", "http://192.168.69.2").rstrip("/")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AlcoDetect.Camera")
@@ -37,6 +38,22 @@ logger.setLevel(logging.INFO)
 
 if not RTSP_URL:
     logger.warning("RTSP_URL not set in .env — camera endpoints will return 503.")
+  
+# ── Deployment indicators (PHASE 1) ─────────────────────────────────────────
+# Read-only probe of the gate device, used only to decide whether an indicator
+# command is appropriate. It is a 1 s call so the analyse endpoint keeps its
+# timing budget. Returns (reachable, mode, idle) and NEVER raises, so an
+# unreachable device simply makes the caller say nothing at all.
+def _device_mode_and_idle():
+    try:
+        import requests
+        r = requests.get(f"{ESP32_URL}/status", timeout=1)
+        if r.status_code != 200:
+            return False, None, False
+        j = r.json()
+        return True, j.get("mode"), j.get("sequence_state") == "idle"
+    except Exception:                      # noqa: BLE001 - probe must never raise
+        return False, None, False
 
 
 # ── Persistent RTSP capture — runs in background thread ──────
@@ -421,6 +438,26 @@ def analyze(file: UploadFile = File(None), db: Session = Depends(get_db)):
             "ts": time.time(),
         }
         _last_analysis = result
+
+        # ── Deployment indicators (PHASE 1) — DISPLAY ONLY ────────────────────
+        # A gate device is only told someone is there when it is in DEPLOYMENT mode
+        # and idle. In training mode this must never fire. The client debounces and
+        # cools down internally and swallows its own errors, so this block cannot
+        # change the analyse response above or its timing budget.
+        try:
+            from services.indicator import (
+                indicators_enabled, person_cleared, person_detected,
+            )
+            if indicators_enabled():
+                reachable, dev_mode, _idle = _device_mode_and_idle()
+                if reachable and dev_mode == "deployment" and _idle:
+                    if result.get("is_close"):
+                        person_detected()
+                    else:
+                        person_cleared()
+        except Exception:                      # noqa: BLE001 - never raise upward
+            logger.warning("indicator person hook skipped", exc_info=False)
+
         return _with_freshness(result)
     except Exception as exc:
         logger.error(f"[POST /analyze] CRITICAL exception caught during processing loop: {exc}")

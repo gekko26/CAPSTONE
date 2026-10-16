@@ -273,6 +273,19 @@ async def full_predict(background_tasks: BackgroundTasks, file: UploadFile = Fil
         background_tasks.add_task(save_snapshot_task,
                                   os.path.join(FATIGUE_DIR, f"fatigue_reading_{reading.id}.jpg"), frame)
 
+    # ── Deployment indicators (PHASE 1) — DISPLAY ONLY ────────────────────────
+    # Exactly one line does any work, and it is wrapped twice: the try/except keeps
+    # an indicator fault out of this request path, and services.indicator itself
+    # dispatches on a daemon thread and swallows its own exceptions. Nothing here can
+    # change decision.status, the response body below, the status code or the timing
+    # of this endpoint. The run id sent is the reading_id this call is processing,
+    # which is the id the ESP32 was triggered with, so the firmware can match it.
+    try:
+        from services.indicator import verdict as _indicator_verdict
+        _indicator_verdict(decision.status, reading.id)
+    except Exception:                              # noqa: BLE001 - never raise upward
+        logger.warning("indicator hook skipped", exc_info=False)
+
     return {"reading_id": reading.id, "sensor_class": rf_class, "sensor_label": reading.label,
             "ear": ear, "eye_status": ear_result["status"], "impaired": ear_result["impaired"],
             "final_label": decision.status, "final_risk": decision.status,

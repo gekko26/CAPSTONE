@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { RecentDetections } from "../assets/graph";
 
 import { API_BASE as BASE } from "../api";
+import { useDeviceMode } from "../config/deviceMode";
 const FRAME_MS   = 60;  // 15 FPS max for stream1 — max fps, camera-only
 const ANALYZE_MS = 400; // decoupled analysis
 
@@ -55,6 +56,18 @@ export default function Camera() {
   // Camera uses MJPEG for smooth live view; Training/Deployment keep fetch loop (see note below)
   const mjpegUrl = `${BASE}/camera/stream/mjpeg?overlay=${overlayOn ? "1" : "0"}&fps=15`;
 
+  // Deployment gate — default OFF, and forced OFF while the device is in training mode.
+  // Without this, anyone standing in front of this page during a training session
+  // would fire a deployment trigger into it.
+  const [gateEnabled, setGateEnabled]   = useState(false);
+  const { mode: deviceMode }            = useDeviceMode();
+  const gateSuppressed                  = deviceMode === "training";
+  // Derived, not synchronised: see LiveFlow. The gate is only ACTIVE when the user
+  // turned it on and the device is not collecting training data.
+  const gateActive                      = gateEnabled && !gateSuppressed;
+  const gateActiveRef                   = useRef(gateActive);
+  useEffect(() => { gateActiveRef.current = gateActive; }, [gateActive]);
+
   // FIX: Tracks hardware trigger lockouts to guarantee deployment calls fire exactly ONCE per approach
   const hasTriggeredSensorRef         = useRef(false);
 
@@ -104,7 +117,7 @@ export default function Camera() {
         const data = await analyzeRes.json();
         setAnalysis(data);
         // FIX: Triggers deployment mode sensor logging via Option B middleman when proximity shifts
-        if (data.is_close) {
+        if (data.is_close && gateActiveRef.current) {
           if (!hasTriggeredSensorRef.current) {
             hasTriggeredSensorRef.current = true;
             fetch(`${BASE}/sensor/trigger`, { method: "POST" }).catch(() => {});
@@ -173,8 +186,24 @@ export default function Camera() {
                 {camError ? "Camera unavailable" : "Live · CAM-01"}
               </span>
             </div>
-            <div className="flex items-center gap-2">
-              {/* Overlay toggle */}
+              <div className="flex items-center gap-2">
+                {/* Deployment gate — default OFF so this page can never trigger a
+                    deployment sample on its own */}
+                <button
+                  onClick={() => !gateSuppressed && setGateEnabled(v => !v)}
+                  disabled={gateSuppressed}
+                  title={gateSuppressed ? "Device is in training mode — gate suppressed" : gateActive ? "Gate ON — proximity will POST /sensor/trigger → deployment_logs" : "Gate OFF — preview only, training_data safe"}
+                  className="text-[10px] px-2 py-0.5 rounded-full border transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  style={{
+                    color: gateActive ? "var(--over)" : "var(--text-muted)",
+                    background: gateActive ? "var(--over-bg)" : "transparent",
+                    borderColor: gateActive ? "var(--over)" : "var(--border-subtle)",
+                  }}
+                >
+                  {gateSuppressed ? "GATE SUPPRESSED" : gateActive ? "GATE ON" : "GATE OFF"}
+                </button>
+                {/* Overlay toggle */}
+
               <button
                 onClick={() => setOverlayOn(v => !v)}
                 title={overlayOn ? "HUD on — backend box (cost ~3 FPS)" : "HUD off — smooth (15 FPS)"}

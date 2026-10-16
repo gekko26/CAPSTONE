@@ -34,3 +34,14 @@ data/faces/registered/**/*.png
 data/snapshots/**/*.jpg
 data/snapshots/**/*.jpeg
 data/snapshots/**/*.png
+
+# Database dumps — contain subject names and password hashes; never commit
+backup.sql
+backup.sql.prev-*
+*.sql.gz
+
+# Firmware secrets: the real shared-token / Wi-Fi header. The .example is committed.
+alcodetect_esp32/secrets.h
+
+# Generated voice clips and build output — never commit MP3s.
+build/

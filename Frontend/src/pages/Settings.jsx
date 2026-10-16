@@ -1,9 +1,10 @@
 // Settings.jsx — functional: persists to localStorage, applies instantly
-import { useState, useEffect } from "react";
-import { DeviceModeSelector } from "../components/DeviceMode";
-import { Sun, Moon, Monitor, Maximize2 } from "lucide-react";
-import { useTheme } from "../context/THEME_CONTEXT";
-import { useDisplay } from "../context/DISPLAY_CONTEXT";
+  import { useState, useEffect } from "react";
+  import { DeviceModeSelector } from "../components/DeviceMode";
+  import { IndicatorBench } from "../components/IndicatorBench";
+  import { Sun, Moon, Monitor, Maximize2 } from "lucide-react";
+  import { useTheme } from "../context/THEME_CONTEXT";
+  import { useDisplay } from "../context/DISPLAY_CONTEXT";
 
 const NAV = ["General", "Gates", "Sensors", "AI Model", "Alerts", "Users", "System", "Backup & Logs"];
 
@@ -214,6 +215,11 @@ export default function Settings() {
                       window is written.
                     </div>
                     <DeviceModeSelector />
+
+                    {/* Deployment indicators — display only. Bench controls, never a token. */}
+                    <div className="mt-5 pt-4" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                      <IndicatorBench />
+                    </div>
                   </div>
                 ) : (
                   <div className="py-6 text-center text-[11px]" style={{ color: "var(--text-muted)" }}>

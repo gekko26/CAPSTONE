@@ -1,10 +1,9 @@
-mysqldump: Deprecated program name. It will be removed in a future release, use '/usr/bin/mariadb-dump' instead
 /*M!999999\- enable the sandbox mode */ 
--- MariaDB dump 10.20-12.3.3-MariaDB, for Linux (x86_64)
+-- MariaDB dump 10.20-13.0.2-MariaDB, for Linux (x86_64)
 --
 -- Host: localhost    Database: Alcohol_System
 -- ------------------------------------------------------
--- Server version	12.3.3-MariaDB
+-- Server version	13.0.2-MariaDB
 
 /*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
 /*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
@@ -133,7 +132,7 @@ CREATE TABLE `subjects` (
   `avatar_path` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `ix_subjects_face_id` (`face_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -143,6 +142,8 @@ CREATE TABLE `subjects` (
 SET @OLD_AUTOCOMMIT=@@AUTOCOMMIT, @@AUTOCOMMIT=0;
 LOCK TABLES `subjects` WRITE;
 /*!40000 ALTER TABLE `subjects` DISABLE KEYS */;
+INSERT INTO `subjects` VALUES
+(7,'Edrian P. Gonzaga','3230120','2026-10-14 11:43:23','Student','/home/whou/CAPSTONE/Backend/models/train/../../data/faces/registered/Edrian P. Gonzaga/04.jpg');
 /*!40000 ALTER TABLE `subjects` ENABLE KEYS */;
 UNLOCK TABLES;
 COMMIT;
@@ -194,7 +195,7 @@ CREATE TABLE `training_data` (
   KEY `ix_training_data_date` (`date`),
   KEY `ix_training_data_trial_id` (`trial_id`),
   CONSTRAINT `fk_training_data_subject` FOREIGN KEY (`subject_id`) REFERENCES `subjects` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=117 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -244,6 +245,14 @@ INSERT INTO `users` VALUES
 UNLOCK TABLES;
 COMMIT;
 SET AUTOCOMMIT=@OLD_AUTOCOMMIT;
+
+--
+-- Dumping events for database 'Alcohol_System'
+--
+
+--
+-- Dumping routines for database 'Alcohol_System'
+--
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
@@ -254,4 +263,4 @@ SET AUTOCOMMIT=@OLD_AUTOCOMMIT;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*M!100616 SET NOTE_VERBOSITY=@OLD_NOTE_VERBOSITY */;
 
--- Dump completed on 2026-09-22 14:24:46
+-- Dump completed on 2026-10-15 21:03:03

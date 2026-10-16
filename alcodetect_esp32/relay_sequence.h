@@ -108,8 +108,8 @@ public:
         return true;
     }
 
-    // Explicit "sampling window finished" event. tick() also performs this transition
-    // on its own once bufferMs elapses; calling it lets a caller finish early.
+    // Explicit "sampling window finished" event. This is the ONLY way into POSTROLL,
+    // so the owner of the buffer always knows exactly when it happened.
     void finishSampling(uint32_t now_ms) {
         if (_state != SAMPLING) return;
         _state = POSTROLL;
@@ -145,10 +145,12 @@ public:
                 }
                 break;
             case SAMPLING:
-                if (elapsed >= _cfg.bufferMs) {
-                    _state = POSTROLL;
-                    _stateStart = now_ms;
-                }
+                // Deliberately does NOT advance out of SAMPLING on its own. The owner
+                // of the buffer decides when the window is finished and calls
+                // finish_sampling(). If tick() also moved on, it would do so one loop
+                // iteration BEFORE the owner's own window-end check, the owner would
+                // then see "not sampling", skip its completion path, and leave its
+                // own buffering flag stuck on forever.
                 break;
             case POSTROLL:
                 if (elapsed >= _cfg.postrollMs) {

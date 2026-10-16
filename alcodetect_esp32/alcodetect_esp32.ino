@@ -64,6 +64,41 @@
 #include <DHT.h>
 #include <Preferences.h>
 #include "relay_sequence.h"
+#include "indicator.h"
+#include "dfplayer.h"
+
+// ── Shared device token (1C) ─────────────────────────────────────────────────
+// The real file is gitignored. Without it the firmware builds WITHOUT a token and
+// /indicator answers 503 and the indicators stay OFF — fail closed, never green.
+#if __has_include("secrets.h")
+  #include "secrets.h"
+  #define DEVICE_TOKEN_PRESENT 1
+#else
+  #define DEVICE_TOKEN_PRESENT 0
+  static const char* DEVICE_TOKEN = "";
+#endif
+
+static bool tokenConfigured() {
+  return DEVICE_TOKEN_PRESENT && DEVICE_TOKEN != 0 && strlen(DEVICE_TOKEN) > 0;
+}
+
+// Constant-time compare: never short-circuit on the first differing byte, so the
+// comparison time does not leak how much of the token was correct.
+static bool tokenMatches(const String& presented) {
+  if (!tokenConfigured()) return false;
+  const char* want = DEVICE_TOKEN;
+  size_t n = strlen(want);
+  if (presented.length() != n) {
+    // still walk the real length so the timing does not depend on the mismatch
+    volatile char sink = 0;
+    for (size_t i = 0; i < n; i++) sink ^= want[i];
+    (void)sink;
+    return false;
+  }
+  unsigned char diff = 0;
+  for (size_t i = 0; i < n; i++) diff |= (unsigned char)(want[i] ^ presented[i]);
+  return diff == 0;
+}
 
 // ── WiFi credentials ──────────────────────────────────────────
 const char* WIFI_SSID     = "Bayot kaba?";
@@ -85,6 +120,41 @@ const char* DEPLOYMENT_ENDPOINT = "/sensor";
 #define DHT_PIN       4    // DHT11 data pin
 #define DHT_TYPE    DHT11 
 #define LED_PIN       2    // Built-in LED — status indicator
+
+// ── Deployment indicators (PHASE 1) — DISPLAY ONLY ────────────────────────────
+// Two RGB LEDs share the SAME three PWM channels (R, G, B); each LED gets its own
+// series resistor, so one write drives both. Nothing here touches a lock or a relay.
+#define IND_LED_R     16    // free: not a strapping pin, not flash, not input-only
+#define IND_LED_G     17
+#define IND_LED_B     18
+#define IND_LED_PWM_HZ   5000
+#define IND_LED_BITS      8
+
+// LED_COMMON_ANODE — *** UNCONFIRMED: Gg must set this to match his actual LEDs. ***
+// false = common cathode (anode to +3.3 V, cathode driven by the pin)
+// true  = common anode   (cathode to GND, anode driven by the pin — duty is inverted)
+#define LED_COMMON_ANODE false
+
+// ── DFPlayer Mini on hardware UART Serial2 ───────────────────────────────────
+// ESP32 TX -> DFPlayer RX (1k series resistor), DFPlayer TX -> ESP32 RX (1k series).
+#define DFPLAYER_UART_NUM   2
+#define DFPLAYER_TX_PIN    19    // ESP32 TX  -> DFPlayer RX
+#define DFPLAYER_RX_PIN    21    // ESP32 RX  <- DFPlayer TX
+#define DFPLAYER_BAUD   9600     // UNCONFIRMED against the datasheet — verify
+#define DFPLAYER_BUSY_PIN  (-1)  // optional BUSY pin; -1 = not wired, see /status
+#define DFPLAYER_VOLUME    18     // 0..30
+#define DFPLAYER_AUDIO_RETRY_MS 30000UL   // slow retry when init fails
+#define DFPLAYER_AUDIO_INIT_MS   1500UL   // max wait for a BUSY low during init
+
+// ── Indicator timing (display only) ──────────────────────────────────────────
+// Timing lives in indicator.h so the firmware, the bench and the host tests all read
+// the same constants. Aliased here only for the names already used in the .ino.
+#define ANALYZE_TIMEOUT_MS  IND_ANALYZE_TIMEOUT_MS
+#define RESULT_HOLD_MS      IND_RESULT_HOLD_MS
+#define CUE_COOLDOWN_MS     IND_CUE_COOLDOWN_MS
+#define SLOW_PULSE_MS       IND_SLOW_PULSE_MS
+#define FAST_PULSE_MS       IND_FAST_PULSE_MS
+#define PERSON_HOLD_MS      IND_PERSON_HOLD_MS
 
 
 // ── Sampling config ───────────────────────────────────────────
@@ -191,6 +261,82 @@ void ledBlink(int times, int ms = 100) {
   }
 }
 
+// ── Indicator plumbing ──────────────────────────────────────────────────────
+// The Indicator object is pure logic; these are the three sinks that let it touch
+// hardware. Both RGB LEDs hang off the same R/G/B channels, so one write drives both.
+
+static void indicatorLed(uint8_t r, uint8_t g, uint8_t b) {
+  ledcWrite(IND_LED_R, r);
+  ledcWrite(IND_LED_G, g);
+  ledcWrite(IND_LED_B, b);
+}
+
+static HardwareSerial dfSerial(DFPLAYER_UART_NUM);
+static IndClip   lastClipQueued   = CLIP_NONE;
+static uint32_t  audioRetryAt     = 0;
+static bool     audioReadyFlag   = false;
+
+// DFPlayer TX → ESP32 RX (through a 1k series resistor, never straight in).
+static bool dfSend(const uint8_t* frame) {
+  return dfSerial.write((const char*)frame, DFPLAYER_FRAME_LEN) == DFPLAYER_FRAME_LEN;
+}
+
+// Sends folder+file so playback never depends on SD copy order.
+static void indicatorClip(uint8_t clip) {
+  uint8_t folder = 1, file = clip;
+  if (!ind_clip_slot((IndClip)clip, &folder, &file)) return;
+  uint8_t frame[DFPLAYER_FRAME_LEN];
+  if (dfplayer_frame_play(frame, folder, file) == DFPLAYER_FRAME_LEN) {
+    dfSend(frame);
+    lastClipQueued = (IndClip)clip;
+    Serial.println("  🔊 clip " + String(file) + " (" + ind_clip_name((IndClip)clip) + ")");
+  }
+}
+
+static void indicatorLog(const char* msg) { Serial.println("  " + String(msg)); }
+
+static IndConfig makeIndicatorConfig() {
+  IndConfig c = ind_default_config();
+  c.analyzeTimeoutMs = ANALYZE_TIMEOUT_MS;
+  c.resultHoldMs     = RESULT_HOLD_MS;
+  c.slowPulseMs      = SLOW_PULSE_MS;
+  c.fastPulseMs      = FAST_PULSE_MS;
+  c.cueCooldownMs    = CUE_COOLDOWN_MS;
+  c.personTimeoutMs  = PERSON_HOLD_MS;
+  c.commonAnode      = LED_COMMON_ANODE;
+  return c;
+}
+
+Indicator indicator;   // configured in setup() via indicator.begin()
+
+// Slow, non-blocking retry. A missing/unplugged DFPlayer must never block boot,
+// sampling, the relays or the web server — so this only ever sends bytes.
+static void serviceAudio(uint32_t now) {
+  if (audioReadyFlag) return;
+  if ((long)(now - audioRetryAt) < 0) return;
+  audioRetryAt = now + DFPLAYER_AUDIO_RETRY_MS;
+  uint8_t f[DFPLAYER_FRAME_LEN];
+  bool ok = dfplayer_frame_reset(f) == DFPLAYER_FRAME_LEN;
+  if (ok) ok = dfplayer_frame_select_sd(f) == DFPLAYER_FRAME_LEN && dfSend(f);
+  if (ok) ok = dfplayer_frame_volume(f, DFPLAYER_VOLUME) == DFPLAYER_FRAME_LEN && dfSend(f);
+  if (!ok) { indicator.setAudioReady(false); return; }
+
+  // With a BUSY pin wired, wait for it to go LOW before claiming audio is ready.
+  // Without it we can only confirm the bytes were written — reported honestly.
+  if (DFPLAYER_BUSY_PIN >= 0) {
+    uint32_t until = now + DFPLAYER_AUDIO_INIT_MS;
+    while (millis() < until && digitalRead(DFPLAYER_BUSY_PIN) != LOW) delay(10);
+    if (digitalRead(DFPLAYER_BUSY_PIN) != LOW) {
+      indicator.setAudioReady(false);
+      Serial.println("  ⚠ DFPlayer BUSY never went low — audio not ready, retrying later");
+      return;
+    }
+  }
+  audioReadyFlag = true;
+  indicator.setAudioReady(true);
+  Serial.println("  ✓ DFPlayer initialised (volume " + String(DFPLAYER_VOLUME) + ")");
+}
+
 // ── WiFi setup ────────────────────────────────────────────────
 void connectWiFi() {
   Serial.println("\nConnecting to WiFi: " + String(WIFI_SSID));
@@ -233,12 +379,15 @@ float readMQ3(int pin) {
 // Called by backend when proximity detected (Option B middleman)
 // Optional body: { "row_id": 42 }
 void handleTrigger() {
-  // Parse optional row_id from body — parse to incomingId first to avoid overwriting targetRowId on 409 busy
+  // Intent is read from WHICH key the caller used: training sends row_id, the gate
+  // sends reading_id. A body with neither is treated as training (legacy safety).
   int incomingId = -1;
+  bool isDeploymentIntent = false;
   if (server.hasArg("plain")) {
     StaticJsonDocument<128> doc;
     DeserializationError err = deserializeJson(doc, server.arg("plain"));
     if (!err && (doc.containsKey("row_id") || doc.containsKey("reading_id"))) {
+      isDeploymentIntent = !doc.containsKey("row_id") && doc.containsKey("reading_id");
       incomingId = doc.containsKey("row_id") ? doc["row_id"].as<int>() : doc["reading_id"].as<int>();
     }
   }
@@ -252,10 +401,26 @@ void handleTrigger() {
     Serial.println("⚠ Trigger rejected — already buffering (busy_row_id=" + String(targetRowId) + " incoming=" + String(incomingId) + ")");
     return;
   }
+  // A gate trigger while the device is collecting training data would push a
+  // deployment reading into a training session — refuse it. Training triggers
+  // (row_id) are never blocked here.
+  if (isDeploymentIntent && TRAINING_MODE) {
+    server.send(409, "application/json",
+      "{\"status\":\"blocked\",\"reason\":\"device_in_training_mode\",\"mode\":\"training\","
+      "\"message\":\"Device is in training mode — gate trigger refused\"}");
+    Serial.println("⚠ Deployment trigger refused — device is in TRAINING mode");
+    return;
+  }
+
   targetRowId = incomingId;
   // PIN the destination now. It is used when the window is posted, so flipping the
   // mode during the pre-roll or sampling window cannot redirect this reading.
   activeTrainingMode = TRAINING_MODE;
+
+  // A new run always starts a new indicator run: bumps the counter, cancels any
+  // verdict hold, and shows "sampling" from the START of the pre-roll. Display only —
+  // it runs after the relay decision and cannot influence it.
+  indicator.onTrigger(millis(), incomingId, incomingId > 0);
 
   // Relays ON now; sampling only begins once the pre-roll has elapsed.
   // Identical in training and deployment mode — airflow must not vary by mode.
@@ -300,6 +465,15 @@ void handleStatus() {
   body += "\"postroll_ms\":" + String(POSTROLL_MS) + ",";
   body += "\"fan_on\":" + String(relays.fanOn() ? "true" : "false") + ",";
   body += "\"blower_on\":" + String(relays.blowerOn() ? "true" : "false") + ",";
+  // ── Indicator additions (existing keys above are untouched) ──
+  body += "\"indicator_state\":\"" + String(indicator.stateName()) + "\",";
+  body += "\"indicator_enabled\":" + String(tokenConfigured() ? "true" : "false") + ",";
+  body += "\"audio_ready\":" + String(indicator.audioReady() ? "true" : "false") + ",";
+  body += "\"run_id\":" + String(indicator.runId()) + ",";
+  body += "\"trigger_run_id\":" + String(indicator.triggerRunId()) + ",";
+  body += "\"indicator_timeout_ms\":" + String(ANALYZE_TIMEOUT_MS) + ",";
+  body += "\"indicator_hold_ms\":" + String(RESULT_HOLD_MS) + ",";
+  body += "\"last_clip\":" + String((int)lastClipQueued) + ",";
   body += "\"uptime_s\":" + String(millis() / 1000);
   body += "}";
 
@@ -350,6 +524,89 @@ void handleRelayTest() {
     server.send(409, "application/json",
       "{\"status\":\"busy\",\"message\":\"Sequence busy\",\"busy\":true}");
   }
+}
+
+// POST /indicator   { "state": "...", "run_id": N, "volume": 0..30 }
+// Display only. Authenticated by the shared token. This is the ONLY route that can
+// turn a verdict LED on, and it cannot do so without a matching run id while the
+// device is ANALYZING.
+void handleIndicator() {
+  // No token compiled in -> refuse, and the indicators stay OFF. Fail closed.
+  if (!tokenConfigured()) {
+    server.send(503, "application/json",
+      "{\"error\":\"indicator token not configured on device\",\"indicator_enabled\":false}");
+    return;
+  }
+  if (!server.hasHeader("X-Device-Token") || !tokenMatches(server.header("X-Device-Token"))) {
+    server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    Serial.println("  ⚠ /indicator rejected — bad or missing token");
+    return;
+  }
+
+  StaticJsonDocument<256> doc;
+  DeserializationError err = deserializeJson(doc, server.arg("plain"));
+  if (err || !doc.containsKey("state") || !doc["state"].is<const char*>()) {
+    server.send(400, "application/json", "{\"error\":\"missing or malformed 'state'\"}");
+    return;
+  }
+  const char* state = doc["state"];
+
+  // Optional volume for the bench.
+  if (doc.containsKey("volume")) {
+    int v = doc["volume"].as<int>();
+    if (v < 0) v = 0;
+    if (v > DFPLAYER_VOLUME) v = DFPLAYER_VOLUME;
+    uint8_t f[DFPLAYER_FRAME_LEN];
+    if (dfplayer_frame_volume(f, (uint8_t)v) == DFPLAYER_FRAME_LEN) dfSend(f);
+  }
+
+  bool hasRunId = doc.containsKey("run_id") && doc["run_id"].is<int64_t>();
+  long runId = hasRunId ? (long)doc["run_id"].as<int64_t>() : 0;
+
+  IndicatorState want;
+  if (!ind_state_parse(state, &want)) {
+    // Unknown state name: keep the current state and the LEDs exactly as they are.
+    server.send(400, "application/json",
+      "{\"error\":\"unknown state\",\"indicator_state\":\"" + String(indicator.stateName()) + "\"}");
+    Serial.println("  ⚠ /indicator rejected — unknown state name");
+    return;
+  }
+
+  uint32_t now = millis();
+  bool ok = false;
+  if (ind_is_verdict(want)) {
+    // The only path to GREEN/WARN/FAIL: must match the CURRENT run while ANALYZING.
+    ok = indicator.submitVerdict(state, hasRunId, runId, now);
+    if (!ok) {
+      server.send(409, "application/json",
+        "{\"error\":\"verdict refused\",\"reason\":\"stale_or_unmatched_run\","
+        "\"indicator_state\":\"" + String(indicator.stateName()) + "\","
+        "\"run_id\":" + String(indicator.runId()) + "}");
+      Serial.println("  ⚠ Verdict refused — run id " + String(runId) + " while state " +
+                     String(indicator.stateName()));
+      return;
+    }
+  } else {
+    // The bench test path may drive any non-verdict state, but only while idle.
+    if (relays.busy() && (want == IND_SAMPLING || want == IND_ANALYZING)) {
+      server.send(409, "application/json",
+        "{\"error\":\"sequence running\",\"sequence_state\":\"" +
+        String(RelaySequence::stateName(relays.state())) + "\"}");
+      return;
+    }
+    ok = indicator.applyProgress(state, now);
+    if (!ok) {
+      server.send(409, "application/json",
+        "{\"error\":\"state refused\",\"indicator_state\":\"" +
+        String(indicator.stateName()) + "\",\"mode\":\"" + String(modeName()) + "\"}");
+      return;
+    }
+  }
+
+  server.send(200, "application/json",
+    "{\"status\":\"ok\",\"indicator_state\":\"" + String(indicator.stateName()) + "\","
+    "\"run_id\":" + String(indicator.runId()) + ",\"audio_ready\":" +
+    String(audioReadyFlag ? "true" : "false") + "}");
 }
 
 // 404 fallback
@@ -465,6 +722,23 @@ void setup() {
 
   ledOff();
 
+  // ── Indicators: outputs driven to OFF before anything else can run ───────────
+  // Boot state is OFF and stays OFF until an authenticated command or a run moves it.
+  // Nothing plays until the DFPlayer initialises successfully.
+  ledcAttach(IND_LED_R, IND_LED_PWM_HZ, IND_LED_BITS);
+  ledcAttach(IND_LED_G, IND_LED_PWM_HZ, IND_LED_BITS);
+  ledcAttach(IND_LED_B, IND_LED_PWM_HZ, IND_LED_BITS);
+  indicatorLed(0, 0, 0);
+  IndConfig indCfg = makeIndicatorConfig();
+  indicator.begin(indicatorLed, indicatorClip, indicatorLog, &indCfg);
+  indicator.setTrainingMode(TRAINING_MODE);   // training => LEDs OFF, no clips
+
+  // DFPlayer: UART comes up, but audio only reports ready after init succeeds.
+  // A missing module, wrong baud or absent SD card must never block boot.
+  dfSerial.begin(DFPLAYER_BAUD, SERIAL_8N1, DFPLAYER_RX_PIN, DFPLAYER_TX_PIN);
+  if (DFPLAYER_BUSY_PIN >= 0) pinMode(DFPLAYER_BUSY_PIN, INPUT);
+  audioRetryAt = 0;
+
   // ADC settings for ESP32
   // 12-bit resolution (0-4095), 3.3V reference
   analogReadResolution(12);
@@ -491,6 +765,7 @@ void setup() {
   server.on("/status",  HTTP_GET,  handleStatus);
   server.on("/relay_test", HTTP_GET, handleRelayTest);
   server.on("/mode",    HTTP_GET,  handleMode);
+  server.on("/indicator", HTTP_POST, handleIndicator);
   server.onNotFound(handleNotFound);
   server.begin();
 
@@ -523,11 +798,34 @@ void loop() {
   // Advance the relay sequence (non-blocking). Never delays the web server.
   relays.tick(millis());
 
+  // Indicators and audio are driven entirely from millis(); no delay(), no blocking.
+  // Ticking BEFORE the buffering block means a verdict arriving in the same loop
+  // iteration can already drive the LED, and the timeout can fire on time.
+  indicator.setTrainingMode(TRAINING_MODE);
+  serviceAudio(millis());
+  indicator.tick(millis());
+
   // WiFi watchdog — reconnect if dropped
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("⚠ WiFi disconnected — reconnecting...");
     ledBlink(2, 500);
     connectWiFi();
+  }
+
+  // ── Stuck guard ──────────────────────────────────────────────
+  // If the relay sequence has returned to idle while the buffer is still marked
+  // active (e.g. the failsafe fired because the window never completed), clear the
+  // flag. Otherwise isBuffering stays true forever and EVERY /trigger is refused
+  // with 409 — the device would be dead for collection with no visible cause.
+  if (isBuffering && relays.state() == RelaySequence::IDLE) {
+    Serial.println("⚠ Buffer flag stranded — relay sequence is idle; clearing so triggers work again");
+    isBuffering = false;
+    samplingBegun = false;
+    ledOff();
+    buf1.clear();
+    buf2.clear();
+    buf3.clear();
+    targetRowId = -1;
   }
 
   // ── Buffering loop ──────────────────────────────────────────
@@ -566,6 +864,9 @@ void loop() {
       // window elapsed — hand over to POSTROLL (relays stay on)
       relays.finishSampling(millis());
       samplingBegun = false;
+      // Display only: the window is closed, the device now waits on the backend.
+      // The analyze deadline starts here, and tick() turns a missing verdict YELLOW.
+      indicator.onSamplingEnd(millis());
     } else {
       // Window complete — stop buffering
       isBuffering = false;

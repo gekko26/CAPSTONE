@@ -175,9 +175,18 @@ def test_timing_never_errors_when_the_esp32_is_unreachable(sensor_client, monkey
 
 # ── trigger forwarding ───────────────────────────────────────────────────────
 
+def _in_deployment_mode(monkeypatch, sensor):
+    """The trigger endpoint now asks the device its mode first and only forwards a
+    gate trigger when the answer is 'deployment'. Tests about the forward itself
+    must therefore place the device in deployment mode."""
+    monkeypatch.setattr(sensor.requests, "get", lambda *a, **k: _Resp(
+        {"mode": "deployment"}, status=200))
+
+
 def test_trigger_409_is_busy_not_success(sensor_client, monkeypatch):
     """The known bug: a 409 used to be reported as triggered=True."""
     sensor, client = sensor_client
+    _in_deployment_mode(monkeypatch, sensor)
     monkeypatch.setattr(sensor.requests, "post", lambda *a, **k: _Resp(
         {"status": "busy", "busy": True, "busy_row_id": 7, "incoming_row_id": 9,
          "sequence_state": "sampling"}, status=409))
@@ -195,6 +204,7 @@ def test_trigger_409_is_busy_not_success(sensor_client, monkeypatch):
 
 def test_trigger_200_is_still_success(sensor_client, monkeypatch):
     sensor, client = sensor_client
+    _in_deployment_mode(monkeypatch, sensor)
     monkeypatch.setattr(sensor.requests, "post", lambda *a, **k: _Resp({"ok": True}, 200))
     d = client.post("/sensor/trigger").json()
     assert d["triggered"] is True
@@ -203,6 +213,7 @@ def test_trigger_200_is_still_success(sensor_client, monkeypatch):
 
 def test_trigger_connection_error_keeps_existing_offline_behaviour(sensor_client, monkeypatch):
     sensor, client = sensor_client
+    _in_deployment_mode(monkeypatch, sensor)
 
     def boom(*a, **k):
         raise sensor.requests.exceptions.ConnectionError()

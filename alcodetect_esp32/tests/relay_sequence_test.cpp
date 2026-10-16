@@ -96,7 +96,9 @@ static void test_relaysStayOnThroughSamplingAndPostRoll() {
     CHECK(rs.relaysOn());
     rs.tick(7999);                       // still sampling
     CHECK(rs.relaysOn());
-    rs.tick(8000);                       // -> POSTROLL (5s window over)
+    // the OWNER ends the window, not tick()
+    CHECK(rs.state() == RelaySequence::SAMPLING);
+    rs.finishSampling(8000);             // -> POSTROLL (5s window over)
     CHECK(rs.state() == RelaySequence::POSTROLL);
     CHECK(rs.relaysOn());                // still ON through post-roll
     rs.tick(9999);
@@ -128,7 +130,7 @@ static void test_startRefusedWhileBusyInEveryState() {
 
     rs.start(0);              CHECK(rs.start(1) == false);   // PREROLL
     rs.tick(3000);            CHECK(rs.start(3001) == false); // SAMPLING
-    rs.tick(8000);            CHECK(rs.start(8001) == false); // POSTROLL
+    rs.finishSampling(8000);  CHECK(rs.start(8001) == false); // POSTROLL
     rs.tick(10000);           CHECK(rs.state() == RelaySequence::IDLE);
     CHECK(rs.start(10001) == true);                          // idle accepts
 
@@ -219,6 +221,8 @@ static void test_millisRollover() {
     CHECK(rs.relaysOn());                    // relays survived the wrap
     t = t + 5000;
     rs.tick(t);
+    CHECK(rs.state() == RelaySequence::SAMPLING);   // tick must not leave SAMPLING
+    rs.finishSampling(t);
     CHECK(rs.state() == RelaySequence::POSTROLL);
     t = t + 2000;
     rs.tick(t);
@@ -297,10 +301,54 @@ static void test_property_everyPathToIdleLeavesRelaysOff() {
     }
 }
 
+// ── regression: tick() must never steal the owner's window-end decision ──────
+static void test_tick_never_leaves_sampling_on_its_own() {
+    GROUP("tick() alone never leaves SAMPLING (would strand the owner's buffer flag)");
+    RelaySequence rs(recordWrite, cfgActiveLow());
+    uint32_t t = 0;
+    rs.start(t);
+    rs.tick(3000);
+    CHECK(rs.state() == RelaySequence::SAMPLING);
+
+    // Hammer tick() well past the 5 s window but inside max_on_ms: it must STILL be
+    // SAMPLING with the relays on, because only the owner may end the window.
+    for (uint32_t k = 3001; k <= 11000; k += 997) {
+        rs.tick(k);
+        CHECK(rs.state() == RelaySequence::SAMPLING);
+        CHECK(rs.mayBeginSampling(k));
+        CHECK(rs.relaysOn());
+    }
+    // only the owner may move it on
+    rs.finishSampling(11001);
+    CHECK(rs.state() == RelaySequence::POSTROLL);
+    CHECK(rs.relaysOn());
+    rs.tick(13001);
+    CHECK(rs.state() == RelaySequence::IDLE);
+    CHECK(!rs.relaysOn());
+}
+
+static void test_failsafe_covers_an_owner_that_never_finishes() {
+    GROUP("failsafe still catches an owner that never calls finish_sampling()");
+    resetPins();
+    RelaySequence rs(recordWrite, cfgActiveLow());
+    rs.start(0);
+    rs.tick(3000);
+    // owner forgets to end the window -> relays must not stay on past max_on_ms
+    for (uint32_t k = 3001; k <= 11500; k += 1000) rs.tick(k);
+    CHECK(rs.relaysOn());
+    rs.tick(12000);
+    CHECK(rs.state() == RelaySequence::IDLE);
+    CHECK(!rs.relaysOn());
+    CHECK(rs.failsafeTripped());
+    CHECK(g_pins.last[0] == 1 && g_pins.last[1] == 1);
+}
+
 int main() {
     test_pinsOffAtConstruction();
     test_startTurnsBothOnImmediately();
     test_samplingBlockedUntilPreRollElapses();
+    test_tick_never_leaves_sampling_on_its_own();
+    test_failsafe_covers_an_owner_that_never_finishes();
     test_relaysStayOnThroughSamplingAndPostRoll();
     test_finishSamplingExplicit();
     test_startRefusedWhileBusyInEveryState();

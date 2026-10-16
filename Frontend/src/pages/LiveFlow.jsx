@@ -1,6 +1,7 @@
 // LiveFlow.jsx — ALCOGATE terminal GATE 01 — high density, real data
 import { useState, useEffect, useRef, useCallback } from "react";
 import { API_BASE } from "../api";
+import { useDeviceMode } from "../config/deviceMode";
 
 const FRAME_MS = 60;  // 15 FPS max for stream1 — max fps without affecting other functionalities
 const ANALYZE_MS = 400; // decoupled analysis
@@ -42,9 +43,16 @@ export default function LiveFlow() {
   const [overlayOn, setOverlayOn] = useState(false);
   const overlayRef = useRef(false);
   useEffect(() => { overlayRef.current = overlayOn; }, [overlayOn]);
-  const [gateEnabled, setGateEnabled] = useState(false); // default OFF — protects training_data from LiveFlow triggers
-  const gateEnabledRef = useRef(false);
-  useEffect(() => { gateEnabledRef.current = gateEnabled; }, [gateEnabled]);
+    const [gateEnabled, setGateEnabled] = useState(false); // default OFF — protects training_data from LiveFlow triggers
+    // The device owns the decision: while it is collecting training data a gate
+    // trigger is refused by the firmware, so do not even offer to send one.
+    const { mode: deviceMode } = useDeviceMode();
+    const gateSuppressed = deviceMode === "training";
+    // Derived, not synchronised: the gate can only be ACTIVE when the user turned it
+    // on AND the device is not collecting training data. No effect, no ref-in-render.
+    const gateActive = gateEnabled && !gateSuppressed;
+    const gateActiveRef = useRef(gateActive);
+    useEffect(() => { gateActiveRef.current = gateActive; }, [gateActive]);
   // MJPEG URL — single persistent connection, no per-frame fetch/GC (B)
   const mjpegUrl = `${API_BASE}/camera/stream/mjpeg?overlay=${overlayOn ? "1" : "0"}&fps=15`;
   const [mq3, setMq3] = useState([null, null, null]);
@@ -105,14 +113,16 @@ export default function LiveFlow() {
         const d = await ar.json();
         setAnalysis(d);
         // gate OFF default — preview stays smooth but sensor trigger blocked to protect training_data
-        if (d.is_close && gateEnabledRef.current) {
+        if (d.is_close && gateActiveRef.current) {
           if (!triggeredRef.current) { triggeredRef.current = true; fetch(`${API_BASE}/sensor/trigger`, { method: "POST" }).catch(() => {}); }
         } else if (!d.is_close) {
           triggeredRef.current = false;
-        } else if (!gateEnabledRef.current) {
-          // keep analysis live but never fire sensor when gate OFF
-          if (triggeredRef.current) triggeredRef.current = false;
-        }
+          } else if (!gateActiveRef.current) {
+            // keep analysis live but never fire the sensor when the gate is off or
+            // suppressed by training mode
+            if (triggeredRef.current) triggeredRef.current = false;
+          }
+
       }
     } catch {}
     analyzeTimeoutRef.current = setTimeout(runAnalyzeLoop, ANALYZE_MS);
@@ -231,15 +241,24 @@ export default function LiveFlow() {
         <span className="w-1 h-1 rounded-full bg-emerald-500" />
         <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>Main Entrance</span>
         <button
-          onClick={() => setGateEnabled(v => !v)}
-          title={gateEnabled ? "Gate ON — is_close will POST /sensor/trigger → deployment_logs" : "Gate OFF — preview only, training_data safe"}
-          className="ml-auto text-[10px] px-2 py-0.5 rounded-[4px] border font-medium transition-colors"
-          style={{ background: gateEnabled ? "var(--over-bg)" : "var(--bg-card)", borderColor: gateEnabled ? "var(--over)" : "var(--border)", color: gateEnabled ? "var(--over)" : "var(--text-muted)" }}
+          onClick={() => !gateSuppressed && setGateEnabled(v => !v)}
+          disabled={gateSuppressed}
+          title={gateSuppressed ? "Device is in training mode — gate suppressed" : gateActive ? "Gate ON — is_close will POST /sensor/trigger → deployment_logs" : "Gate OFF — preview only, training_data safe"}
+          className="ml-auto text-[10px] px-2 py-0.5 rounded-[4px] border font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          style={{ background: gateActive ? "var(--over-bg)" : "var(--bg-card)", borderColor: gateActive ? "var(--over)" : "var(--border)", color: gateActive ? "var(--over)" : "var(--text-muted)" }}
         >
-          {gateEnabled ? "Gate ON" : "Gate OFF"}
+          {gateSuppressed ? "GATE SUPPRESSED" : gateActive ? "Gate ON" : "Gate OFF"}
         </button>
         <span className="text-[10px] font-mono" style={{ color: "var(--text-muted)" }}>{camError ? "OFFLINE" : "LIVE"} · 15 FPS</span>
       </div>
+
+      {gateSuppressed && (
+        <div className="px-2 py-1.5 rounded-[4px] text-[10px] font-medium"
+             style={{ background: "var(--over-bg)", color: "var(--over)", border: "1px solid var(--over)" }}>
+          Training mode active — gate suppressed. The device is collecting training data, so
+          proximity will not sample a deployment window until you switch it back to deployment.
+        </div>
+      )}
 
       <div className="grid grid-cols-12 gap-2">
         {/* LEFT: camera */}

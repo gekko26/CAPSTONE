@@ -25,10 +25,56 @@ ESP32_URL = os.getenv("ESP32_URL", "http://192.168.69.2")  # aligned with Backen
 def trigger_esp32(db: Session = Depends(get_db)):
     """
     Frontend calls this → backend forwards to ESP32.
-    Creates a pending Reading so /predict/full can bind to this trial with staleness check.
-    ESP32 starts buffering MQ3 window on receive.
-    Frontend never talks to ESP32 directly.
+
+    Creates a pending Reading so /predict/full can bind to this trial with a staleness
+    check. The Frontend never talks to the ESP32 directly.
+
+    Order matters here and is deliberate:
+
+      1. ask the device which mode it is in
+      2. refuse a gate trigger while the device is collecting training data
+      3. only THEN create the pending Reading
+      4. forward to the ESP32, and roll the row back if it will not accept it
+
+    Nothing touches the database until the device has confirmed it is in deployment
+    mode, so a blocked or unreachable device can never leave an orphan pending row.
     """
+    # 1. What mode is the device in?
+    mode = None
+    try:
+        sr = requests.get(f"{ESP32_URL}/status", timeout=2)
+        if sr.status_code == 200:
+            mode = sr.json().get("mode")
+    except Exception:
+        mode = None
+
+    # 2. Never mix a gate trigger into a training session.
+    if mode == "training":
+        return {
+            "triggered":    False,
+            "busy":         False,
+            "blocked":      True,
+            "reason":       "device_in_training_mode",
+            "mode":         "training",
+            "esp32_status": None,
+            "message":      "Device is in training mode — gate trigger refused so it "
+                            "cannot pollute the training data",
+            "reading_id":   None,
+        }
+    if mode is None:
+        # 3a. We cannot confirm the device is in deployment mode, so do not write.
+        return {
+            "triggered":    False,
+            "busy":         False,
+            "blocked":      True,
+            "reason":       "device_mode_unknown",
+            "esp32_status": None,
+            "message":      "ESP32 unreachable — cannot confirm device mode, "
+                            "so no reading was created",
+            "reading_id":   None,
+        }
+
+    # 3b. First database write of the whole endpoint.
     pending = Reading(
         temperature=None,
         humidity=None,
@@ -39,49 +85,66 @@ def trigger_esp32(db: Session = Depends(get_db)):
     db.commit()
     db.refresh(pending)
     reading_id = pending.id
+
+    def _drop_pending(reason, status):
+        """Roll the row back so a failed trigger leaves no orphan pending reading."""
+        db.delete(pending)
+        db.commit()
+        return {
+            "triggered":    False,
+            "busy":         status == 409,
+            "blocked":      False,
+            "reason":       reason,
+            "esp32_status": status,
+            "message":      reason,
+            "reading_id":   None,
+        }
+
+    # 4. Forward to the device.
     try:
         r = requests.post(f"{ESP32_URL}/trigger", timeout=3, json={"reading_id": reading_id})
-        if r.status_code == 409:
-            # The relay sequence is still running (pre-roll / sampling / post-roll).
-            # This used to be reported as a success, which left the frontend waiting
-            # for a window that would never arrive.
-            body = {}
-            try:
-                body = r.json()
-            except ValueError:
-                body = {}
-            return {
-                "triggered":    False,
-                "busy":         True,
-                "esp32_status": r.status_code,
-                "message":      body.get("message", "ESP32 busy — relay sequence still running"),
-                "reading_id":   reading_id,
-                "busy_row_id":      body.get("busy_row_id"),
-                "incoming_row_id":  body.get("incoming_row_id"),
-                "sequence_state":   body.get("sequence_state"),
-                "busy_until_ms":    SENSOR_BUSY_UNTIL_MS,
-            }
-        return {
-            "triggered":    True,
-            "esp32_status": r.status_code,
-            "message":      "ESP32 triggered — relay sequence started",
-            "reading_id":   reading_id,
-            "busy_until_ms": SENSOR_BUSY_UNTIL_MS,
-        }
     except requests.exceptions.ConnectionError:
-        return {
-            "triggered":    False,
-            "esp32_status": None,
-            "message":      "ESP32 unreachable — check ESP32_URL in .env",
-            "reading_id":   reading_id,
-        }
+        return _drop_pending("ESP32 unreachable — check ESP32_URL in .env", None)
     except requests.exceptions.Timeout:
-        return {
-            "triggered":    False,
-            "esp32_status": None,
-            "message":      "ESP32 timeout — device may be busy",
-            "reading_id":   reading_id,
-        }
+        return _drop_pending("ESP32 timeout — device did not answer", None)
+
+    if r.status_code == 409:
+        # Either the relay sequence is still running, or it is refusing a gate
+        # trigger because it is in training mode. Neither should leave a row.
+        body = {}
+        try:
+            body = r.json()
+        except ValueError:
+            body = {}
+        if body.get("reason") == "device_in_training_mode":
+            return _drop_pending(
+                "Device is in training mode — gate trigger refused so it cannot "
+                "pollute the training data", 409)
+        # Busy: the device is mid-sequence and will never post this window, so the
+        # row has to go too — otherwise every busy click strands a pending reading
+        # that /predict/full could later bind to.
+        result = _drop_pending(body.get("message",
+                                        "ESP32 busy — relay sequence still running"),
+                               409)
+        result["busy"] = True
+        result["busy_row_id"]      = body.get("busy_row_id")
+        result["incoming_row_id"]  = body.get("incoming_row_id")
+        result["sequence_state"]   = body.get("sequence_state")
+        result["busy_until_ms"]    = SENSOR_BUSY_UNTIL_MS
+        return result
+    if r.status_code != 200:
+        return _drop_pending(f"ESP32 refused the trigger ({r.status_code})", r.status_code)
+
+    return {
+        "triggered":    True,
+        "busy":         False,
+        "blocked":      False,
+        "esp32_status": r.status_code,
+        "message":      "ESP32 triggered — relay sequence started",
+        "mode":         mode,
+        "reading_id":   reading_id,
+        "busy_until_ms": SENSOR_BUSY_UNTIL_MS,
+    }
 
 
 @router.get("/sensor/timing")
@@ -181,6 +244,92 @@ def set_sensor_mode(payload: dict):
     except ValueError:
         confirmed = mode
     return {"mode": confirmed, "message": "Mode updated", "persisted": True}
+
+
+# ── Deployment indicator bench (PHASE 1) ───────────────────────────────────
+# Protected endpoint used by Settings -> Sensors -> Indicators. It never touches the
+# database and never influences a decision.
+#
+#   503  ESP32_DEVICE_TOKEN is not set in the backend environment (fail closed)
+#   401  the device rejected the token (wrong build, or no token compiled in)
+#   409  a relay sequence is running — refused so the bench cannot corrupt a run
+#   502  the ESP32 could not be reached at all
+#
+# The token is read from the environment and is never logged or echoed back.
+@router.post("/sensor/indicator/test")
+def indicator_bench(payload: dict):
+    from config.indicators import (
+        ESP32_DEVICE_TOKEN,
+        INDICATOR_TEST_VOLUME,
+        INDICATOR_TEST_STATES,
+        token_configured,
+    )
+
+    if not token_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="ESP32_DEVICE_TOKEN is not set on the backend — the bench is "
+                   "disabled. Export it in the Backend environment (see "
+                   "docs/INDICATORS_WIRING.md).",
+        )
+
+    state = payload.get("state")
+    # Validate the name the UI actually sends FIRST, then translate it for the wire.
+    # ("off" is the UI's word; the firmware's state name is "idle".)
+    if state not in INDICATOR_TEST_STATES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown bench state. Allowed: {', '.join(INDICATOR_TEST_STATES)}",
+        )
+    if state == "off":
+        state = "idle"
+
+    volume = payload.get("volume", INDICATOR_TEST_VOLUME)
+    try:
+        volume = max(0, min(30, int(volume)))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="volume must be an integer 0..30")
+
+    # Refuse while a run is in flight: the bench must not repaint a live run.
+    try:
+        st = requests.get(f"{ESP32_URL}/status", timeout=2)
+        if st.status_code == 200:
+            seq = st.json().get("sequence_state")
+            if seq and seq != "idle":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Relay sequence is '{seq}' — the indicator bench is "
+                           f"refused while a run is in progress",
+                )
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"ESP32 unreachable — {type(e).__name__}")
+
+    body = {"state": state, "volume": volume}
+    try:
+        r = requests.post(
+            f"{ESP32_URL}/indicator",
+            json=body,
+            headers={"X-Device-Token": ESP32_DEVICE_TOKEN},
+            timeout=2,
+        )
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"ESP32 unreachable — {type(e).__name__}")
+
+    if r.status_code == 401:
+        raise HTTPException(
+            status_code=401,
+            detail="The device rejected the token. Check that secrets.h on the ESP32 "
+                   "holds the same value as ESP32_DEVICE_TOKEN, and reflash.",
+        )
+    if r.status_code == 409:
+        raise HTTPException(status_code=409, detail="Device refused the state — it is busy.")
+    if r.status_code != 200:
+        raise HTTPException(status_code=502,
+                            detail=f"ESP32 refused the indicator command ({r.status_code})")
+    try:
+        return {"status": "ok", "state": state, "device": r.json()}
+    except ValueError:
+        return {"status": "ok", "state": state}
 
 
 # ── Deployment sensor reading (ESP32 posts here in deployment) ─
