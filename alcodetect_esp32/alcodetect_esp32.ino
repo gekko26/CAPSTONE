@@ -124,9 +124,14 @@ const char* DEPLOYMENT_ENDPOINT = "/sensor";
 // ── Deployment indicators (PHASE 1) — DISPLAY ONLY ────────────────────────────
 // Two RGB LEDs share the SAME three PWM channels (R, G, B); each LED gets its own
 // series resistor, so one write drives both. Nothing here touches a lock or a relay.
-#define IND_LED_R     16    // free: not a strapping pin, not flash, not input-only
-#define IND_LED_G     17
-#define IND_LED_B     18
+//
+// GPIO 16 and 17 are deliberately NOT used: on a WROVER / PSRAM module those two
+// pins are consumed by the PSRAM and driving an LED there misbehaves. Gg's board does
+// not expose them. GPIO 22/23 are free on both WROOM-32 and WROVER and are not
+// strapping, flash or input-only pins.
+#define IND_LED_R     22    // free: not a strapping pin, not flash, not input-only
+#define IND_LED_G     23    // free: not a strapping pin, not flash, not input-only
+#define IND_LED_B     18    // free: not a strapping pin, not flash, not input-only
 #define IND_LED_PWM_HZ   5000
 #define IND_LED_BITS      8
 
@@ -357,6 +362,49 @@ void connectWiFi() {
   } else {
     Serial.println("\n✗ WiFi failed — restarting in 5s");
     delay(5000);
+    ESP.restart();
+  }
+}
+
+// ── Non-blocking WiFi watchdog ─────────────────────────────────────────────
+// WHY THIS EXISTS: the watchdog used to call connectWiFi() straight from loop().
+// connectWiFi() blocks for up to 30 x delay(500) = 15 s, preceded by
+// ledBlink(2, 500) for another 2 s, and then calls ESP.restart() if the link is
+// still down. The entire sampling run is only 3 s pre-roll + 5 s window = 8 s, so
+// ONE WiFi blip blocked the loop for ~17 s and rebooted the board mid-run. The
+// window was never posted and its training row was left with NULL mq3 and NULL
+// temperature. A network problem must never destroy a measurement.
+#define WIFI_RETRY_MS        5000UL   // how often to attempt a non-blocking reconnect
+#define WIFI_RESTART_MS   120000UL   // only after this long offline, and only when idle
+
+static uint32_t _wifiRetryAt    = 0;
+static uint32_t _wifiDownSince  = 0;
+static bool    _wifiWarned     = false;
+
+// Non-blocking. Never restarts during a run: a lost link is recoverable, a lost
+// measurement is not. A restart is allowed only after a long outage while idle,
+// so a device parked next to a dead AP eventually recovers on its own.
+void serviceWiFi(uint32_t now) {
+  if (WiFi.status() == WL_CONNECTED) {
+    if (_wifiWarned) Serial.println("✓ WiFi back");
+    _wifiDownSince = 0;
+    _wifiRetryAt   = 0;
+    _wifiWarned    = false;
+    return;
+  }
+  if (_wifiDownSince == 0) {
+    _wifiDownSince = now;
+    Serial.println("⚠ WiFi dropped — retrying non-blocking, sampling continues");
+    _wifiWarned = true;
+  }
+  if ((int32_t)(now - _wifiRetryAt) >= 0) {
+    _wifiRetryAt = now + WIFI_RETRY_MS;
+    WiFi.reconnect();
+  }
+  bool runInFlight = isBuffering || relays.busy();
+  if (!runInFlight && (uint32_t)(now - _wifiDownSince) > WIFI_RESTART_MS) {
+    Serial.println("✗ WiFi down for too long while idle — restarting");
+    delay(200);
     ESP.restart();
   }
 }
@@ -805,12 +853,9 @@ void loop() {
   serviceAudio(millis());
   indicator.tick(millis());
 
-  // WiFi watchdog — reconnect if dropped
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("⚠ WiFi disconnected — reconnecting...");
-    ledBlink(2, 500);
-    connectWiFi();
-  }
+  // WiFi watchdog — non-blocking. It must never stall the loop or restart the board
+  // mid-run; see serviceWiFi() for why that used to destroy every measurement.
+  serviceWiFi(millis());
 
   // ── Stuck guard ──────────────────────────────────────────────
   // If the relay sequence has returned to idle while the buffer is still marked
@@ -860,17 +905,23 @@ void loop() {
         }
 
         delay(SAMPLE_INTERVAL_MS);
+      } else {
+        // Window elapsed — hand over to POSTROLL (relays stay on).
+        // This MUST live in the else branch, not inside the sampling branch: calling
+        // finishSampling() while still sampling pushed the state machine straight to
+        // POSTROLL on the very first sample, so mayBeginSampling() went false, the
+        // remaining ~4.5 s of the window were never sampled, and the stuck guard
+        // then cleared isBuffering two seconds later. Every run produced a single
+        // MQ1/MQ2/MQ3 line and no window was ever posted.
+        relays.finishSampling(millis());
+        samplingBegun = false;
+        // Display only: the window is closed, the device now waits on the backend.
+        // The analyze deadline starts here, and tick() turns a missing verdict YELLOW.
+        indicator.onSamplingEnd(millis());
 
-      // window elapsed — hand over to POSTROLL (relays stay on)
-      relays.finishSampling(millis());
-      samplingBegun = false;
-      // Display only: the window is closed, the device now waits on the backend.
-      // The analyze deadline starts here, and tick() turns a missing verdict YELLOW.
-      indicator.onSamplingEnd(millis());
-    } else {
-      // Window complete — stop buffering
-      isBuffering = false;
-      ledOff();
+        // Window complete — stop buffering
+        isBuffering = false;
+        ledOff();
 
       Serial.println("■ Buffer complete — " + String(buf1.size()) + " samples collected");
 

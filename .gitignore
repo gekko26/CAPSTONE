@@ -42,6 +42,14 @@ backup.sql.prev-*
 
 # Firmware secrets: the real shared-token / Wi-Fi header. The .example is committed.
 alcodetect_esp32/secrets.h
+Backend/secrets.h
+**/secrets.h
 
 # Generated voice clips and build output — never commit MP3s.
 build/
+
+# Quarantined orphan images: real photos kept for recovery, never committed.
+Backend/data/_quarantine/
+
+# Runtime upload audit log (JSONL, contains class + subject_id + BAC, no names).
+Backend/data/upload_log.jsonl

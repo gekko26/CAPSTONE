@@ -27,26 +27,29 @@ Chosen to avoid every trap pin. Verified against `alcodetect_esp32.ino`.
 
 | Pin | Use | Source | Conflict check |
 |---|---|---|---|
-| 34 | MQ3 sensor 1 (nose) | `.ino:82` | existing, input-only |
-| 35 | MQ3 sensor 2 (jaw) | `.ino:83` | existing, input-only |
-| 32 | MQ3 sensor 3 (clavicle) | `.ino:84` | existing |
-| 4 | DHT11 data | `.ino:85` | existing |
-| 2 | Built-in status LED | `.ino:87` | existing |
-| 27 | Suction-fan relay | `.ino:91` | existing |
-| 25 | Blower relay | `.ino:92` | existing |
-| 26 | Solenoid, reserved | `.ino:37-39` | reserved, do not use |
-| **16** | **Indicator R (both LEDs)** | **new** | free |
-| **17** | **Indicator G (both LEDs)** | **new** | free |
+| 34 | MQ3 sensor 1 (nose) | `.ino:117` | existing, input-only |
+| 35 | MQ3 sensor 2 (jaw) | `.ino:118` | existing, input-only |
+| 32 | MQ3 sensor 3 (clavicle) | `.ino:119` | existing |
+| 4 | DHT11 data | `.ino:120` | existing |
+| 2 | Built-in status LED | `.ino:122` | existing |
+| 27 | Suction-fan relay | `.ino:166` | existing |
+| 25 | Blower relay | `.ino:167` | existing |
+| 26 | Solenoid, reserved | header comment only | reserved, do not use |
+| **22** | **Indicator R (both LEDs)** | **new** | free |
+| **23** | **Indicator G (both LEDs)** | **new** | free |
 | **18** | **Indicator B (both LEDs)** | **new** | free |
 | **19** | **ESP32 TX → DFPlayer RX** | **new** | free |
 | **21** | **ESP32 RX ← DFPlayer TX** | **new** | free |
 
-Why 16/17/18/19/21 are safe:
+Why 18/22/23/19/21 are safe:
 
 * **Not strapping pins.** 0, 2, 12 and 15 must be free at boot; none are used.
 * **Not flash pins.** 6–11 are the SPI flash; none are used.
 * **Not input-only.** 34–39 cannot drive an LED; none are used.
 * **Not already taken.** The existing map above is complete for this sketch.
+* **16/17 deliberately avoided.** On a WROVER / PSRAM module those two pins are consumed
+  by the PSRAM, and Gg's board does not expose them at all. Do not move an indicator
+  channel back to 16 or 17.
 
 ⚠️ GPIO 2 is the DevKit's **built-in** LED and is already used as a status light. It
 also happens to be a strapping pin. Do not rewire it.
@@ -58,12 +61,12 @@ also happens to be a strapping pin. Do not rewire it.
 ### Common cathode (default assumption)
 
 ```
-ESP32 GPIO 16 ──[220Ω]──┬── LED1 red   anode
+ESP32 GPIO 22 ──[220Ω]──┬── LED1 red   anode
                         └── LED2 red   anode
                               cathode ── GND
 ```
 
-Same for green (17) and blue (18). One resistor per channel **feeds both LEDs in
+Same for green (23) and blue (18). One resistor per channel **feeds both LEDs in
 parallel** — that is why there are 6 resistors and not 3.
 
 ### Common anode

@@ -7,6 +7,9 @@
 #include "../relay_sequence.h"
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
+#include <string>
 
 static int g_pass = 0, g_fail = 0;
 static const char* g_group = "";
@@ -84,6 +87,128 @@ static void test_samplingBlockedUntilPreRollElapses() {
     rs.tick(3000);
     CHECK(rs.mayBeginSampling(3000));
     CHECK(rs.state() == RelaySequence::SAMPLING);
+}
+
+// ── the exact sequence the sketch now runs ─────────────────────────────────────
+// Regression guard for a real bug: the sketch called finishSampling() from INSIDE
+// its "still sampling" branch, so the very first sample pushed SAMPLING -> POSTROLL,
+// mayBeginSampling() went false, the rest of the 5 s window was never sampled and the
+// stuck guard cleared isBuffering. These tests pin the order the .ino must use.
+static void test_full_run_samples_for_the_whole_window() {
+    GROUP("sampling continues for the whole 5 s window (no early finishSampling)");
+    resetPins();
+    RelaySequence rs(recordWrite, cfgActiveLow());
+    const uint32_t t0 = 1000;
+    rs.start(t0);                       // PREROLL
+    int samples = 0;
+    uint32_t t = t0;
+    // walk the window the way loop() does: tick, then sample only if allowed
+    while (t < t0 + 3000 + 5000 + 500) {
+        rs.tick(t);
+        if (rs.mayBeginSampling(t)) {
+            samples++;
+            CHECK(rs.state() == RelaySequence::SAMPLING);   // stays SAMPLING while sampling
+            if (t >= t0 + 3000 + 5000) break;               // window is over
+        }
+        t += 100;
+    }
+    CHECK(samples >= 45);                 // ~50 expected; a single sample would fail this
+    CHECK(rs.state() == RelaySequence::SAMPLING);
+    // only THEN does the owner close the window
+    rs.finishSampling(t);
+    CHECK(rs.state() == RelaySequence::POSTROLL);
+    CHECK(rs.relaysOn());                 // relays stay on through the post-roll
+}
+
+static void test_state_returns_to_idle_only_after_postroll() {
+    GROUP("run reaches IDLE only after POSTROLL, not during the window");
+    resetPins();
+    RelaySequence rs(recordWrite, cfgActiveLow());
+    rs.start(0);
+    rs.tick(3000);
+    CHECK(rs.mayBeginSampling(3000));
+    // sampling for the full window must never reach IDLE on its own
+    for (uint32_t t = 3000; t <= 8000; t += 100) {
+        rs.tick(t);
+        CHECK(rs.state() != RelaySequence::IDLE);
+    }
+    rs.finishSampling(8000);
+    rs.tick(9000);  CHECK(rs.state() == RelaySequence::POSTROLL);
+    rs.tick(10000); CHECK(rs.state() == RelaySequence::IDLE);
+}
+
+// ── structural guard on the sketch itself ─────────────────────────────────────
+// The two tests above pin RelaySequence's behaviour, but the bug that actually shipped
+// was in the SKETCH: loop() called finishSampling() from inside its "still sampling"
+// branch. RelaySequence is correct either way, so only a check against the real .ino
+// source can catch that. This reads the shipped sketch and asserts the branch layout.
+static std::string readFile(const char* path) {
+    std::ifstream f(path);
+    if (!f) return std::string();
+    return std::string((std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+}
+
+// returns the body between the brace opened at `open` and its matching close
+static std::string braceBody(const std::string& s, size_t open) {
+    int depth = 0;
+    for (size_t i = open; i < s.size(); i++) {
+        if (s[i] == '{') depth++;
+        else if (s[i] == '}') {
+            depth--;
+            if (depth == 0) return s.substr(open + 1, i - open - 1);
+        }
+    }
+    return std::string();
+}
+
+static void test_sketch_closes_the_window_only_after_it_elapsed() {
+    GROUP("sketch: finishSampling() is NOT inside the still-sampling branch");
+    // The backend runner compiles and executes this harness with a different working
+    // directory, and __FILE__ may itself be relative, so try a few candidates and take
+    // the first that actually opens.
+    std::string here(__FILE__);
+    size_t slash = here.find_last_of('/');
+    const char* candidates[] = {
+        "alcodetect_esp32.ino",
+        "alcodetect_esp32/alcodetect_esp32.ino",
+        "../alcodetect_esp32/alcodetect_esp32.ino",
+        "../../alcodetect_esp32/alcodetect_esp32.ino",
+        "../../../alcodetect_esp32/alcodetect_esp32.ino",
+    };
+    std::string src;
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        src = readFile(candidates[i]);
+        if (!src.empty()) break;
+    }
+    if (src.empty() && slash != std::string::npos) {
+        src = readFile((here.substr(0, slash + 1) + "../alcodetect_esp32.ino").c_str());
+    }
+    CHECK(!src.empty());
+    if (src.empty()) return;
+
+    size_t anchor = src.find("if (elapsed < BUFFER_DURATION_MS) {");
+    CHECK(anchor != std::string::npos);
+    if (anchor == std::string::npos) return;
+
+    size_t open = src.find('{', anchor);
+    std::string samplingBranch = braceBody(src, open);
+
+    // THE BUG: ending the window while still inside the sampling branch.
+    CHECK(samplingBranch.find("finishSampling") == std::string::npos);
+
+    // and the window-end work must live in the else branch that follows
+    size_t after = open + samplingBranch.size() + 2;
+    size_t elseAt = src.find("} else {", open);
+    CHECK(elseAt != std::string::npos);
+    if (elseAt != std::string::npos) {
+        size_t eOpen = src.find('{', elseAt);
+        std::string elseBranch = braceBody(src, eOpen);
+        CHECK(elseBranch.find("finishSampling") != std::string::npos);
+        // and it must clear isBuffering there too, or the stuck guard fires
+        CHECK(elseBranch.find("isBuffering = false") != std::string::npos);
+    }
+    (void)after;
 }
 
 static void test_relaysStayOnThroughSamplingAndPostRoll() {
@@ -349,6 +474,9 @@ int main() {
     test_samplingBlockedUntilPreRollElapses();
     test_tick_never_leaves_sampling_on_its_own();
     test_failsafe_covers_an_owner_that_never_finishes();
+    test_full_run_samples_for_the_whole_window();
+    test_state_returns_to_idle_only_after_postroll();
+    test_sketch_closes_the_window_only_after_it_elapsed();
     test_relaysStayOnThroughSamplingAndPostRoll();
     test_finishSamplingExplicit();
     test_startRefusedWhileBusyInEveryState();

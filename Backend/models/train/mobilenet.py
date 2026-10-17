@@ -147,7 +147,16 @@ def _collect_subject_split():
                 continue
             if not fp.lower().endswith((".jpg", ".jpeg", ".png")):
                 continue
-            subj = subject_map.get(fp) or subject_map.get(os.path.abspath(fp)) or f"unknown_{os.path.basename(fp)}"
+            subj = subject_map.get(fp) or subject_map.get(os.path.abspath(fp))
+            if subj is None:
+                # Not in the DB-derived map. An UPLOADED photo carries its subject in
+                # its own filename, so it still gets a real subject key and is counted
+                # towards the >=3-subject split instead of being pushed into the
+                # "unknown_" bucket (which would force a leaky image-level fallback).
+                # Capture-owned files keep mapping through the DB exactly as before.
+                from models.train.face_uploads import parse_upload_filename
+                parsed = parse_upload_filename(os.path.basename(fp))
+                subj = f"subject_{parsed[1]}" if parsed else f"unknown_{os.path.basename(fp)}"
             file_tuples.append((fp, cls, subj))
 
     if not file_tuples:

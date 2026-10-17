@@ -9,6 +9,7 @@ import {
 import { API_BASE as BASE } from "../api";
 import { getTiming, busySeconds, phaseAt, FALLBACK_TIMING } from "../config/timing";
 import { DeviceModeBadge } from "../components/DeviceMode";
+  import { FaceUploadPanel } from "../components/FaceUploadPanel";
 import { useDeviceMode } from "../config/deviceMode";
 const FRAME_MS    = 60;   // 15 FPS max for stream1 — max fps without affecting other functionalities, quality 78
 const ANALYZE_MS  = 380;  // decoupled analysis — keeps autocapture responsive
@@ -1103,6 +1104,9 @@ export default function Training() {
               </>
             )}
           </div>
+
+          {/* ── Upload photos (supplements the gate capture flow above) ── */}
+          <FaceUploadPanel onChanged={loadAll} />
 
           {/* ── REAL-TIME TRANSACTION METRIC PIPELINE VISUALIZER ── */}
           <div className="grid grid-cols-2 gap-2 p-2 rounded-lg border text-xs" 

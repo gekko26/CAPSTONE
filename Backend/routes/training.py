@@ -18,6 +18,7 @@ import os
 import csv
 import io
 import logging
+import json
 import httpx                  
 import requests               
 from dotenv import load_dotenv
@@ -742,25 +743,33 @@ def collection_progress(db: Session = Depends(get_db)):
 
     # ── face images on disk + which subjects own them ──
     import glob
+    from models.train import face_uploads as _fu
     faces = {}
     subjects_by_class = {}
     subject_classes = {}
     orphan_files = []
     owned_by_row = {}
+    # Subjects that appear ONLY through an upload filename. They own no row, so the
+    # row-derived map below can never see them.
+    uploaded_subjects_by_class = {}
     for class_name in FACE_TRAINED_CLASSES:
         d = _faces_dir(class_name)
         files = sorted(glob.glob(os.path.join(d, "*"))) if os.path.isdir(d) else []
         files = [f for f in files if f.lower().endswith((".jpg", ".jpeg", ".png"))
                  and os.path.isfile(f)]
-        n = len(files)
-        faces[class_name] = {
-            "images": n,
-            "min": FACE_MIN_IMAGES_PER_CLASS(),
-            "target": FACE_TARGET_IMAGES_PER_CLASS,
-            "met_min": n >= FACE_MIN_IMAGES_PER_CLASS(),
-            "met_target": n >= FACE_TARGET_IMAGES_PER_CLASS,
-        }
+        n_captured = 0
+        n_uploaded = 0
+        uploaded_subjects_by_class[class_name] = set()
         for f in files:
+            # An uploaded photo is identified by its own name and is NOT an orphan: it
+            # never had a row and never needs one.
+            parsed_upload = _fu.parse_upload_filename(os.path.basename(f))
+            if parsed_upload is not None:
+                n_uploaded += 1
+                if parsed_upload[0] == class_name:
+                    uploaded_subjects_by_class[class_name].add(parsed_upload[1])
+                continue
+            n_captured += 1
             stem = os.path.splitext(os.path.basename(f))[0]
             rid = None
             for prefix in SNAPSHOT_PREFIXES[class_name]:
@@ -773,11 +782,24 @@ def collection_progress(db: Session = Depends(get_db)):
                 orphan_files.append(f)
             else:
                 owned_by_row.setdefault(rid, set()).add(class_name)
+        n = n_captured + n_uploaded
+        faces[class_name] = {
+            "images": n,
+            "captured": n_captured,
+            "uploaded": n_uploaded,
+            "min": FACE_MIN_IMAGES_PER_CLASS(),
+            "target": FACE_TARGET_IMAGES_PER_CLASS,
+            "met_min": n >= FACE_MIN_IMAGES_PER_CLASS(),
+            "met_target": n >= FACE_TARGET_IMAGES_PER_CLASS,
+        }
         subjects_by_class[class_name] = set()
 
     for r in rows:
         for class_name in owned_by_row.get(r.id, set()):
             subjects_by_class[class_name].add(r.subject_id)
+    # A subject whose only photos came from uploads still counts towards that class.
+    for class_name in FACE_TRAINED_CLASSES:
+        subjects_by_class[class_name] |= uploaded_subjects_by_class[class_name]
     for class_name in FACE_TRAINED_CLASSES:
         subjects_by_class[class_name].discard(None)
 
@@ -870,6 +892,266 @@ def collection_progress(db: Session = Depends(get_db)):
             "rows_missing_image_ids": rows_missing[:50],
         },
     }
+
+
+# ── Face photo uploads (PHASE A) ─────────────────────────────────────────────
+# Training images no longer have to be captured one-by-one from the gate camera.
+# These images train the SAME MobileNet classes and end up in the SAME folder,
+# data/faces/<class>/, but they are owned by their FILENAME, not by a row.
+#
+# Nothing here creates a training_data row, touches sensor data, or writes to
+# data/snapshots. See models/train/face_uploads.py for the naming contract that keeps
+# these files disjoint from every row-owned image.
+UPLOAD_LOG_PATH = os.path.join(BASE_DIR, "data", "upload_log.jsonl")
+
+# Built from the constant so it can never drift from the BAC gate.
+_IMPAIRED_UPLOAD_MESSAGE = (
+    f"impaired uploads need a measured BAC of at least {IMPAIRED_FACE_MIN_BAC} and "
+    f"confirmation that the person was really impaired"
+)
+
+
+def _append_upload_log(face_class, subject_id, stored_as, bac=None):
+    """One JSON line per accepted file. Never fails the request.
+
+    Contains no name, no image bytes and no credentials — only the class, the subject
+    id, the stored filename, the BAC (impaired only) and a timestamp.
+    """
+    from datetime import datetime, timezone
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "face_class": face_class,
+        "subject_id": subject_id,
+        "stored_as": stored_as,
+    }
+    if face_class == "impaired" and bac is not None:
+        record["bac"] = bac
+    try:
+        os.makedirs(os.path.dirname(UPLOAD_LOG_PATH), exist_ok=True)
+        with open(UPLOAD_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError:
+        # The upload itself already succeeded on disk; a log failure must not turn a
+        # good upload into a failed request.
+        logger.exception("could not append to the upload log; upload itself is fine")
+
+
+@router.post("/upload-faces")
+async def upload_faces(
+    face_class: str = Form(...),
+    subject_id: int = Form(...),
+    files: List[UploadFile] = File(...),
+    bac: Optional[float] = Form(None),
+    confirm_real: Optional[bool] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Accept one or more face photos into data/faces/<face_class>/.
+
+    Whole-request validation happens FIRST and rejects the entire batch, so a request
+    that is wrong in some global way never writes anything. After that, files are
+    processed independently: one unreadable photo never blocks the good ones.
+    """
+    from models.train import face_uploads as fu
+    from models.train.face_recognition import FACE_MIN_SIZE
+
+    # ---- whole-request validation (nothing is saved if any of this fails) --------
+    if face_class not in fu.UPLOAD_CLASSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"face_class must be one of {', '.join(fu.UPLOAD_CLASSES)}",
+        )
+    if subject_id is None:
+        raise HTTPException(status_code=400, detail="subject_id is required")
+    # Reuse the enrolment check so the message is byte-identical to every other route.
+    subject_id = validate_subject_id(subject_id, db)
+
+    if not files or len(files) < 1:
+        raise HTTPException(status_code=400, detail="select at least one photo")
+    if len(files) > fu.MAX_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=400,
+            detail=f"too many files: {len(files)} (max {fu.MAX_FILES_PER_REQUEST})",
+        )
+
+    if face_class == "impaired":
+        # The only way to teach "impaired" is a real measured reading. Never acted.
+        threshold = IMPAIRED_FACE_MIN_BAC
+        if bac is None:
+            raise HTTPException(status_code=400, detail=_IMPAIRED_UPLOAD_MESSAGE)
+        if bac < threshold:
+            raise HTTPException(status_code=400, detail=_IMPAIRED_UPLOAD_MESSAGE)
+        if confirm_real is not True:
+            raise HTTPException(status_code=400, detail=_IMPAIRED_UPLOAD_MESSAGE)
+
+    target_dir = _faces_dir(face_class)
+    results = []
+    n_accepted = n_duplicate = n_rejected = 0
+
+    for upload in files:
+        original = (upload.filename or "upload")[:80]
+        status, reason, stored_as = "rejected", None, None
+        try:
+            data = upload.file.read()
+        except OSError:
+            data = b""
+
+        if not data:
+            reason = "not_an_image"
+        elif len(data) > fu.MAX_FILE_BYTES:
+            reason = "too_large"
+        else:
+            # Decode the bytes, never trust the extension.
+            frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+            if frame is None:
+                reason = "not_an_image"
+            else:
+                # Reuse the shipped detector and the shipped minimum-size constant.
+                try:
+                    analysis = analyze_frame(frame)
+                except Exception:
+                    logger.exception("analyze_frame failed on an upload; treating as no face")
+                    analysis = {"status": "no_face"}
+                if analysis.get("status") == "no_face":
+                    reason = "no_face"
+                else:
+                    width = float(analysis.get("face_width") or 0.0)
+                    if width < FACE_MIN_SIZE:
+                        reason = "too_small"
+
+        if reason is None:
+            # Downscale the longest side only; never upscale.
+            h, w = frame.shape[:2]
+            longest = max(h, w)
+            if longest > fu.MAX_SIDE_PX:
+                scale = fu.MAX_SIDE_PX / float(longest)
+                frame = cv2.resize(frame, (max(1, int(round(w * scale))),
+                                            max(1, int(round(h * scale)))),
+                                   interpolation=cv2.INTER_AREA)
+
+            digest = fu.upload_digest(data)          # digest of the ORIGINAL bytes
+            stored_as = fu.upload_filename(face_class, subject_id, digest)
+            target = fu.safe_upload_path(BASE_DIR, face_class, stored_as)
+            if target is None:
+                reason = "write_failed"
+            elif os.path.exists(target):
+                status, reason, stored_as = "duplicate", "already_uploaded", stored_as
+            else:
+                ok, encoded = cv2.imencode(".jpg", frame,
+                                           [int(cv2.IMWRITE_JPEG_QUALITY), fu.JPEG_QUALITY])
+                if not ok:
+                    status, reason, stored_as = "rejected", "write_failed", None
+                else:
+                    tmp = target + ".part"
+                    try:
+                        os.makedirs(target_dir, exist_ok=True)
+                        with open(tmp, "wb") as fh:
+                            fh.write(encoded.tobytes())
+                        # Atomic within the same folder: a reader never sees a partial file.
+                        os.replace(tmp, target)
+                        status = "accepted"
+                    except OSError:
+                        logger.exception("could not store an upload for subject %s", subject_id)
+                        if os.path.exists(tmp):
+                            try:
+                                os.remove(tmp)
+                            except OSError:
+                                logger.exception("could not remove the temporary upload file")
+                        status, reason, stored_as = "rejected", "write_failed", None
+
+        if status == "accepted":
+            n_accepted += 1
+            _append_upload_log(face_class, subject_id, stored_as,
+                               bac=bac if face_class == "impaired" else None)
+        elif status == "duplicate":
+            n_duplicate += 1
+        else:
+            n_rejected += 1
+            stored_as = None
+
+        results.append({"name": original, "status": status,
+                        "reason": reason, "stored_as": stored_as})
+
+    return {
+        "face_class": face_class,
+        "subject_id": subject_id,
+        "accepted": n_accepted,
+        "duplicates": n_duplicate,
+        "rejected": n_rejected,
+        "files": results,
+    }
+
+
+@router.get("/uploaded-faces")
+def list_uploaded_faces(face_class: Optional[str] = None):
+    """List uploaded photos by filename only. Never returns image bytes."""
+    from models.train import face_uploads as fu
+
+    classes = [face_class] if face_class else list(fu.UPLOAD_CLASSES)
+    for c in classes:
+        if c not in fu.UPLOAD_CLASSES:
+            raise HTTPException(status_code=400,
+                                detail=f"unknown face_class {c!r}")
+    out = []
+    per_class = {}
+    per_subject = {}
+    for c in classes:
+        d = _faces_dir(c)
+        try:
+            names = os.listdir(d) if os.path.isdir(d) else []
+        except OSError:
+            logger.exception("could not list %s", d)
+            names = []
+        found = 0
+        for name in names:
+            parsed = fu.parse_upload_filename(name)
+            # ONLY upload-pattern names: capture-owned and registered files are invisible.
+            if parsed is None:
+                continue
+            full = os.path.join(d, name)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            out.append({"face_class": parsed[0], "subject_id": parsed[1],
+                        "name": name, "bytes": st.st_size,
+                        "modified": st.st_mtime})
+            found += 1
+            per_subject[parsed[1]] = per_subject.get(parsed[1], 0) + 1
+        per_class[c] = found
+    out.sort(key=lambda r: r["modified"], reverse=True)
+    return {"files": out[:500], "truncated": len(out) > 500,
+            "per_class": per_class, "per_subject": per_subject,
+            "total": len(out)}
+
+
+@router.delete("/uploaded-faces/{face_class}/{filename}")
+def delete_uploaded_face(face_class: str, filename: str):
+    """Delete ONE uploaded photo.
+
+    Everything else is refused: capture-owned names, traversal, an encoded separator,
+    a name that names a different class, and anything in data/faces/registered/.
+    Directories are never removed.
+    """
+    from models.train import face_uploads as fu
+    if face_class not in fu.UPLOAD_CLASSES:
+        raise HTTPException(status_code=400,
+                            detail=f"unknown face_class {face_class!r}")
+    target = fu.safe_upload_path(BASE_DIR, face_class, filename)
+    if target is None:
+        raise HTTPException(
+            status_code=400,
+            detail="refused: that filename is not an uploaded photo of this class",
+        )
+    if not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="no such uploaded photo")
+    if os.path.isdir(target):
+        raise HTTPException(status_code=400, detail="refused: directories are never removed")
+    try:
+        os.remove(target)
+    except OSError:
+        logger.exception("could not delete the uploaded photo")
+        raise HTTPException(status_code=500, detail="could not delete the uploaded photo")
+    return {"status": "deleted", "face_class": face_class, "name": os.path.basename(target)}
 
 
 @router.get("/summary")
