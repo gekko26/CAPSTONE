@@ -14,6 +14,11 @@ from fastapi.testclient import TestClient
 
 from database.models import DeploymentLog, Reading, TrainingData
 
+# The live width of denial_reason, read from the ORM rather than hardcoded, so this
+# test fails if the column and the storage constant ever drift apart again.
+from database.models import Reading as _R
+DENIAL_REASON_COL_LEN = _R.__table__.c.denial_reason.type.length
+
 
 # ── model stubs ────────────────────────────────────────────────────────────────
 
@@ -392,7 +397,11 @@ def test_decision_is_persisted_in_existing_columns(client, db, stub_models):
     _post_full(client, db, reading)
     db.expire_all()
     assert reading.fusion_label == "FAIL"
-    assert reading.denial_reason is not None and len(reading.denial_reason) <= 20
+    # denial_reason is VARCHAR(64) and must hold the WHOLE joined label. It used to be
+    # VARCHAR(20), which cut "Alcohol detected, over limit" to 20 characters and
+    # corrupted the audit trail. Assert the full text, not just a length bound.
+    assert reading.denial_reason == "Alcohol detected, over limit"
+    assert len(reading.denial_reason) <= DENIAL_REASON_COL_LEN
     log = db.query(DeploymentLog).filter(DeploymentLog.reading_id == reading.id).one()
     assert log.prediction == "FAIL"
     assert log.model_version == "rules_v1"
@@ -407,14 +416,20 @@ def test_second_call_upserts_without_duplicating(client, db, stub_models):
     assert db.query(DeploymentLog).filter(DeploymentLog.reading_id == reading.id).count() == 1
 
 
-def test_reason_labels_are_truncated_to_column_width(client, db, stub_models):
+def test_reason_labels_are_stored_in_full(client, db, stub_models):
+    """Regression: the audit reason must not be truncated.
+
+    With VARCHAR(20) the stored value was cut mid-word, so the log could not say WHY
+    a run was denied. Now the column is widened to 64 and nothing is lost.
+    """
     stub_models.update({"rf": None, "xgb": None, "face": None})
     reading = _seed_reading(db)
     body = _post_full(client, db, reading).json()
     db.expire_all()
     joined = "; ".join(body["decision"]["labels"])
-    assert len(reading.denial_reason) <= 20
-    assert len(joined) > 20, "expected the joined labels to exceed the column"
+    assert len(joined) > 20, "expected the joined labels to exceed the old 20-char column"
+    assert reading.denial_reason == joined, "the stored reason must be the FULL label"
+    assert len(reading.denial_reason) <= DENIAL_REASON_COL_LEN
 
 
 # ── no learned fusion in the live path ─────────────────────────────────────────

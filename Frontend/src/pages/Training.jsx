@@ -366,6 +366,23 @@ export default function Training() {
   const [relabelSubLabel, setRelabelSubLabel] = useState("");
   const [relabelReason, setRelabelReason] = useState("");
   const [relabelSubjectId, setRelabelSubjectId] = useState("");
+  // Enrolled subjects, so the relabel modal can offer a name instead of asking the
+  // operator to recall an auto-increment primary key.
+  const [subjects, setSubjects] = useState([]);
+  const [bulkSubjectId, setBulkSubjectId] = useState("");
+  const [bulkTagging, setBulkTagging]     = useState(false);
+
+  const loadSubjects = useCallback(async () => {
+    try {
+      const r = await fetch(`${BASE}/recognition/subjects`);
+      if (r.ok) setSubjects(await r.json());
+    } catch {
+      // The dropdown degrades to empty if this fails; tagging stays possible by id.
+    }
+  }, []);
+
+  // Refreshed by loadAll() below, alongside the other panels -- no extra effect, so
+  // this adds no new set-state-in-effect lint findings.
 
   // Single place to hold the subject for the NEXT capture. Sent with every
   // collect/* request so subject_id is attached at capture time instead of
@@ -419,8 +436,8 @@ export default function Training() {
     finally { setLoadingData(false); }
   }, [toast]);
 
-  const loadAll = useCallback(() => { loadSummary(); loadData(); loadCoverage(); loadProgress(); },
-                      [loadSummary, loadData, loadCoverage, loadProgress]);
+  const loadAll = useCallback(() => { loadSummary(); loadData(); loadCoverage(); loadProgress(); loadSubjects(); },
+                      [loadSummary, loadData, loadCoverage, loadProgress, loadSubjects]);
   useEffect(() => { loadAll(); }, [loadAll]);
 
   // ── ESP32 ─────────────────────────────────────────────────
@@ -775,6 +792,30 @@ export default function Training() {
     } catch (e) { toast(readableErr(e, "Relabel failed"), "error"); }
   };
 
+  // ── Backfill every untagged row to one subject ─────────────
+  const bulkTagRows = async () => {
+    const ids = coverage?.untagged_row_ids || [];
+    if (!bulkSubjectId || ids.length === 0) return;
+    if (!confirm(`Tag ${ids.length} untagged row(s) to subject #${bulkSubjectId}?\n\nThis only attaches the person — labels, BAC and photos are untouched.`)) return;
+    setBulkTagging(true);
+    try {
+      const r = await fetch(`${BASE}/training/tag-rows`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subject_id: parseInt(bulkSubjectId), row_ids: ids }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail);
+      toast(d.message || `Tagged ${d.tagged} row(s)`);
+      setBulkSubjectId("");
+      loadAll();
+    } catch (e) {
+      toast(readableErr(e, "Bulk tag failed"), "error");
+    } finally {
+      setBulkTagging(false);
+    }
+  };
+
   // ── Delete ────────────────────────────────────────────────
   const confirmDelete = async (id) => {
     try {
@@ -1052,6 +1093,38 @@ export default function Training() {
               </span>
             )}
           </button>
+
+          {/* ── Backfill: tag every untagged row in one action ──
+              subject-coverage already lists the exact row ids that are untagged, which
+              is the difference between "3/16 tagged" and something you can act on. This
+              posts to /training/tag-rows, which never touches label or the face mirrors,
+              so backfilling can never delete an image or relabel a capture. */}
+          {coverage?.untagged_row_ids?.length > 0 && subjects.length > 0 && (
+            <div className="p-2 rounded-lg border text-xs space-y-1.5"
+              style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
+              <div className="text-[11px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>
+                Tag {coverage.untagged_row_ids.length} untagged row{coverage.untagged_row_ids.length === 1 ? "" : "s"}
+              </div>
+              <select value={bulkSubjectId} onChange={e => setBulkSubjectId(e.target.value)}
+                className="w-full rounded-lg px-2 py-1.5 text-sm border"
+                style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}>
+                <option value="">Choose a subject…</option>
+                {subjects.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}{s.face_id ? ` · ID ${s.face_id}` : ""}</option>
+                ))}
+              </select>
+              <button onClick={bulkTagRows} disabled={bulkTagging || !bulkSubjectId}
+                className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 rounded-lg text-[11px] font-medium disabled:opacity-50"
+                style={{ background: "var(--text-primary)", color: "var(--bg-card)" }}>
+                {bulkTagging ? <RefreshCw size={12} className="animate-spin" /> : <Tag size={12} />}
+                Tag all untagged rows
+              </button>
+              <p className="text-[9px] leading-snug" style={{ color: "var(--text-muted)" }}>
+                Attaches every untagged row to this person so the split groups by subject.
+                Labels and photos are never modified.
+              </p>
+            </div>
+          )}
           {/* ── Collection checklist (TASK 5) — driven only by /training/collection-progress ── */}
           <div className="p-2 rounded-lg border text-xs space-y-1" style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
             <div className="text-[11px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Collection checklist</div>
@@ -1510,11 +1583,29 @@ export default function Training() {
               style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}/>
           </div>
           <div>
-            <label className="block text-xs mb-1.5" style={{ color: "var(--text-muted)" }}>Subject ID (≥0, blank to leave unset)</label>
-            <input type="number" min="0" placeholder="e.g. 12" value={relabelSubjectId}
-              onChange={e => { const v=e.target.value; if(v===""||parseInt(v)>=0) setRelabelSubjectId(v); else toast("subject_id must be >=0","error"); }}
+            <label className="block text-xs mb-1.5" style={{ color: "var(--text-muted)" }}>
+              Subject (blank to leave untagged)
+            </label>
+            {/* A dropdown, not a free-typed number. subjects.id is the auto-increment
+                primary key that /relabel and /tag-rows validate against; it is NOT the
+                "ID" shown on the People page (that is face_id). Typing it by hand invited
+                a transposition, and a wrong-but-existing id silently attributes rows to
+                the wrong person. See People.jsx, which now shows both. */}
+            <select value={relabelSubjectId} onChange={e => setRelabelSubjectId(e.target.value)}
               className="w-full rounded-lg px-3 py-2 text-sm border"
-              style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}/>
+              style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}>
+              <option value="">— untagged —</option>
+              {subjects.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.name}{s.face_id ? ` · ID ${s.face_id}` : ""}
+                </option>
+              ))}
+            </select>
+            {!subjects.length && (
+              <p className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>
+                No subjects enrolled yet — enrol people on the People page first.
+              </p>
+            )}
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <button onClick={() => setRelabelModal(null)} className="px-3 py-1.5 rounded-lg text-sm border"

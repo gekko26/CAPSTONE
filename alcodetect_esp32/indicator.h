@@ -93,9 +93,20 @@ static inline IndConfig ind_default_config() {
     c.blue   = {0,   0, 255};
     c.green  = {0, 255,   0};
     c.red    = {255, 0,   0};
-    // Yellow = red + green with the green channel pulled down so the mix reads as
-    // yellow rather than orange. One constant tunes it for the actual LED.
-    c.yellow = {255, (uint8_t)(255 * 190 / 255), 0};
+    // Yellow = red + green at MATCHED CURRENT.
+    //
+    // Red has a much lower Vf than green (2.0 V vs 3.1 V) on a 3.3 V rail, so at equal
+    // duty the red channel always runs hotter: with the documented 330 ohm red and
+    // 100 ohm green, full-duty red is 3.94 mA against green's 2.00 mA -- a 1.97:1 mix
+    // that reads ORANGE, and WARN became hard to tell from FAIL.
+    //
+    // Pulling the GREEN duty down made it worse (that is what this constant used to
+    // do: green at 190/255 gave a 4.0:1 ratio). The fix is to pull the RED duty down
+    // until the two currents match: 255 * (2.00 / 3.94) = 129.
+    //
+    // THIS IS COUPLED TO THE RESISTORS in docs/INDICATORS_WIRING.md. If you change a
+    // channel resistor, recompute: yellow_red_duty = 255 * (I_green / I_red).
+    c.yellow = {129, 255, 0};
     c.progressDuty = 200;
     c.commonAnode  = false;   // LED_COMMON_ANODE — set true for common-anode LEDs
     return c;

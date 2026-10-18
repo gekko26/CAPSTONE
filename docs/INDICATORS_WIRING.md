@@ -101,15 +101,20 @@ R = V_resistor / I
 Because `Vf` varies a lot between colours and batches, **always fit the largest
 standard value that still looks bright**:
 
-| LED colour | Typical Vf | V_resistor | Suggested R |
-|---|---|---|---|
-| Red | 1.8–2.0 V | 1.3–1.5 V | 330 Ω |
-| Green | 2.8–3.0 V | 0.3–0.5 V | 220 Ω |
-| Blue | 2.9–3.1 V | 0.2–0.4 V | 220 Ω |
+| LED colour | Typical Vf | V_resistor | **Start with** | mA per LED | mA per GPIO (2 LEDs) |
+|---|---|---|---|---|---|
+| Red | 1.8–2.0 V | 1.3–1.5 V | **330 Ω** | 3.94 | 7.88 |
+| Green | 2.8–3.1 V | 0.2–0.5 V | **100 Ω** | 2.00 | 4.00 |
+| Blue | 2.9–3.1 V | 0.2–0.4 V | **100 Ω** | 2.00 | 4.00 |
 
-**Start at 220 Ω.** It is dimmer than the theoretical optimum but cannot burn an LED
-and cannot push a GPIO past its limit. Step down to 150 Ω or 100 Ω only if it looks
-too dim, and re-measure the GPIO current if you do.
+Computed as `I = (3.3 − Vf) / R`. **220 Ω is too large for green and blue here:**
+it gives 0.91 mA per LED (1.82 mA per GPIO), below the ~2 mA visibility floor, so the
+green PASS light and the blue progress states would look identical to "off". Red at
+330 Ω is correct and needs no change.
+
+150 Ω is a starting point, not the optimum — it still gives 1.33 mA per LED.
+**Step down to 100 Ω (~2.0 mA/LED, 4.0 mA per GPIO) if green or blue still look dim
+  on the bench**, and re-measure. Nothing here exceeds the 12 mA GPIO budget.
 
 Two LEDs on one channel draw twice the current, so the per-channel budget is
 2 × 8 mA = 16 mA worst case. Keep the **real** target at ~5 mA each (10 mA per

@@ -337,6 +337,43 @@ def reconcile_face_mirror(row, frame=None):
     return {"face_dataset": "unchanged", "removed": []}
 
 
+def _apply_face_analysis(frame, row):
+    """Record EAR / MAR / head-pitch from the shipped analyzer.
+
+    Returns ``(ok, error)``. The failure is REPORTED rather than swallowed: the old
+    bare ``except: pass`` let a capture return 200 while silently storing NULL
+    EAR/MAR/pitch, so a broken camera produced rows that looked successful and
+    contributed nothing to the face dataset.
+    """
+    if frame is None:
+        return True, None
+    try:
+        cv = analyze_frame(frame)
+        row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
+        return True, None
+    except Exception as exc:
+        logger.warning("analyze_frame failed for row %s: %s", row.id, exc)
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _write_face_mirror(face_class, prefix, row, frame):
+    """Write the row-owned copy into ``data/faces/<face_class>/``.
+
+    Returns ``(ok, error)``. Same reasoning as ``_apply_face_analysis``: a swallowed
+    write failure means MobileNet trains on a class that quietly lost an image.
+    """
+    try:
+        d = _faces_dir(face_class)
+        os.makedirs(d, exist_ok=True)
+        import cv2 as _cv2
+        if not bool(_cv2.imwrite(os.path.join(d, f"{prefix}_{row.id}.jpg"), frame)):
+            raise IOError("cv2.imwrite returned False")
+        return True, None
+    except Exception as exc:
+        logger.warning("faces/%s mirror failed for row %s: %s", face_class, row.id, exc)
+        return False, f"{type(exc).__name__}: {exc}"
+
+
 @router.post("/collect/clear_air")
 async def collect_clear_air(subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     row = build_pending_row(label=0, sub_label="clear_air", bac=0.00, subject_id=subject_id, db=db)
@@ -355,28 +392,23 @@ async def collect_sober(background_tasks: BackgroundTasks, file: UploadFile = Fi
     contents = await file.read()
     frame = decode_frame(contents)
     row = TrainingData(label=0, sub_label=None, bac=0.00, subject_id=validate_subject_id(subject_id, db))
-    try:
-        cv = analyze_frame(frame) if frame is not None else {}
-        row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
-    except: pass
+    face_ok, face_error = _apply_face_analysis(frame, row)
     db.add(row); db.commit(); db.refresh(row)
     if row.trial_id is None:
         row.trial_id = row.id
         db.commit()
+    mirror_ok, mirror_error = True, None
     if frame is not None:
         path = os.path.join(SOBER_DIR, f"sober_{row.id}.jpg")
         row.image_path = path
         db.commit()
         background_tasks.add_task(save_snapshot_task, path, frame)
-        try:
-            from pathlib import Path as _P
-            faces_sober = os.path.join(BASE_DIR, "data", "faces", "sober")
-            _P(faces_sober).mkdir(parents=True, exist_ok=True)
-            import cv2 as _cv2
-            _cv2.imwrite(os.path.join(faces_sober, f"sober_{row.id}.jpg"), frame)
-        except: pass
+        mirror_ok, mirror_error = _write_face_mirror("sober", "sober", row, frame)
     trigger_result = await trigger_esp32_async(row_id=row.id)
-    return {"message": "Sober baseline captured", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
+    return {"message": "Sober baseline captured", "id": row.id, "image_path": row.image_path,
+            "face_analysis_ok": face_ok, "face_analysis_error": face_error,
+            "mirror_written": mirror_ok, "mirror_error": mirror_error,
+            "trigger": trigger_result}
 
 @router.post("/collect/drowsy")
 async def collect_drowsy(background_tasks: BackgroundTasks, file: UploadFile = File(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
@@ -384,30 +416,23 @@ async def collect_drowsy(background_tasks: BackgroundTasks, file: UploadFile = F
     frame = decode_frame(contents)
     row = TrainingData(label=0, sub_label="drowsy", bac=0.00, subject_id=validate_subject_id(subject_id, db))
     # capture EAR at collection time for DB consistency
-    try:
-        cv = analyze_frame(frame) if frame is not None else {}
-        row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
-    except: pass
+    face_ok, face_error = _apply_face_analysis(frame, row)
     db.add(row); db.commit(); db.refresh(row)
     if row.trial_id is None:
         row.trial_id = row.id
         db.commit()
+    mirror_ok, mirror_error = True, None
     if frame is not None:
         path = os.path.join(FATIGUE_DIR, f"fatigue_{row.id}.jpg")
         row.image_path = path
         db.commit()
         background_tasks.add_task(save_snapshot_task, path, frame)
-        try:
-            from pathlib import Path as _P
-            faces_fatigue = os.path.join(BASE_DIR, "data", "faces", "fatigue")
-            _P(faces_fatigue).mkdir(parents=True, exist_ok=True)
-            import cv2 as _cv2
-            _cv2.imwrite(os.path.join(faces_fatigue, f"fatigue_{row.id}.jpg"), frame)
-            faces_sober = os.path.join(BASE_DIR, "data", "faces", "sober")
-            _P(faces_sober).mkdir(parents=True, exist_ok=True)
-        except: pass
+        mirror_ok, mirror_error = _write_face_mirror("fatigue", "fatigue", row, frame)
     trigger_result = await trigger_esp32_async(row_id=row.id)
-    return {"message": "Fatigue (drowsy) baseline captured", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
+    return {"message": "Fatigue (drowsy) baseline captured", "id": row.id, "image_path": row.image_path,
+            "face_analysis_ok": face_ok, "face_analysis_error": face_error,
+            "mirror_written": mirror_ok, "mirror_error": mirror_error,
+            "trigger": trigger_result}
 
 @router.post("/collect/yawning")
 async def collect_yawning(background_tasks: BackgroundTasks, file: UploadFile = File(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
@@ -415,43 +440,37 @@ async def collect_yawning(background_tasks: BackgroundTasks, file: UploadFile = 
     contents = await file.read()
     frame = decode_frame(contents)
     row = TrainingData(label=0, sub_label="yawning", bac=0.00, subject_id=validate_subject_id(subject_id, db))
-    try:
-        cv = analyze_frame(frame) if frame is not None else {}
-        row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
-    except: pass
+    face_ok, face_error = _apply_face_analysis(frame, row)
     db.add(row); db.commit(); db.refresh(row)
     if row.trial_id is None:
         row.trial_id = row.id
         db.commit()
+    mirror_ok, mirror_error = True, None
     if frame is not None:
         path = os.path.join(FATIGUE_DIR, f"yawning_{row.id}.jpg")
         row.image_path = path
         db.commit()
         background_tasks.add_task(save_snapshot_task, path, frame)
         # Harmony: also copy to faces/fatigue for mobilenet 3-class
-        try:
-            from pathlib import Path as _P
-            faces_fatigue = os.path.join(BASE_DIR, "data", "faces", "fatigue")
-            _P(faces_fatigue).mkdir(parents=True, exist_ok=True)
-            import cv2 as _cv2
-            _cv2.imwrite(os.path.join(faces_fatigue, f"yawning_{row.id}.jpg"), frame)
-        except: pass
+        mirror_ok, mirror_error = _write_face_mirror("fatigue", "yawning", row, frame)
     trigger_result = await trigger_esp32_async(row_id=row.id)
-    return {"message": "Yawning (fatigue) captured — yawning is measurement, stored as fatigue", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
+    return {"message": "Yawning (fatigue) captured — yawning is measurement, stored as fatigue",
+            "id": row.id, "image_path": row.image_path,
+            "face_analysis_ok": face_ok, "face_analysis_error": face_error,
+            "mirror_written": mirror_ok, "mirror_error": mirror_error,
+            "trigger": trigger_result}
 
 @router.post("/collect/alcohol")
 async def collect_alcohol(background_tasks: BackgroundTasks, file: UploadFile = File(...), bac: float = Form(...), subject_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
     contents = await file.read()
     frame = decode_frame(contents)
     row = TrainingData(label=1, sub_label=None, bac=bac, subject_id=validate_subject_id(subject_id, db))
-    try:
-        cv = analyze_frame(frame) if frame is not None else {}
-        row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
-    except: pass
+    face_ok, face_error = _apply_face_analysis(frame, row)
     db.add(row); db.commit(); db.refresh(row)
     if row.trial_id is None:
         row.trial_id = row.id
         db.commit()
+    mirror_ok, mirror_error = True, None
     face_dataset = "excluded_below_threshold"
     if frame is not None:
         path = os.path.join(IMPAIRED_DIR, f"impaired_{row.id}.jpg")
@@ -477,6 +496,8 @@ async def collect_alcohol(background_tasks: BackgroundTasks, file: UploadFile = 
     trigger_result = await trigger_esp32_async(row_id=row.id)
     return {"message": "Alcohol captured", "id": row.id, "subject_id": row.subject_id,
             "image_path": row.image_path, "face_dataset": face_dataset,
+            "face_analysis_ok": face_ok, "face_analysis_error": face_error,
+            "mirror_written": mirror_ok, "mirror_error": mirror_error,
             "trigger": trigger_result}
 
 @router.post("/collect/sanitizer")
@@ -494,10 +515,7 @@ async def collect_perfume(background_tasks: BackgroundTasks, file: UploadFile = 
     contents = await file.read()
     frame = decode_frame(contents)
     row = TrainingData(label=2, sub_label="perfume", bac=0.00, subject_id=validate_subject_id(subject_id, db))
-    try:
-        cv = analyze_frame(frame) if frame is not None else {}
-        row.ear = cv.get("ear"); row.mar = cv.get("mar"); row.head_pitch = cv.get("pitch")
-    except: pass
+    face_ok, face_error = _apply_face_analysis(frame, row)
     db.add(row); db.commit(); db.refresh(row)
     if row.trial_id is None:
         row.trial_id = row.id
@@ -508,10 +526,19 @@ async def collect_perfume(background_tasks: BackgroundTasks, file: UploadFile = 
         db.commit()
         background_tasks.add_task(save_snapshot_task, path, frame)
     trigger_result = await trigger_esp32_async(row_id=row.id)
-    return {"message": "Perfume vapor captured", "id": row.id, "image_path": row.image_path, "trigger": trigger_result}
+    return {"message": "Perfume vapor captured", "id": row.id, "image_path": row.image_path,
+            "face_analysis_ok": face_ok, "face_analysis_error": face_error,
+            "trigger": trigger_result}
 
 class SensorPayload(BaseModel):
-    temperature: float; humidity: float; mq3_1: List[float]; mq3_2: List[float]; mq3_3: List[float]; row_id: Optional[int] = None
+    # temperature/humidity are Optional because a failed DHT11 read must be recorded as
+    # NULL rather than substituted with a plausible-looking constant. The firmware sends
+    # JSON null and dht_ok:false in that case; storing the read as unknown keeps the gap
+    # visible instead of letting the scaler learn 25.0/60.0 as the room temperature.
+    temperature: Optional[float] = None
+    humidity: Optional[float] = None
+    mq3_1: List[float]; mq3_2: List[float]; mq3_3: List[float]; row_id: Optional[int] = None
+    dht_ok: Optional[bool] = None
     # Mode the firmware PINNED when /trigger was accepted. Optional so an older
     # firmware build still posts, but when present it must say "training" — otherwise
     # a live gate reading would be written into the training table.
@@ -667,6 +694,40 @@ def relabel(row_id: int, payload: RelabelPayload, db: Session = Depends(get_db))
         face = reconcile_face_mirror(row)
     return {"id": row.id, "new_label": LABEL_NAMES[payload.label],
             "face_dataset": face["face_dataset"], "removed_files": face["removed"]}
+
+class TagRowsPayload(BaseModel):
+    subject_id: int
+    row_ids: List[int]
+
+@router.post("/tag-rows")
+def tag_rows(payload: TagRowsPayload, db: Session = Depends(get_db)):
+    """Attach many training rows to one enrolled subject in a single call.
+
+    TAG-ONLY BY CONSTRUCTION: it never touches `label`, `sub_label` or `bac`, and it
+    never calls reconcile_face_mirror(). That matters because /relabel reconciles the
+    mirror whenever the class changes -- so tagging via /relabel with a wrong label
+    would silently delete the row's face image. Here the image is untouchable.
+
+    The enrolled check is the same one /collect/* and /relabel use, so an unknown id is
+    a 400 rather than a silent no-op.
+    """
+    subject_id = validate_subject_id(payload.subject_id, db)
+    tagged, skipped = [], []
+    for rid in payload.row_ids:
+        row = db.query(TrainingData).filter(TrainingData.id == rid).first()
+        if row is None:
+            skipped.append(rid)
+            continue
+        if row.subject_id == subject_id:
+            skipped.append(rid)          # already tagged with this person
+            continue
+        row.subject_id = subject_id
+        tagged.append(rid)
+    db.commit()
+    return {"tagged": len(tagged), "tagged_ids": tagged,
+            "skipped": skipped, "skipped_count": len(skipped),
+            "subject_id": subject_id,
+            "message": f"Tagged {len(tagged)} row(s) to subject {subject_id}"}
 
 @router.delete("/delete/{row_id}")
 def delete_row(row_id: int, db: Session = Depends(get_db)):
@@ -866,6 +927,28 @@ def collection_progress(db: Session = Depends(get_db)):
     subject_missing = (["need %d subjects with data, have %d" % (MIN_SUBJECTS, len(all_subjects))]
                        if len(all_subjects) < MIN_SUBJECTS else [])
 
+    # ── sensor-data integrity ────────────────────────────────────────────────
+    # A capture can be created and never receive its window (the ESP32 lost Wi-Fi
+    # before posting), or receive a window in which only one of the three MQ3
+    # channels is actually mounted. Both look identical to the readiness counters --
+    # the row exists and counts -- so they are surfaced explicitly here.
+    rows_without_sensor = [r.id for r in usable if r.mq3_1_max is None]
+    zero_sensor_rows, partial_sensor_rows = [], []
+    for r in usable:
+        if r.mq3_1_max is None:
+            continue
+        chans = [r.mq3_1_max, r.mq3_2_max, r.mq3_3_max]
+        live = [c for c in chans if c is not None and float(c) > 0.5]
+        if not live:
+            zero_sensor_rows.append(r.id)
+        elif len(live) < len(chans):
+            partial_sensor_rows.append(r.id)
+    # temperature/humidity exactly at the old firmware fallback means the DHT11 read
+    # failed and a constant was stored. New firmware stores NULL instead, so these
+    # can only be legacy rows -- which are exactly the ones that must not be trusted.
+    fallback_dht_rows = [r.id for r in usable
+                         if r.temperature == 25.0 and r.humidity == 60.0]
+
     return {
         "targets": readiness_targets(),
         "sensor": sensor,
@@ -890,6 +973,19 @@ def collection_progress(db: Session = Depends(get_db)):
             "orphan_file_names": [os.path.basename(f) for f in orphan_files[:50]],
             "rows_missing_image": len(rows_missing),
             "rows_missing_image_ids": rows_missing[:50],
+            # Rows whose MQ3 window never arrived at all.
+            "rows_without_sensor_data": len(rows_without_sensor),
+            "rows_without_sensor_data_ids": rows_without_sensor[:50],
+            # All three channels reading zero: no sensor is mounted or wired.
+            "zero_sensor_rows": len(zero_sensor_rows),
+            "zero_sensor_row_ids": zero_sensor_rows[:50],
+            # Only some channels live: the corpus was captured with fewer sensors
+            # mounted than the 18-feature model expects.
+            "partial_sensor_rows": len(partial_sensor_rows),
+            "partial_sensor_row_ids": partial_sensor_rows[:50],
+            # Rows carrying the old 25.0/60.0 DHT fallback constant.
+            "fallback_dht_rows": len(fallback_dht_rows),
+            "fallback_dht_row_ids": fallback_dht_rows[:50],
         },
     }
 
@@ -1255,11 +1351,51 @@ def export_csv(db: Session = Depends(get_db)):
     output.seek(0)
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=training_data.csv"})
 
+class TrainPayload(BaseModel):
+    # Escape hatch for 5.3. A hardware fault (dead sensor channel, fabricated DHT
+    # constant) silently invalidates the whole corpus, so training is refused by
+    # default -- but the operator may know the flagged rows are deliberately excluded.
+    allow_hardware_faults: bool = False
+
 @router.post("/train")
-def trigger_training(db: Session = Depends(get_db)):
+def trigger_training(db: Session = Depends(get_db), payload: TrainPayload = None):
+    payload = payload or TrainPayload()
     rows = db.query(TrainingData).filter(TrainingData.label >= 0).all()
     # FIX 4: exclude auto_labeled unconfirmed rows from sensor training
     rows = [r for r in rows if not getattr(r, 'auto_labeled', False) or getattr(r, 'label_confirmed', True)]
+
+    # ── hardware-fault gate ──────────────────────────────────────────────────
+    # Two faults make a corpus silently invalid rather than merely noisy: a capture
+    # whose three MQ3 channels are all zero (sensor not mounted / not wired) and a
+    # capture carrying the old 25.0/60.0 DHT fallback constant. Both still LOOK like
+    # valid rows to every readiness counter, so without this gate the operator can
+    # train a model on mostly-degenerate data and get a confident number back.
+    fault_reasons = []
+    zero_fault = [r.id for r in rows
+                  if r.mq3_1_max is not None
+                  and not any(float(c) > 0.5 for c in (r.mq3_1_max, r.mq3_2_max, r.mq3_3_max))]
+    if zero_fault:
+        fault_reasons.append(f"{len(zero_fault)} row(s) have all MQ3 channels at zero "
+                             f"(no sensor mounted/wired): {zero_fault[:20]}")
+    dht_fault = [r.id for r in rows if r.temperature == 25.0 and r.humidity == 60.0]
+    if dht_fault:
+        fault_reasons.append(f"{len(dht_fault)} row(s) carry the legacy DHT fallback "
+                             f"constant 25.0/60.0: {dht_fault[:20]}")
+    no_sensor = [r.id for r in rows if r.mq3_1_max is None]
+    if no_sensor:
+        fault_reasons.append(f"{len(no_sensor)} row(s) never received a sensor window: "
+                             f"{no_sensor[:20]}")
+    if fault_reasons and not payload.allow_hardware_faults:
+        return {
+            "error": "Refusing to train: the dataset has a hardware fault",
+            "hardware_faults": fault_reasons,
+            "affected_rows": len(zero_fault) + len(dht_fault) + len(no_sensor),
+            "hint": "Delete or re-capture the flagged rows (see "
+                    "GET /training/collection-progress -> integrity), then retry. "
+                    "To train anyway, POST {\"allow_hardware_faults\": true}.",
+            "group_by": resolve_group_by(rows)[0],
+        }
+
     # One grouping key for the whole run: subject_id when every row has one,
     # otherwise trial_id. Used for both the classifier and the BAC regressor.
     group_by, group_key = resolve_group_by(rows)
@@ -1269,8 +1405,15 @@ def trigger_training(db: Session = Depends(get_db)):
     X_bac = []
     y_bac = []
     g_bac = []
+    # Rows whose DHT11 read failed carry NULL temperature/humidity. They cannot become
+    # feature vectors (sklearn needs numbers) and they must NOT be back-filled with a
+    # fabricated constant, so they are skipped and reported instead.
+    skipped_no_dht = 0
     for r in rows:
         if r.mq3_1_max is None:
+            continue
+        if r.temperature is None or r.humidity is None:
+            skipped_no_dht += 1
             continue
         # Build 18D feat (fallback to 15D if new cols missing/null)
         base = [r.mq3_1_max, r.mq3_1_avg, r.mq3_1_std, r.mq3_2_max, r.mq3_2_avg, r.mq3_2_std, r.mq3_3_max, r.mq3_3_avg, r.mq3_3_std, r.rise_time, r.decay_time, r.spatial_variance, r.spatial_variance_avg, r.temperature, r.humidity]
@@ -1299,17 +1442,25 @@ def trigger_training(db: Session = Depends(get_db)):
             y_bac.append(float(r.bac))
             g_bac.append(group_key(r))
     if not X:
-        return {"message": "No data with sensor features", "samples": 0, "group_by": group_by}
+        return {"message": "No data with sensor features", "samples": 0, "group_by": group_by,
+                "skipped_no_sensor_data": len([r for r in rows if r.mq3_1_max is None]),
+                "skipped_no_dht_reading": skipped_no_dht}
     clf_results = sensor_models.train(X, y, groups=groups)
     if isinstance(clf_results, dict) and clf_results.get("error"):
         return {"error": clf_results["error"], "samples": len(X), "trials": len(set(groups)),
                 "group_by": group_by, "warning": partial_tagging_warning(rows, group_by),
+                "skipped_no_dht_reading": skipped_no_dht,
                 "results": clf_results}
     bac_results = None
     if X_bac:
         bac_results = sensor_models.train_bac(X_bac, y_bac, groups=g_bac)
+    split_info = clf_results.get("split", {}) if isinstance(clf_results, dict) else {}
     return {"message": "Training running", "samples": len(X), "trials": len(set(groups)),
             "group_by": group_by, "warning": partial_tagging_warning(rows, group_by),
+            "skipped_no_dht_reading": skipped_no_dht,
+            # Split provenance: subject_aware=False means the accuracy in `results` is
+            # optimistic, because the same person can appear on both sides.
+            "split": split_info, "subject_aware_split": split_info.get("subject_aware"),
             "results": clf_results, "bac_results": bac_results,
             "bac_samples": len(X_bac)}
 
@@ -1336,10 +1487,16 @@ def train_mobilenet(payload: MobilenetPayload):
             face_dirs = {c: os.path.join(mobilenet.DATA_DIR, c) for c in mobilenet.CLASSES}
             counts = {k: len([f for f in os.listdir(p) if f.lower().endswith(('.jpg','.jpeg','.png'))]) if os.path.exists(p) else 0 for k,p in face_dirs.items()}
             total = sum(counts.values())
-            if total < 10:
-                _fmin = FACE_MIN_IMAGES_PER_CLASS()
+            # The gate must match the message and the trainer's own rule
+            # (mobilenet.MIN_IMAGES_PER_CLASS per class). It used to fire at a flat
+            # total < 10 while describing a per-class requirement of 90, so a request
+            # with e.g. 40 images sailed through to a ValueError from deep inside Keras.
+            _fmin = FACE_MIN_IMAGES_PER_CLASS()
+            starved = {c: n for c, n in counts.items() if n < _fmin}
+            if starved or total < _fmin:
                 return {"error": (f"Not enough face data: {counts} — need {_fmin} each "
                                   f"in every class ({_fmin * len(mobilenet.CLASSES)} total)"),
+                        "starved_classes": starved,
                         "counts": counts, "targets": readiness_targets()}
             history = mobilenet.train()
             # history returned, metrics saved inside train()

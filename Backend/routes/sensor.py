@@ -334,13 +334,16 @@ def indicator_bench(payload: dict):
 
 # ── Deployment sensor reading (ESP32 posts here in deployment) ─
 class SensorData(BaseModel):
-    temperature: float
-    humidity:    float
+    # Optional for the same reason as the training payload: a failed DHT11 read is
+    # recorded as NULL, never as a fabricated constant.
+    temperature: float | None = None
+    humidity:    float | None = None
     bac:         float | None = None
     mq3_1:       List[float]
     mq3_2:       List[float]
     mq3_3:       List[float]
     reading_id: int | None = None
+    dht_ok:      bool | None = None
     # Mode the firmware PINNED when /trigger was accepted. Optional so an older
     # firmware build still posts, but when present it must say "deployment" — this
     # endpoint owns sensor_readings.
@@ -513,8 +516,15 @@ def receive_sensor(data: SensorData, db: Session = Depends(get_db)):
 
     db.commit()
 
+    # Return the reading id so a caller can correlate this window with the
+    # /predict/full call it is about to make. Previously the only way to learn the
+    # id was to re-query the database for the newest row.
+    db.refresh(new_reading)
+
     return {
         "message":    "Saved",
+        "id":         new_reading.id,
+        "reading_id": new_reading.id,
         "label":      result["label"],
         "risk":       result.get("ph_verdict") or result["risk"],
         "confidence": result["confidence"],

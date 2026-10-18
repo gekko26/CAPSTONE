@@ -32,7 +32,7 @@ class Reading(Base):
     ear           = Column(Float)
     label         = Column(String(20))
     fusion_label  = Column(String(20))
-    denial_reason = Column(String(20), nullable=True)  # FIX 7: alcohol | fatigue | both
+    denial_reason = Column(String(64), nullable=True)  # FIX 7: joined human-readable reason labels
     height_offset_cm = Column(Float, nullable=True)  # height-offset feature (tape-measured rig constant)
     model_used    = Column(String(50))
     date          = Column(DateTime, server_default=func.now())
@@ -110,7 +110,7 @@ class DeploymentLog(Base):
     risk_level       = Column(String(20))
     estimated_bac    = Column(Float, nullable=True)  # PH regressor 0.00-0.40
     bac_tier         = Column(String(20), nullable=True)  # sober/trace/light/over
-    denial_reason    = Column(String(20), nullable=True)  # FIX 7: alcohol | fatigue | both | none
+    denial_reason    = Column(String(64), nullable=True)  # FIX 7: joined human-readable reason labels
     height_offset_cm = Column(Float, nullable=True)  # height-offset explicit feature
     model_version    = Column(String(50))
 

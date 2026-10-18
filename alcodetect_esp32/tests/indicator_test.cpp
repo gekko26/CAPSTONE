@@ -257,17 +257,39 @@ static void test_progress_states_are_never_red_green_or_yellow() {
 }
 
 static void test_yellow_is_red_plus_reduced_green() {
-    GROUP("YELLOW is red + reduced green (tuned by one constant)");
+    // YELLOW balances CURRENT, not duty.
+    //
+    // Red's Vf (2.0 V) is far below green's (3.1 V) on a 3.3 V rail, so at equal duty
+    // red always runs much hotter: with the documented 330 ohm red and 100 ohm green
+    // that is 3.94 mA against 2.00 mA -- a 1.97:1 mix that reads ORANGE.
+    //
+    // This used to pull the GREEN duty down to 190/255 to try to correct that. That is
+    // backwards: it reduced the already-weaker channel further, giving 0.68 mA against
+    // 3.94 mA -- a 5.8:1 ratio, i.e. MORE orange, not less. WARN was then hard to tell
+    // from FAIL, which is a gate-presentation failure.
+    //
+    // The fix reduces the RED duty instead, so the two currents match. Recompute if the
+    // channel resistors change: yellow.r = 255 * (I_green / I_red).
+    GROUP("YELLOW balances current by reducing RED duty");
     IndConfig c = cfg();
-    CHECK(c.yellow.r == c.red.r);
-    CHECK(c.yellow.g > 0 && c.yellow.g < c.green.g);   // green pulled down
+    CHECK(c.yellow.r > 0 && c.yellow.r < c.red.r);     // red pulled down
+    CHECK(c.yellow.g == c.green.g);                    // green stays at full
     CHECK(c.yellow.b == 0);
+    // The whole point: the resulting currents must be within ~15% of each other.
+    {
+        const float i_red   = (3.3f - 2.0f) / 330.0f * 1000.0f;   // mA per LED
+        const float i_green = (3.3f - 3.1f) / 100.0f * 1000.0f;
+        const float eff_red   = i_red   * c.yellow.r / 255.0f;
+        const float eff_green = i_green * c.yellow.g / 255.0f;
+        const float ratio = eff_red / eff_green;
+        CHECK(ratio > 0.85f && ratio < 1.18f);   // balanced => reads yellow, not orange
+    }
     Indicator ind; makeUp(ind);
     driveToAnalyzing(ind, 1000, 0, false);
     ind.submitVerdict("warn", true, ind.runId(), 7000);
     ind.tick(7100);
-    CHECK(g_sink.r == 255 && g_sink.b == 0);
-    CHECK(g_sink.g == (uint8_t)(255 * 190 / 255));
+    CHECK(g_sink.r == 129 && g_sink.b == 0);
+    CHECK(g_sink.g == 255);
 }
 
 // ── 7. training mode ──────────────────────────────────────────────────────────

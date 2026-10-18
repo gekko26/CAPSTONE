@@ -82,7 +82,10 @@ def test_a2_sensor_train_writes_all_three_artifacts(tmp_path, monkeypatch):
     results = sensor_models.train(X, y)
 
     assert "error" not in results, f"train() refused: {results}"
-    assert set(results) == {"random_forest", "xgboost"}, results.keys()
+    # Superset, not exact equality: the intent is "both models reported". train() also
+    # returns a "split" provenance block (grouped vs leaky row-level), which is
+    # deliberately additional information, not a missing model.
+    assert {"random_forest", "xgboost"} <= set(results), results.keys()
     for name in ("random_forest.pkl", "xgboost.pkl", "scaler.pkl"):
         assert (tmp_path / name).exists(), f"{name} was not written"
     for name in ("random_forest", "xgboost"):

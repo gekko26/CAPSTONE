@@ -30,7 +30,10 @@ STALE_SECONDS = 10 + SENSOR_PREROLL_MS / 1000.0
 
 # Existing column widths (VARCHAR(20)); no schema change is made.
 STATUS_COL_LEN = 20
-REASON_COL_LEN = 20
+# denial_reason holds the joined human-readable labels; the longest is
+# "Sensors flag alcohol, face looks sober" (38 chars). At 20 the audit trail was
+# silently cut mid-word, so it must match the column width and stop truncating.
+REASON_COL_LEN = 64
 
 router = APIRouter(prefix="/predict", tags=["predict"])
 
@@ -183,6 +186,8 @@ def _est_bac_if_both_alcohol(rf_class, xgb_class, getter):
 def _persist_decision(db, reading, decision, labels_joined, model_version):
     """Write status + joined reason labels into EXISTING varchar(20) columns."""
     reading.fusion_label = _trunc(decision.status, STATUS_COL_LEN)
+    # No truncation: REASON_COL_LEN now matches the column, so this keeps the full
+    # label. _trunc stays as a guard for anything unexpectedly longer.
     reading.denial_reason = _trunc(labels_joined, REASON_COL_LEN)
     db.commit()
 

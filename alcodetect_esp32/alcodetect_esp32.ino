@@ -500,12 +500,24 @@ void handleStatus() {
   float temp = dht.readTemperature();
   float hum  = dht.readHumidity();
 
+  // Instantaneous per-channel ADC readings, so verifying the sensor wiring is one
+  // command instead of a capture plus a database query. mq3_live counts channels
+  // currently reading above zero: with three sensors mounted it must be 3.
+  float mq1 = readMQ3(MQ3_PIN_1);
+  float mq2 = readMQ3(MQ3_PIN_2);
+  float mq3 = readMQ3(MQ3_PIN_3);
+  uint8_t mqLive = (uint8_t)((mq1 > 0.5f) + (mq2 > 0.5f) + (mq3 > 0.5f));
+
   String body = "{";
   body += "\"status\":\"online\",";
   body += "\"buffering\":" + String(isBuffering ? "true" : "false") + ",";
   body += "\"mode\":\"" + String(TRAINING_MODE ? "training" : "deployment") + "\",";
   body += "\"temperature\":" + (isnan(temp) ? "null" : String(temp, 1)) + ",";
   body += "\"humidity\":"    + (isnan(hum)  ? "null" : String(hum, 1))  + ",";
+  body += "\"mq3_1\":" + String(mq1, 1) + ",";
+  body += "\"mq3_2\":" + String(mq2, 1) + ",";
+  body += "\"mq3_3\":" + String(mq3, 1) + ",";
+  body += "\"mq3_live\":" + String(mqLive) + ",";
   body += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
   body += "\"sequence_state\":\"" + String(RelaySequence::stateName(relays.state())) + "\",";
   body += "\"preroll_ms\":" + String(PREROLL_MS) + ",";
@@ -578,6 +590,49 @@ void handleRelayTest() {
 // Display only. Authenticated by the shared token. This is the ONLY route that can
 // turn a verdict LED on, and it cannot do so without a matching run id while the
 // device is ANALYZING.
+// GET /selftest — hardware diagnostic, readable over Wi-Fi so a sensor fault can be
+// triaged without the serial monitor.
+//
+// Why min/max and not just a mean: a channel with its AOUT wired to a dead or
+// unpowered sensor reads a flat 0, and a channel whose wire has come loose reads
+// scattered noise. Both show a mean near zero, so the mean alone cannot tell them
+// apart. The spread can: max == min == 0 means the pin is being held low (sensor
+// unpowered, or AOUT shorted to GND), while max - min in the tens means a weak or
+// intermittent connection.
+void handleSelfTest() {
+  const int kSamples = 40;
+  const int kDelayMs = 25;
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  bool dhtOk = !isnan(t) && !isnan(h);
+
+  String body = "{\"dht\":";
+  body += dhtOk ? String(t, 1) : "null";
+  body += ",\"humidity\":";
+  body += dhtOk ? String(h, 1) : "null";
+  body += ",\"samples_per_channel\":" + String(kSamples);
+  body += ",\"channels\":{";
+  for (int i = 0; i < 3; i++) {
+    int pin = (i == 0) ? MQ3_PIN_1 : (i == 1) ? MQ3_PIN_2 : MQ3_PIN_3;
+    const char* name = (i == 0) ? "mq3_1" : (i == 1) ? "mq3_2" : "mq3_3";
+    int lo = 4095, hi = 0;
+    long sum = 0;
+    for (int s = 0; s < kSamples; s++) {
+      int v = analogRead(pin);
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+      sum += v;
+      delay(kDelayMs);
+    }
+    if (i) body += ",";
+    body += "\"" + String(name) + "\":{\"pin\":" + String(pin) +
+            ",\"min\":" + String(lo) + ",\"max\":" + String(hi) +
+            ",\"mean\":" + String(sum / (float)kSamples, 1) + "}";
+  }
+  body += "}}";
+  server.send(200, "application/json", body);
+}
+
 void handleIndicator() {
   // No token compiled in -> refuse, and the indicators stay OFF. Fail closed.
   if (!tokenConfigured()) {
@@ -670,21 +725,28 @@ void postSensorData() {
     return;
   }
 
-  // Read DHT11
+  // Read DHT11. A failed read is reported as JSON null, NEVER substituted with a
+  // plausible-looking constant: 25.0/60.0 was silently learned by the scaler as a real
+  // room temperature, and any later real reading became a distribution shift.
   float temperature = dht.readTemperature();
   float humidity    = dht.readHumidity();
+  bool  dhtOk       = !isnan(temperature) && !isnan(humidity);
 
-  if (isnan(temperature) || isnan(humidity)) {
-    Serial.println("⚠ DHT11 read failed — using fallback values");
-    temperature = 25.0;
-    humidity    = 60.0;
+  if (!dhtOk) {
+    Serial.println("⚠ DHT11 read failed — sending null, not a fabricated value");
   }
 
   // Build JSON body
   StaticJsonDocument<2048> doc;
 
-  doc["temperature"] = temperature;
-  doc["humidity"]    = humidity;
+  if (dhtOk) {
+    doc["temperature"] = temperature;
+    doc["humidity"]    = humidity;
+  } else {
+    doc["temperature"] = nullptr;
+    doc["humidity"]    = nullptr;
+  }
+  doc["dht_ok"]      = dhtOk;
   // Tag the payload with the mode it was sampled in, so the backend can refuse a
   // reading that arrives at the wrong endpoint instead of trusting it blindly.
   doc["mode"] = activeTrainingMode ? MODE_TRAINING : MODE_DEPLOYMENT;
@@ -714,7 +776,8 @@ void postSensorData() {
 
   Serial.println("→ Posting to: " + url);
   Serial.println("  Samples: " + String(buf1.size()));
-  Serial.println("  Temp: " + String(temperature, 1) + "°C  Hum: " + String(humidity, 1) + "%");
+  Serial.println(dhtOk ? ("  Temp: " + String(temperature, 1) + "°C  Hum: " + String(humidity, 1) + "%")
+                       : "  Temp: <DHT FAILED>  Hum: <DHT FAILED>");
   Serial.println("  MQ3-1 max: " + String(*max_element(buf1.begin(), buf1.end()), 0));
   Serial.println("  MQ3-2 max: " + String(*max_element(buf2.begin(), buf2.end()), 0));
   Serial.println("  MQ3-3 max: " + String(*max_element(buf3.begin(), buf3.end()), 0));
@@ -814,6 +877,7 @@ void setup() {
   server.on("/relay_test", HTTP_GET, handleRelayTest);
   server.on("/mode",    HTTP_GET,  handleMode);
   server.on("/indicator", HTTP_POST, handleIndicator);
+  server.on("/selftest", HTTP_GET, handleSelfTest);
   server.onNotFound(handleNotFound);
   server.begin();
 

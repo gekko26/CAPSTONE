@@ -271,7 +271,15 @@ export default function People() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-[11px] font-medium truncate leading-none" style={{ color: "var(--text-primary)" }}>{p.name}</div>
-                    <div className="text-[9px] font-mono truncate leading-none mt-1" style={{ color: "var(--text-muted)" }}>ID {p.id_number || p.face_id}</div>
+                    {/* TWO different identifiers, deliberately labelled apart. "Card ID"
+                        is face_id (the student/staff number). "Subject #" is the
+                        subjects.id primary key that /training/relabel and /tag-rows
+                        validate against. Showing only the card ID made the subject key
+                        undiscoverable and invited a wrong-person tag. */}
+                    <div className="flex items-center gap-1.5 text-[9px] font-mono truncate leading-none mt-1" style={{ color: "var(--text-muted)" }}>
+                      {p.id_number || p.face_id ? <span>Card {p.id_number || p.face_id}</span> : null}
+                      <span style={{ color: "var(--text-secondary)" }}>· Subject #{p.id}</span>
+                    </div>
                   </div>
                   <span className="text-[8px] px-1.5 py-0.5 rounded-full border font-medium shrink-0" style={{ color: "var(--pass)", borderColor: "var(--pass)", background: "var(--pass-bg)" }}>{p.auth}</span>
                 </button>

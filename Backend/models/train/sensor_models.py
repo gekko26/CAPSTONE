@@ -182,8 +182,8 @@ def extract_features(window_1, window_2, window_3, temp, humidity):
         decay_time,                  # [10]
         spatial_variance_max,        # [11]
         spatial_variance_avg,        # [12]
-        float(temp),                 # [13]
-        float(humidity),             # [14]
+        (float(temp) if temp is not None else None),          # [13]
+        (float(humidity) if humidity is not None else None),  # [14]
         breath_ratio,                # [15] Plan A
         sanitizer_ratio,             # [16] Plan A (jaw+chest vs nose)
         spatial_direction,           # [17] Plan A
@@ -261,25 +261,48 @@ def train(X, y, groups=None):
         ug, gc = np.unique(groups, return_counts=True)
         print(f"Trials: {len(ug)} distinct trial_id, rows per trial avg {len(y)/len(ug):.1f}")
 
-    # Use GroupKFold when groups available, else stratified
-    if groups is not None and len(np.unique(groups)) >= 3:
-        n_splits = min(5, len(np.unique(groups)))
+    # Use GroupKFold when groups available, else stratified.
+    # Below 3 distinct groups GroupKFold cannot produce a valid hold-out, so the code
+    # falls back to a random row-level split. That fallback is the one that leaks: the
+    # same person's captures land on both sides and the reported accuracy is optimistic.
+    # It is not an error -- small datasets still train -- but it must never be silent.
+    grouping_warning = None
+    n_groups = int(len(np.unique(groups))) if groups is not None else 0
+    if groups is not None and n_groups >= 3:
+        n_splits = min(5, n_groups)
         gkf = GroupKFold(n_splits=n_splits)
         # For final model fit, use all data with scaler; evaluation via grouped CV separately
         # Here we keep simple hold-out for scaler fit using last fold
         splits = list(gkf.split(X, y, groups))
         train_idx, test_idx = splits[-1]  # last fold as hold-out for metrics
+        split_kind = "grouped"
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
         print(f"Grouped split: train {len(y_train)} rows ({len(np.unique(groups[train_idx]))} trials), test {len(y_test)} rows ({len(np.unique(groups[test_idx]))} trials)")
     elif len(y) < 10:
         X_train, X_test = X, X
         y_train, y_test = y, y
+        split_kind = "in_sample"
+        grouping_warning = (
+            f"Only {len(y)} rows: trained and scored on the SAME data, so the reported "
+            "accuracy is 1.0 by construction and means nothing. Collect more before "
+            "trusting any metric.")
     else:
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42, stratify=y
         )
         print("Random stratified split (no groups) — not recommended for correlated rows")
+        split_kind = "random_row_level"
+        if groups is not None:
+            grouping_warning = (
+                f"Only {n_groups} distinct group(s) in the data (3 are needed for a "
+                "GroupKFold split). Fell back to a random ROW-level split, so the same "
+                "person's captures can appear on both sides and the accuracy below is "
+                "optimistic. Enrol and tag at least 3 subjects, then retrain.")
+        else:
+            grouping_warning = (
+                "No subject or trial grouping available — the split is row-level, so it "
+                "is not subject-aware and the accuracy below is optimistic.")
 
     # Class weight handling for imbalance (item 6)
     # Compute balanced weights; RF will use class_weight, XGB via sample_weight
@@ -403,6 +426,15 @@ def train(X, y, groups=None):
 
     # Persist REAL evaluation metrics for the frontend
     from models.train.metrics_store import save_metrics
+    # Split provenance travels with the results. The caller must be able to tell a
+    # valid subject-level evaluation from a leaky row-level one without reading logs.
+    results = dict(results)
+    results["split"] = {
+        "kind": split_kind,
+        "distinct_groups": n_groups,
+        "subject_aware": split_kind == "grouped",
+        "warning": grouping_warning,
+    }
     save_metrics("sensor", results)
     print("✅ Metrics saved to metrics.json")
 
