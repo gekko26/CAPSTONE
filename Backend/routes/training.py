@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from database.db import get_db
 from database.models import Subject, TrainingData
+from models.train.session_plan import baseline_stability
 from models.train import sensor_models
 from models.train.sensor_models import (
     BAC_NEAR_LIMIT,
@@ -772,9 +773,50 @@ def subject_coverage(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/session-plan")
+def session_plan(db: Session = Depends(get_db)):
+    """What is still left to capture, per enrolled person and overall.
+
+    Read-only: two SELECTs and no file access. Returns per-person counts and
+    remaining against PER_PERSON_QUOTA, the next event to capture, dataset-level
+    readiness headroom, and whether the recent clear-air baseline has settled.
+
+    The baseline block is a WARNING only. It reports; it never blocks a capture,
+    a tag or a training run -- see models/train/session_plan.py.
+
+    Subjects are returned as id plus the display name the existing subjects
+    endpoint already exposes. No other personal field is included.
+    """
+    from models.train.session_plan import (
+        PER_PERSON_QUOTA, baseline_stability, build_session_plan,
+    )
+    from database.models import Subject
+
+    rows = db.query(TrainingData).filter(TrainingData.label >= 0).all()
+    subjects = db.query(Subject).order_by(Subject.id).all()
+
+    plan = build_session_plan(rows, subjects, targets=readiness_targets(),
+                              quotas=PER_PERSON_QUOTA)
+
+    clear_air_rows = sorted(
+        (r for r in rows
+         if event_key_for_row(r.label, r.sub_label) == "clear_air"
+         and r.mq3_1_avg is not None),
+        key=lambda r: (r.date is None, r.date, r.id),
+    )
+    plan["baseline"] = baseline_stability(clear_air_rows)
+    return plan
+
+
 # Rows that are SUPPOSED to have a captured frame. clear_air and sanitizer are
 # manual gas triggers with no camera frame, so they are never "missing" an image.
 _NO_IMAGE_SUB_LABELS = {"clear_air", "sanitizer"}
+
+
+def event_key_for_row(label, sub_label):
+    """Re-exported from the pure helper so this module has one mapping, not two."""
+    from models.train.session_plan import event_key_for_row as _impl
+    return _impl(label, sub_label)
 
 
 def _row_expects_image(row):
@@ -987,6 +1029,13 @@ def collection_progress(db: Session = Depends(get_db)):
             "fallback_dht_rows": len(fallback_dht_rows),
             "fallback_dht_row_ids": fallback_dht_rows[:50],
         },
+        # Advisory only. Appended, never substituted: every pre-existing key of this
+        # response keeps its exact name and meaning.
+        "baseline": baseline_stability(
+            sorted((r for r in usable
+                    if event_key_for_row(r.label, r.sub_label) == "clear_air"
+                    and r.mq3_1_avg is not None),
+                   key=lambda r: (r.date is None, r.date, r.id))),
     }
 
 

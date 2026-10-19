@@ -10,6 +10,7 @@ import { API_BASE as BASE } from "../api";
 import { getTiming, busySeconds, phaseAt, FALLBACK_TIMING } from "../config/timing";
 import { DeviceModeBadge } from "../components/DeviceMode";
   import { FaceUploadPanel } from "../components/FaceUploadPanel";
+import { SessionPlanPanel } from "../components/SessionPlanPanel";
 import { useDeviceMode } from "../config/deviceMode";
 const FRAME_MS    = 60;   // 15 FPS max for stream1 — max fps without affecting other functionalities, quality 78
 const ANALYZE_MS  = 380;  // decoupled analysis — keeps autocapture responsive
@@ -1125,6 +1126,8 @@ export default function Training() {
               </p>
             </div>
           )}
+          <SessionPlanPanel refreshKey={`${rows.length}:${coverage?.rows_with_subject_id ?? 0}`} />
+
           {/* ── Collection checklist (TASK 5) — driven only by /training/collection-progress ── */}
           <div className="p-2 rounded-lg border text-xs space-y-1" style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
             <div className="text-[11px] uppercase font-medium" style={{ color: "var(--text-muted)" }}>Collection checklist</div>
