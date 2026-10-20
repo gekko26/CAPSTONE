@@ -1,0 +1,11 @@
+#!/bin/sh
+# Pre-push gate: run repo verification before pushing.
+# Bypass in emergencies: git push --no-verify.
+
+echo "==> Backend tests"
+python3 -m pytest Backend/tests/ -q || exit 1
+
+echo "==> Frontend lint"
+(cd Frontend && npm run lint --silent) || exit 1
+
+echo "==> Pre-push checks passed"
