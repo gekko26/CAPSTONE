@@ -10,6 +10,7 @@
 #include "../dfplayer.h"
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 
 static int g_pass = 0, g_fail = 0;
 static const char* g_group = "";
@@ -61,20 +62,23 @@ static void driveToAnalyzing(Indicator& ind, uint32_t t0, long triggerId = 0,
     ind.onSamplingEnd(t0 + 5000);
 }
 
-// ── 1. boot state ─────────────────────────────────────────────────────────────
+// ── 1. boot state: silent, and showing only the active blink ─────────────────
 static void test_boot_state_is_off_and_silent() {
-    GROUP("boot state is OFF and silent");
+    GROUP("boot drives no clip and no verdict colour; only the active blink");
     Indicator ind;
     g_sink = Sink();
     IndConfig c = cfg();
     ind.begin(fakeLed, fakeClip, 0, &c);
     ind.setAudioReady(true);
     CHECK(ind.state() == IND_IDLE);
-    CHECK(g_sink.ledWrites == 0);          // nothing driven at boot
+    CHECK(g_sink.ledWrites == 0);          // nothing driven before the first tick
     CHECK(g_sink.clips == 0);              // nothing spoken at boot
-    ind.tick(0);
-    CHECK(ind.state() == IND_IDLE);
-    CHECK(g_sink.r == 0 && g_sink.g == 0 && g_sink.b == 0);
+    ind.tick(0);                           // blink on-phase
+    CHECK(g_sink.r == 0 && g_sink.g == 0);
+    CHECK(g_sink.b == 200);                // blue at progressDuty
+    ind.tick(500);                         // blink off-phase
+    CHECK(g_sink.b == 0);
+    CHECK(g_sink.clips == 0);              // and still silent
 }
 
 // ── 2. GREEN only via submitVerdict with a matching run id while ANALYZING ─────
@@ -200,16 +204,19 @@ static void test_verdict_after_deadline_is_refused() {
 
 // ── 5. hold and cancellation ──────────────────────────────────────────────────
 static void test_verdict_hold_expires_to_idle() {
-    GROUP("verdict holds for IND_RESULT_HOLD_MS then returns to idle");
+    GROUP("verdict holds for IND_RESULT_HOLD_MS then returns to the active blink");
     Indicator ind; makeUp(ind);
     driveToAnalyzing(ind, 1000, 0, false);
     ind.submitVerdict("fail", true, ind.runId(), 7000);
     CHECK(ind.state() == IND_FAIL);
     ind.tick(7000 + IND_RESULT_HOLD_MS - 50);
     CHECK(ind.state() == IND_FAIL);              // still held
-    ind.tick(7000 + IND_RESULT_HOLD_MS + 50);
+    ind.tick(7000 + IND_RESULT_HOLD_MS + 50);    // t=15050 -> blink on-phase
     CHECK(ind.state() == IND_IDLE);
-    CHECK(g_sink.r == 0 && g_sink.g == 0 && g_sink.b == 0);
+    CHECK(g_sink.r == 0 && g_sink.g == 0);
+    CHECK(g_sink.b == 200);                      // back to the active blink
+    ind.tick(7000 + IND_RESULT_HOLD_MS + 550);   // off-phase
+    CHECK(g_sink.b == 0);
 }
 
 static void test_new_trigger_cancels_a_hold() {
@@ -294,19 +301,24 @@ static void test_yellow_is_red_plus_reduced_green() {
 
 // ── 7. training mode ──────────────────────────────────────────────────────────
 static void test_training_mode_is_off_and_silent() {
-    GROUP("TRAINING mode: LEDs off, no clips, verdicts refused");
+    GROUP("TRAINING mode: only the active blink; no clips; verdicts refused");
     Indicator ind; makeUp(ind);
     ind.setTrainingMode(true);
     ind.applyProgress("person_detected", 1000);
     CHECK(ind.state() == IND_IDLE);                 // refused
-    CHECK(g_sink.r == 0 && g_sink.g == 0 && g_sink.b == 0);
     CHECK(g_sink.clips == 0);
+    ind.tick(1000);                                 // blink on-phase
+    CHECK(g_sink.r == 0 && g_sink.g == 0);
+    CHECK(g_sink.b == 200);                         // blue blink, never a run colour
+    ind.tick(1500);                                 // blink off-phase
+    CHECK(g_sink.b == 0);
     ind.onTrigger(1100, 0, false);
     CHECK(ind.state() == IND_IDLE);                 // no sampling colour
+    CHECK(g_sink.clips == 0);
     ind.onSamplingEnd(6100);
     CHECK(ind.state() == IND_IDLE);
     ind.tick(20000);
-    CHECK(g_sink.r == 0 && g_sink.g == 0 && g_sink.b == 0);
+    CHECK(g_sink.r == 0 && g_sink.g == 0 && g_sink.b == 200);
     // a verdict is refused outright
     CHECK(!ind.submitVerdict("pass", true, 1, 21000));
     CHECK(ind.state() == IND_IDLE);
@@ -322,6 +334,136 @@ static void test_leaving_training_mode_restores_normal_behaviour() {
     ind.setTrainingMode(false);
     CHECK(ind.applyProgress("person_detected", 2000));
     CHECK(ind.state() == IND_PERSON_DETECTED);
+}
+
+// ── 7b. system-active idle blink ──────────────────────────────────────────────
+static void test_idle_blink_is_blue_only_and_active_in_both_modes() {
+    GROUP("idle blinks blue on IND_IDLE_BLINK_MS, identically in training");
+    // Deployment: sweep the full period and confirm the square blink.
+    Indicator ind; makeUp(ind);
+    bool sawOn = false, sawOff = false;
+    for (uint32_t t = 0; t < IND_IDLE_BLINK_MS * 2; t += 100) {
+        uint8_t expected =
+            (t % IND_IDLE_BLINK_MS) < (IND_IDLE_BLINK_MS / 2) ? 200 : 0;
+        ind.tick(t);
+        CHECK(ind.state() == IND_IDLE);
+        CHECK(g_sink.r == 0 && g_sink.g == 0);          // blink drives blue ONLY
+        CHECK(g_sink.b == expected);
+        if (expected) sawOn = true; else sawOff = true;
+    }
+    CHECK(sawOn && sawOff);
+    CHECK(g_sink.clips == 0);                            // the blink says nothing
+
+    // Training: exactly the same blink — a presence signal, not a judgement.
+    Indicator tr; makeUp(tr);
+    tr.setTrainingMode(true);
+    for (uint32_t t = 0; t < IND_IDLE_BLINK_MS * 2; t += 100) {
+        uint8_t expected =
+            (t % IND_IDLE_BLINK_MS) < (IND_IDLE_BLINK_MS / 2) ? 200 : 0;
+        tr.tick(t);
+        CHECK(tr.state() == IND_IDLE);
+        CHECK(g_sink.r == 0 && g_sink.g == 0);
+        CHECK(g_sink.b == expected);
+    }
+    CHECK(g_sink.clips == 0);                            // still silent in training
+}
+
+// ── 7c. bench path (GET /indicator_test → benchState) ────────────────────────
+static void test_bench_never_paints_green() {
+    GROUP("the bench cannot reach GREEN/PASS, from any state");
+    Indicator ind; makeUp(ind);
+    CHECK(!ind.benchState("pass", 1000));
+    CHECK(ind.state() == IND_IDLE);                     // unchanged, blink continues
+    ind.applyProgress("person_detected", 1100);
+    ind.applyProgress("idle", 1200 + IND_CUE_COOLDOWN_MS + 100);   // back to idle
+    CHECK(!ind.benchState("pass", 12200));
+    CHECK(ind.state() == IND_IDLE);
+    CHECK(g_sink.g == 0);                               // never green from the bench
+}
+
+static void test_bench_lights_every_allowed_state_and_releases_to_the_blink() {
+    GROUP("bench warn/fail/progress light, then fall back to the active blink");
+    struct Case { const char* name; bool isVerdict; };
+    const Case cases[] = {
+        {"person_detected", false}, {"sampling", false}, {"analyzing", false},
+        {"warn", true}, {"fail", true},
+    };
+    for (const Case& c : cases) {
+        Indicator ind; makeUp(ind);
+        const uint32_t t0 = 1000;
+        CHECK(ind.benchState(c.name, t0));
+        ind.tick(t0 + 100);
+        if (c.isVerdict) {
+            CHECK(ind.state() == (strcmp(c.name, "warn") == 0 ? IND_WARN : IND_FAIL));
+            CHECK(g_sink.b == 0);                       // verdicts never blue-tinted
+            if (strcmp(c.name, "warn") == 0)
+                CHECK(g_sink.r == 129 && g_sink.g == 255);   // yellow
+            else
+                CHECK(g_sink.r == 255 && g_sink.g == 0);      // red
+        } else {
+            CHECK(g_sink.r == 0 && g_sink.g == 0);      // blue-only family
+            CHECK(g_sink.b > 0);
+        }
+        // and every one of them releases back to the system-active blink
+        ind.tick(t0 + IND_RESULT_HOLD_MS - 50);
+        CHECK(ind.state() != IND_IDLE);                 // still held
+        ind.tick(t0 + IND_RESULT_HOLD_MS + 50);         // +8050 vs t0 -> blink on-phase
+        CHECK(ind.state() == IND_IDLE);
+        CHECK(g_sink.r == 0 && g_sink.g == 0);
+        CHECK(g_sink.b == 200);
+        ind.tick(t0 + IND_RESULT_HOLD_MS + 550);        // off-phase
+        CHECK(g_sink.b == 0);
+    }
+}
+
+static void test_bench_repress_relights_the_state() {
+    GROUP("re-pressing a bench state re-arms the hold");
+    Indicator ind; makeUp(ind);
+    CHECK(ind.benchState("warn", 1000));
+    CHECK(ind.state() == IND_WARN);
+    // one tick before the first hold would expire, press warn again
+    CHECK(ind.benchState("warn", 1000 + IND_RESULT_HOLD_MS - 100));
+    ind.tick(1000 + IND_RESULT_HOLD_MS + 50);           // the old deadline has passed
+    CHECK(ind.state() == IND_WARN);                      // re-armed by the re-press
+    ind.tick(1000 + IND_RESULT_HOLD_MS + 100);
+    CHECK(g_sink.r == 129 && g_sink.g == 255 && g_sink.b == 0);
+    // and pressing the state the machine is already in re-lights it identically
+    CHECK(ind.benchState("warn", 1000 + IND_RESULT_HOLD_MS + 200));
+    ind.tick(1000 + 2 * IND_RESULT_HOLD_MS - 50);
+    CHECK(ind.state() == IND_WARN);
+    ind.tick(1000 + 2 * IND_RESULT_HOLD_MS + 300);   // 17300: past the re-armed hold
+    CHECK(ind.state() == IND_IDLE);                      // settles back to the blink
+}
+
+static void test_bench_refused_during_a_live_run() {
+    GROUP("the bench refuses to repaint a live SAMPLING/ANALYZING run");
+    Indicator ind; makeUp(ind);
+    driveToAnalyzing(ind, 1000, 0, false);
+    CHECK(ind.state() == IND_ANALYZING);
+    for (const char* name : {"sampling", "analyzing", "warn", "fail",
+                             "person_detected", "idle"}) {
+        CHECK(!ind.benchState(name, 7000));             // every bench state refused
+    }
+    CHECK(ind.state() == IND_ANALYZING);                // the run is untouched
+    long run = ind.runId();
+    CHECK(ind.submitVerdict("warn", true, run, 7100));  // the real path still works
+}
+
+static void test_bench_refused_in_training() {
+    GROUP("the bench is refused in training; only the blink shows");
+    Indicator ind; makeUp(ind);
+    ind.setTrainingMode(true);
+    for (const char* name : {"person_detected", "sampling", "analyzing",
+                             "warn", "fail", "idle"}) {
+        g_sink = Sink();
+        CHECK(!ind.benchState(name, 1000));
+        CHECK(ind.state() == IND_IDLE);
+        ind.tick(1100);
+        CHECK(g_sink.r == 0 && g_sink.g == 0);          // blink only
+        CHECK(g_sink.b == 200 || g_sink.b == 0);        // on/off phase, nothing else
+        CHECK(g_sink.clips == 0);                       // and silence
+    }
+    CHECK(!ind.benchState("pass", 20000));              // GREEN doubly unreachable
 }
 
 // ── 8. audio policy ───────────────────────────────────────────────────────────
@@ -359,10 +501,11 @@ static void test_person_detected_safety_net_returns_to_idle() {
     ind.applyProgress("person_detected", 1000);
     ind.tick(1000 + IND_PERSON_HOLD_MS - 10);
     CHECK(ind.state() == IND_PERSON_DETECTED);
-    ind.tick(1000 + IND_PERSON_HOLD_MS + 10);
+    ind.tick(1000 + IND_PERSON_HOLD_MS + 10);    // t=61010 -> blink on-phase
     CHECK(ind.state() == IND_IDLE);
     ind.tick(1000 + IND_PERSON_HOLD_MS + 20);
-    CHECK(g_sink.r == 0 && g_sink.g == 0 && g_sink.b == 0);
+    CHECK(g_sink.r == 0 && g_sink.g == 0);
+    CHECK(g_sink.b == 200);                      // active blink, not dark, not stale blue
 }
 
 // ── 9. absent audio never blocks the loop ─────────────────────────────────────
@@ -496,8 +639,13 @@ static void test_common_anode_inverts_duty() {
     CHECK(g_sink.r == 255);        // red channel driven OFF
     CHECK(g_sink.g == 0);          // green channel driven ON (sinking)
     CHECK(g_sink.b == 255);        // blue channel driven OFF
-    // idle means "LED dark", which under common anode is every pin HIGH
-    b.tick(7100 + IND_RESULT_HOLD_MS + 50);
+    // idle means "the active blink": blue 500 ms on / 500 ms off. Under common
+    // anode the ON-phase blue duty (200) is written as 255-200 = 55.
+    b.tick(7100 + IND_RESULT_HOLD_MS + 50);          // t=15150 -> blink on-phase
+    CHECK(g_sink.r == 255);        // red channel driven OFF
+    CHECK(g_sink.g == 255);        // green channel driven OFF
+    CHECK(g_sink.b == 55);         // blue channel driven ON, inverted duty
+    b.tick(7100 + IND_RESULT_HOLD_MS + 550);         // blink off-phase -> dark
     CHECK(g_sink.r == 255 && g_sink.g == 255 && g_sink.b == 255);
 }
 
@@ -539,6 +687,12 @@ int main() {
     test_yellow_is_red_plus_reduced_green();
     test_training_mode_is_off_and_silent();
     test_leaving_training_mode_restores_normal_behaviour();
+    test_idle_blink_is_blue_only_and_active_in_both_modes();
+    test_bench_never_paints_green();
+    test_bench_lights_every_allowed_state_and_releases_to_the_blink();
+    test_bench_repress_relights_the_state();
+    test_bench_refused_during_a_live_run();
+    test_bench_refused_in_training();
     test_verdict_clip_preempts_a_playing_cue();
     test_cue_cooldown_stops_repeat_person_detected();
     test_person_detected_safety_net_returns_to_idle();

@@ -22,6 +22,21 @@ from models.train import mobilenet, sensor_models  # noqa: E402
 
 
 # ----------------------------------------------------------------------------------
+# suite-wide isolation
+# ----------------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _redirect_metrics_store(tmp_path, monkeypatch):
+    """trigger_training() now runs an automatic LOPO evaluation that persists to
+    metrics.json. These tests call the route function directly (no rehearsal
+    sandbox), so the metrics paths must be redirected here — the suite must
+    never write into the real models/saved/."""
+    from models.train import metrics_store as ms
+    monkeypatch.setattr(ms, "SAVE_DIR", str(tmp_path))
+    monkeypatch.setattr(ms, "METRICS_PATH", str(tmp_path / "metrics.json"))
+
+
+# ----------------------------------------------------------------------------------
 # helpers
 # ----------------------------------------------------------------------------------
 

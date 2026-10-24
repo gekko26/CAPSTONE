@@ -160,6 +160,7 @@ const char* DEPLOYMENT_ENDPOINT = "/sensor";
 #define SLOW_PULSE_MS       IND_SLOW_PULSE_MS
 #define FAST_PULSE_MS       IND_FAST_PULSE_MS
 #define PERSON_HOLD_MS      IND_PERSON_HOLD_MS
+#define IDLE_BLINK_MS       IND_IDLE_BLINK_MS
 
 
 // ── Sampling config ───────────────────────────────────────────
@@ -308,6 +309,7 @@ static IndConfig makeIndicatorConfig() {
   c.fastPulseMs      = FAST_PULSE_MS;
   c.cueCooldownMs    = CUE_COOLDOWN_MS;
   c.personTimeoutMs  = PERSON_HOLD_MS;
+  c.idleBlinkPeriodMs = IDLE_BLINK_MS;
   c.commonAnode      = LED_COMMON_ANODE;
   return c;
 }
@@ -717,6 +719,60 @@ void handleNotFound() {
   server.send(404, "application/json", "{\"error\":\"Endpoint not found\"}");
 }
 
+// GET /indicator_test?state=<name>&volume=0..30
+// LED/voice wiring bench, the indicator twin of /relay_test: a bare GET from a
+// browser fires a display state. Rules (enforced by indicator.h benchState()):
+// idle-only while a sequence runs (409), volume clamped, every state auto-releases
+// to the active blink after RESULT_HOLD_MS, GREEN/PASS never benchable, and
+// training mode answers 409 with nothing repainted. Fail closed like POST
+// /indicator: with no token compiled in the device answers 503 and shows nothing.
+// ⚠ No per-request token — same risk class as /mode and /relay_test, see
+// docs/INDICATORS_WIRING.md §10.
+void handleIndicatorTest() {
+  if (!tokenConfigured()) {
+    server.send(503, "application/json",
+      "{\"error\":\"indicator token not configured on device\",\"indicator_enabled\":false}");
+    return;
+  }
+  if (relays.busy()) {
+    server.send(409, "application/json",
+      "{\"status\":\"busy\",\"message\":\"Sequence busy\",\"busy\":true}");
+    return;
+  }
+  String state = server.arg("state");
+  if (state.length() == 0) {
+    server.send(400, "application/json",
+      "{\"error\":\"Pass ?state=<name>. Allowed: person_detected, sampling, "
+      "analyzing, warn, fail, off\"}");
+    return;
+  }
+  if (state == "off") state = "idle";   // UI parity: same mapping as the backend bench
+
+  // Optional bench volume for wiring checks, clamped exactly like POST /indicator.
+  if (server.hasArg("volume")) {
+    int v = (int)atol(server.arg("volume").c_str());
+    if (v < 0) v = 0;
+    if (v > DFPLAYER_VOLUME) v = DFPLAYER_VOLUME;
+    uint8_t f[DFPLAYER_FRAME_LEN];
+    if (dfplayer_frame_volume(f, (uint8_t)v) == DFPLAYER_FRAME_LEN) dfSend(f);
+  }
+
+  uint32_t now = millis();
+  if (indicator.benchState(state.c_str(), now)) {
+    server.send(200, "application/json",
+      "{\"status\":\"ok\",\"indicator_state\":\"" + String(indicator.stateName()) +
+      "\",\"hold_ms\":" + String(RESULT_HOLD_MS) + ",\"audio_ready\":" +
+      String(audioReadyFlag ? "true" : "false") + "}");
+    Serial.println("◉ Indicator test — state=" + String(indicator.stateName()));
+  } else {
+    server.send(409, "application/json",
+      "{\"status\":\"refused\",\"indicator_state\":\"" + String(indicator.stateName()) +
+      "\",\"mode\":\"" + String(modeName()) + "\"}");
+    Serial.println("⚠ Indicator test refused — state=" + String(state) +
+                   " mode=" + String(modeName()));
+  }
+}
+
 // ── Post sensor data to backend ───────────────────────────────
 void postSensorData() {
   if (buf1.size() < MIN_SAMPLES) {
@@ -842,7 +898,7 @@ void setup() {
   indicatorLed(0, 0, 0);
   IndConfig indCfg = makeIndicatorConfig();
   indicator.begin(indicatorLed, indicatorClip, indicatorLog, &indCfg);
-  indicator.setTrainingMode(TRAINING_MODE);   // training => LEDs OFF, no clips
+  indicator.setTrainingMode(TRAINING_MODE);   // training => verdict/progress colours and clips suppressed; the active blink stays
 
   // DFPlayer: UART comes up, but audio only reports ready after init succeeds.
   // A missing module, wrong baud or absent SD card must never block boot.
@@ -875,6 +931,7 @@ void setup() {
   server.on("/trigger", HTTP_POST, handleTrigger);
   server.on("/status",  HTTP_GET,  handleStatus);
   server.on("/relay_test", HTTP_GET, handleRelayTest);
+  server.on("/indicator_test", HTTP_GET, handleIndicatorTest);
   server.on("/mode",    HTTP_GET,  handleMode);
   server.on("/indicator", HTTP_POST, handleIndicator);
   server.on("/selftest", HTTP_GET, handleSelfTest);
@@ -885,6 +942,8 @@ void setup() {
   Serial.println("  POST http://" + WiFi.localIP().toString() + "/trigger");
   Serial.println("  GET  http://" + WiFi.localIP().toString() + "/status");
   Serial.println("  GET  http://" + WiFi.localIP().toString() + "/mode?training=1");
+  Serial.println("  GET  http://" + WiFi.localIP().toString() + "/relay_test?fan=1&blower=1&ms=800");
+  Serial.println("  GET  http://" + WiFi.localIP().toString() + "/indicator_test?state=warn");
   Serial.println("\n  ───────────────────────────────────────────");
   Serial.println("  DEVICE MODE: " + String(modeName()));
   Serial.println("  POST target: " + String(activeTrainingMode ? TRAINING_ENDPOINT : DEPLOYMENT_ENDPOINT) + " (pinned at trigger)");

@@ -1451,6 +1451,7 @@ def trigger_training(db: Session = Depends(get_db), payload: TrainPayload = None
     X = []
     y = []
     groups = []
+    row_subjects = []
     X_bac = []
     y_bac = []
     g_bac = []
@@ -1485,6 +1486,7 @@ def trigger_training(db: Session = Depends(get_db), payload: TrainPayload = None
         X.append(feat)
         y.append(r.label)
         groups.append(group_key(r))
+        row_subjects.append(r.subject_id)
         # BAC regressor — only breath alcohol with measured BAC
         if r.label == 1 and r.bac is not None and r.bac > 0.001:
             X_bac.append(feat)
@@ -1503,6 +1505,27 @@ def trigger_training(db: Session = Depends(get_db), payload: TrainPayload = None
     bac_results = None
     if X_bac:
         bac_results = sensor_models.train_bac(X_bac, y_bac, groups=g_bac)
+
+    # Automatic stranger check (LOPO) — runs at the end of every training whenever the
+    # corpus carries subject tags. Pure evaluation: writes only to metrics.json (never
+    # model artifacts) and must never fail or block a completed training run.
+    lopo = None
+    lopo_X = [f for f, s in zip(X, row_subjects) if s is not None]
+    lopo_y = [lb for lb, s in zip(y, row_subjects) if s is not None]
+    lopo_subjects = [s for s in row_subjects if s is not None]
+    lopo_subject_count = len(set(lopo_subjects))
+    if lopo_X and lopo_subject_count >= 2:
+        try:
+            lopo = sensor_models.leave_one_person_out(lopo_X, lopo_y, lopo_subjects)
+            if isinstance(lopo, dict) and lopo.get("error"):
+                lopo["hint"] = "LOPO skipped — see error."
+            elif isinstance(lopo, dict):
+                from models.train.metrics_store import save_metrics
+                save_metrics("lopo", lopo)
+        except Exception as e:
+            logger.exception("LOPO evaluation failed after training")
+            lopo = {"error": f"{type(e).__name__}: {e}"}
+
     split_info = clf_results.get("split", {}) if isinstance(clf_results, dict) else {}
     return {"message": "Training running", "samples": len(X), "trials": len(set(groups)),
             "group_by": group_by, "warning": partial_tagging_warning(rows, group_by),
@@ -1511,7 +1534,11 @@ def trigger_training(db: Session = Depends(get_db), payload: TrainPayload = None
             # optimistic, because the same person can appear on both sides.
             "split": split_info, "subject_aware_split": split_info.get("subject_aware"),
             "results": clf_results, "bac_results": bac_results,
-            "bac_samples": len(X_bac)}
+            "bac_samples": len(X_bac),
+            # Stranger-performance metric: untagged rows are excluded, so lopo_samples
+            # can be lower than samples when subject tagging is partial.
+            "lopo": lopo, "lopo_samples": len(lopo_X),
+            "lopo_subjects": lopo_subject_count}
 
 
 # ── Hidden trainers (URL only) + transparent statistics ────────────────────

@@ -16,7 +16,7 @@ const STATES = [
   { key: "analyzing",       label: "Analyzing",       hint: "blue steady + clip 004" },
   { key: "warn",            label: "Warn",            hint: "YELLOW + clip 006" },
   { key: "fail",            label: "Fail",            hint: "RED + clip 007" },
-  { key: "off",             label: "Off",             hint: "LEDs off, no sound" },
+  { key: "off",             label: "Off",             hint: "back to the active blue blink" },
 ];
 
 export function IndicatorBench() {

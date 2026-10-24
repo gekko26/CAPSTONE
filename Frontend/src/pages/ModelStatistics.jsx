@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { API_BASE } from "../api";
-import { BarChart3, AlertTriangle, Check, Layers, Cpu, GitMerge } from "lucide-react";
+import { BarChart3, AlertTriangle, Check, Layers, Cpu, GitMerge, Users } from "lucide-react";
 
 function MetricRow({k,v}){ return <div className="flex justify-between py-1.5 border-b last:border-0 text-xs"><span style={{color:"var(--text-muted)"}}>{k}</span><span className="font-mono font-medium" style={{color:"var(--text-primary)"}}>{v}</span></div>; }
 
@@ -9,6 +9,11 @@ function MetricRow({k,v}){ return <div className="flex justify-between py-1.5 bo
 const metricFailed = (e) => !e || e.error || e.accuracy == null;
 const metricFailText = (e) => e?.error || "not trained / no accuracy recorded";
 function MetricErr({e}){ return <div className="text-xs" style={{color:"var(--over)"}}>{metricFailText(e)}</div>; }
+
+// LOPO entries carry mean_accuracy/mean_f1 instead of "accuracy", so the classifier
+// guard above would mislabel them as failed. Stranger results are valid only when the
+// fold summary exists.
+const lopoReady = (e) => e && e.mean_accuracy != null && e.worst_subject != null;
 
 export default function ModelStatistics(){
   const [data,setData]=useState(null);
@@ -39,6 +44,7 @@ export default function ModelStatistics(){
   const failures=data?.failures || [];
 
   const rf=sensor.random_forest, xgb=sensor.xgboost, bac=sensor.bac_regressor;
+  const lopo=metrics.lopo || null;
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-4">
@@ -98,6 +104,37 @@ export default function ModelStatistics(){
                 <MetricRow k="Samples / Trials" v={`${bac.samples} / ${bac.trials ?? "—"}`} />
               </>}
           </div>
+          {lopo && (
+            <div className="rounded-xl p-4 lg:col-span-2" style={{background:"var(--bg-card)", border:"1px solid var(--border-subtle)"}}>
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-1.5">
+                <div className="flex items-center gap-1.5 text-sm font-medium" style={{color:"var(--text-primary)"}}><Users size={14}/> Stranger check — Leave-one-person-out</div>
+                <span className="text-xs" style={{color:"var(--text-muted)"}}>
+                  {(lopo.subjects?.length ?? 0)} subject(s), {lopo.samples ?? "—"} rows · trained {lopo.trained_at?.split(" ")[0] ?? ""}
+                </span>
+              </div>
+              {!lopoReady(lopo.random_forest) && !lopoReady(lopo.xgboost)
+                ? <MetricErr e={{ error: lopo.error || "No evaluable subject folds (each fold needs ≥2 classes among the other subjects)" }}/>
+                : <>
+                  {lopoReady(lopo.random_forest) && <><MetricRow k="RF stranger mean acc / F1" v={`${lopo.random_forest.mean_accuracy}% / ${lopo.random_forest.mean_f1}%`} />
+                  <MetricRow k="RF worst person" v={`${lopo.random_forest.worst_subject.subject} — ${lopo.random_forest.worst_subject.accuracy}%`} /></>}
+                  {lopoReady(lopo.xgboost) && <><MetricRow k="XGB stranger mean acc / F1" v={`${lopo.xgboost.mean_accuracy}% / ${lopo.xgboost.mean_f1}%`} />
+                  <MetricRow k="XGB worst person" v={`${lopo.xgboost.worst_subject.subject} — ${lopo.xgboost.worst_subject.accuracy}%`} /></>}
+                  {lopoReady(lopo.random_forest) && !metricFailed(rf) && (() => {
+                    const gap = Math.round((rf.accuracy - lopo.random_forest.mean_accuracy) * 10) / 10;
+                    return (
+                      <div className="text-xs pt-2" style={{color: gap >= 20 ? "var(--over)" : "var(--text-secondary)"}}>
+                        Memorization gap vs grouped CV: {gap > 0 ? `−${gap}` : `+${Math.abs(gap)}`} pts — {gap >= 20 ? "large: the model leans on people it saw; collect more subjects/sessions" : gap >= 10 ? "moderate: worth more subject variety" : "small: the model learned behaviors, not identities"}
+                      </div>
+                    );
+                  })()}
+                  {(lopo.warnings?.length ?? 0) > 0 && (
+                    <div className="text-xs pt-2 space-y-0.5" style={{color:"var(--near)"}}>
+                      {lopo.warnings.map((w,i)=>(<div key={i}>• {w}</div>))}
+                    </div>
+                  )}
+                </>}
+            </div>
+          )}
         </div>
       )}
 

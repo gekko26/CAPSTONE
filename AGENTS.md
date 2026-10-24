@@ -10,7 +10,7 @@ FastAPI-style backend, ESP32 firmware, Postgres database.
 | Frontend | `Frontend/` | React + Vite + Tailwind (pages in `src/pages/`, components in `src/components/`, config in `src/config/`) |
 | Backend | `Backend/` | Python, FastAPI-style routes in `routes/`, domain logic in `models/`, tests in `tests/` |
 | Firmware | `alcodetect_esp32/` | ESP32/Arduino |
-| Database | `backup.sql` | Postgres schema + data |
+| Database | `backup.sql` | MariaDB (`Alcohol_System`, InnoDB, utf8mb4) — schema + data dump |
 | Ops/tools | `tools/`, `docs/` | check scripts, runbooks |
 
 ## Verify commands

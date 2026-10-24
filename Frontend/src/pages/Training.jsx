@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   FlaskConical, RefreshCw, Download, ChevronDown, ChevronUp,
   Tag, Pencil, Trash2, Check, X, Play, Camera,
-  Wind, Droplets, AlertTriangle, Activity, Cpu, Wifi, WifiOff, 
-  Square, Eye, Hourglass, Sliders, Thermometer, Gauge
+  Wind, Droplets, AlertTriangle, Activity, Cpu, Wifi, WifiOff,
+  Square, Eye, Hourglass, Sliders, Thermometer, Gauge, Users
 } from "lucide-react";
 
 import { API_BASE as BASE } from "../api";
@@ -18,6 +18,16 @@ const FACE_MIN_SIZE = 0.05;  // mirror of Backend FACE_MATCH/FACE_MIN_SIZE (frac
 
 const LABEL_NAMES = { "-1": "Pending", 0: "No alcohol", 1: "Breath alcohol", 2: "Others" };
 const SUB_NAMES   = { sanitizer: "Rubbing alcohol", perfume: "Perfume / cologne", drowsy: "Drowsy (Fake Sleep)", clear_air: "Clear Air (Empty)" };
+
+function lopoSummary(lopo) {
+  return ["random_forest", "xgboost"]
+    .map(n => {
+      const e = lopo?.[n];
+      if (!e || e.mean_accuracy == null) return null;
+      return { name: n === "random_forest" ? "RF" : "XGB", mean: e.mean_accuracy, worst: e.worst_subject };
+    })
+    .filter(Boolean);
+}
 
 // ── Toast ─────────────────────────────────────────────────────
 function useToast() {
@@ -851,7 +861,7 @@ export default function Training() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail);
       const bacMsg = d.bac_results && !d.bac_results.error ? ` · BAC MAE ${d.bac_results.mae} R² ${d.bac_results.r2}` : d.bac_results?.error ? ` · BAC ${d.bac_results.error}` : "";
-      setTrainResult({ group_by: d.group_by, warning: d.warning, samples: d.samples, trials: d.trials });
+      setTrainResult({ group_by: d.group_by, warning: d.warning, samples: d.samples, trials: d.trials, lopo: d.lopo, lopo_samples: d.lopo_samples, lopo_subjects: d.lopo_subjects });
       toast(`Training complete — ${d.samples} samples${bacMsg}`);
       loadSummary();
       loadCoverage();
@@ -1353,6 +1363,36 @@ export default function Training() {
                     {trainResult.warning.untagged_row_ids.length < trainResult.warning.untagged ? " …" : ""}
                   </span>
                 </div>
+              )}
+              {trainResult.lopo && (
+                trainResult.lopo.error ? (
+                  <div className="mt-1 text-xs px-2 py-1.5 rounded-lg border flex items-start gap-1.5"
+                    style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
+                    <Users size={12} style={{ color: "var(--text-muted)", flexShrink: 0, marginTop: 1 }}/>
+                    <span style={{ color: "var(--text-muted)" }}>
+                      Stranger check (LOPO): unavailable — {trainResult.lopo.error}
+                      {trainResult.lopo.hint ? ` — ${trainResult.lopo.hint}` : ""}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-xs px-2 py-1.5 rounded-lg border flex items-start gap-1.5"
+                    style={{ background: "var(--bg-active)", borderColor: "var(--border-subtle)" }}>
+                    <Users size={12} style={{ color: "var(--text-muted)", flexShrink: 0, marginTop: 1 }}/>
+                    <span style={{ color: "var(--text-muted)" }}>
+                      Stranger check (LOPO · {trainResult.lopo.subjects?.length ?? 0} subjects,{" "}
+                      {trainResult.lopo_samples} tagged rows):
+                      {lopoSummary(trainResult.lopo).map((s, i) => (
+                        <span key={s.name}>{i === 0 ? " " : " · "}{s.name} {s.mean}%</span>
+                      ))}
+                      {lopoSummary(trainResult.lopo)[0]?.worst && (
+                        <> — worst person{" "}
+                        <span className="font-mono">{lopoSummary(trainResult.lopo)[0].worst.subject}</span>{" "}
+                        ({lopoSummary(trainResult.lopo)[0].worst.accuracy}%)</>
+                      )}
+                      {" · "}A big drop from the grouped-CV accuracy means the model memorized people instead of behaviors.
+                    </span>
+                  </div>
+                )
               )}
             </div>
           )}

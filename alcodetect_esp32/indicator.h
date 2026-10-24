@@ -17,9 +17,13 @@
  *     current state and the LEDs untouched.
  *  3. If no verdict arrives within analyzeTimeoutMs the state falls to WARN and plays
  *     the WARN clip. It never goes green and never stays silent-stuck.
- *  4. In TRAINING mode every LED is driven to 0 and no clip is ever queued.
- *  5. Progress states are BLUE only, so an in-progress run can never be misread as a
- *     verdict.
+ *  4. In TRAINING mode no clip is ever queued and no verdict or progress colour is
+ *     ever shown; the ONLY LED is the system-active idle blink, the same in both
+ *     modes — it is a presence signal, not a judgement, so showing it while
+ *     collecting data biases nothing about the readings.
+ *  5. Progress states are BLUE only, and idle defaults to a BLUE blink (system
+ *     active) in BOTH modes, so an in-progress or standby device can never be
+ *     misread as showing a verdict.
  */
 
 #ifndef INDICATOR_H
@@ -62,6 +66,7 @@ enum IndClip {
 #define IND_SLOW_PULSE_MS       1600UL   // person_detected pulse period
 #define IND_FAST_PULSE_MS        400UL   // sampling pulse period
 #define IND_PERSON_HOLD_MS     60000UL   // person_detected safety net -> idle
+#define IND_IDLE_BLINK_MS       1000UL   // system-active idle blink: 500 ms on / 500 ms off
 
 struct IndColor { uint8_t r, g, b; };
 
@@ -72,6 +77,7 @@ struct IndConfig {
     uint32_t fastPulseMs;        // sampling pulse period
     uint32_t cueCooldownMs;      // repeat suppression for non-verdict cues
     uint32_t personTimeoutMs;    // person_detected -> idle safety net
+    uint32_t idleBlinkPeriodMs;  // system-active idle blink period (default 1000)
     IndColor blue;
     IndColor green;
     IndColor red;
@@ -88,8 +94,9 @@ static inline IndConfig ind_default_config() {
     c.fastPulseMs      = IND_FAST_PULSE_MS;
     c.cueCooldownMs    = IND_CUE_COOLDOWN_MS;
     c.personTimeoutMs  = IND_PERSON_HOLD_MS;
-    // BLUE for progress, GREEN/YELLOW/RED for verdicts. Tuned for a 3.3 V rail
-    // through a series resistor; adjust duty here, not at the call site.
+    c.idleBlinkPeriodMs = IND_IDLE_BLINK_MS;
+    // BLUE for "system active"/progress, GREEN/YELLOW/RED for verdicts. Tuned for a
+    // 3.3 V rail through a series resistor; adjust duty here, not at the call site.
     c.blue   = {0,   0, 255};
     c.green  = {0, 255,   0};
     c.red    = {255, 0,   0};
@@ -223,7 +230,9 @@ public:
     void setAudioReady(bool ready) { _audioReady = ready; }
     bool audioReady() const { return _audioReady; }
 
-    /* TRAINING mode: LEDs forced to 0 and every clip suppressed. */
+    /* TRAINING mode: no clip is ever queued and no verdict or progress colour is
+     * ever shown. The system-active blue blink is kept — it is a presence signal,
+     * not a judgement, so it biases nothing about the collected data. */
     void setTrainingMode(bool training) {
         _training = training;
         if (training && _state != IND_IDLE) {
@@ -231,7 +240,6 @@ public:
             _analyzeActive = false;
             _holdActive = false;
         }
-        _applyLed(0, 0, 0, 0);
     }
     bool trainingMode() const { return _training; }
 
@@ -249,7 +257,7 @@ public:
         _hasTriggerRunId = hasTriggerId;
         _triggerRunId = hasTriggerId ? triggerId : 0;
         _holdActive = false;
-        if (_training) { _applyLed(0,0,0,0); return; }
+        if (_training) return;   /* no run colour in training; the blink stays on */
         _enter(IND_SAMPLING, now);
     }
 
@@ -308,14 +316,50 @@ public:
         return false;
     }
 
+    /*
+     * Bench path for GET /indicator_test (.ino handler) — wiring bring-up in the
+     * spirit of /relay_test, but display only. Rules:
+     *   - GREEN/PASS is NEVER benchable: only submitVerdict() can paint it.
+     *   - Training mode refuses everything (only the active blink shows).
+     *   - A live run is never repainted: while SAMPLING or ANALYZING is showing,
+     *     every bench state is refused.
+     *   - Each non-idle state shows for resultHoldMs, then falls back to the blink.
+     *   - Re-pressing the same state re-lights it and re-arms the hold.
+     */
+    bool benchState(const char* name, uint32_t now) {
+        IndicatorState want;
+        if (!ind_state_parse(name, &want)) return false;
+        if (want == IND_PASS) return false;       /* GREEN is run-vote privileged */
+        if (_training) return false;
+        if (_state == IND_SAMPLING || _state == IND_ANALYZING) return false;
+        if (want == _state) {                     /* re-press: re-arm, no repaint */
+            _stateSince = now;
+            if (want == IND_IDLE) {
+                _analyzeActive = false;
+                _holdActive = false;
+                _applyLed(0, 0, _targetB(now), now);
+            } else {
+                _holdActive = true;
+            }
+            return true;
+        }
+        if (want == IND_IDLE) {
+            _analyzeActive = false;
+            _holdActive = false;
+            _enter(IND_IDLE, now);
+            return true;
+        }
+        _enter(want, now);
+        _holdActive = true;                       /* show, then back to the blink */
+        return true;
+    }
+
     /* ── Non-blocking tick, called from loop() ───────────────────────────────── */
 
     void tick(uint32_t now) {
-        if (_training) {
-            if (_state != IND_IDLE) _enter(IND_IDLE, now);
-            _applyLed(0, 0, 0, 0);
-            return;
-        }
+        /* Training mode never shows a run or a verdict: force the machine back to
+         * idle and let the system-active blink be the only LED it renders. */
+        if (_training && _state != IND_IDLE) _enter(IND_IDLE, now);
 
         /* Analyze deadline: never green, never stuck silent. */
         if (_state == IND_ANALYZING && _analyzeActive &&
@@ -358,7 +402,8 @@ public:
         _stateSince = now;
         IndClip c = ind_clip_for_state(s);
         if (c != CLIP_NONE) _play(c, now);
-        if (s == IND_IDLE) _applyLed(0, 0, 0, now);
+        /* IDLE is never dark: resume the system-active blink immediately. */
+        if (s == IND_IDLE) _applyLed(0, 0, _targetB(now), now);
     }
 
     /* One clip at a time. A verdict preempts; a repeat cue is dropped while the
@@ -409,7 +454,19 @@ public:
         }
     }
 
+    /* System-active idle blink: a square-wave on/off of the blue channel, shown in
+     * BOTH training and deployment. Blue is the "watched / working" family, so the
+     * blink can never be mistaken for a verdict. Period 0 disables it (LED dark). */
+    uint8_t _idleBlink(uint32_t now) const {
+        uint32_t period = _cfg.idleBlinkPeriodMs;
+        if (period == 0) return 0;
+        uint32_t half = period / 2 ? period / 2 : 1;
+        if ((now % period) >= half) return 0;
+        return _scale(_cfg.blue, _cfg.progressDuty, 2);
+    }
+
     uint8_t _targetR(uint32_t now) const {
+        if (_state == IND_IDLE) return 0;   /* blink drives blue only */
         if (_state == IND_PERSON_DETECTED || _state == IND_SAMPLING || _state == IND_ANALYZING)
             return _scale(_cfg.blue, _pulse(now, _state == IND_SAMPLING ? _cfg.fastPulseMs
                                                 : _state == IND_ANALYZING ? 0UL
@@ -417,6 +474,7 @@ public:
         uint8_t r,g,b; _enterColors(_state, r,g,b); return r;
     }
     uint8_t _targetG(uint32_t now) const {
+        if (_state == IND_IDLE) return 0;   /* blink drives blue only */
         if (_state == IND_PERSON_DETECTED || _state == IND_SAMPLING || _state == IND_ANALYZING)
             return _scale(_cfg.blue, _pulse(now, _state == IND_SAMPLING ? _cfg.fastPulseMs
                                                 : _state == IND_ANALYZING ? 0UL
@@ -424,6 +482,7 @@ public:
         uint8_t r,g,b; _enterColors(_state, r,g,b); return g;
     }
     uint8_t _targetB(uint32_t now) const {
+        if (_state == IND_IDLE) return _idleBlink(now);
         if (_state == IND_PERSON_DETECTED || _state == IND_SAMPLING || _state == IND_ANALYZING)
             return _scale(_cfg.blue, _pulse(now, _state == IND_SAMPLING ? _cfg.fastPulseMs
                                                 : _state == IND_ANALYZING ? 0UL

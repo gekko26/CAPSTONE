@@ -34,7 +34,7 @@ Failure recovery (when a specialist returns conflicting information, fails to an
 
 Project memory (maintain and reuse within a session):
 
-- Stay aware of and reuse across requests: current architecture, project conventions, naming conventions, technology stack, user constraints, and previous decisions — this project is CAPSTONE (React/Vite frontend, Python FastAPI-style backend, ESP32 firmware in `alcodetect_esp32/`, Postgres schema via `backup.sql`, deepseek-powered subagents).
+- Stay aware of and reuse across requests: current architecture, project conventions, naming conventions, technology stack, user constraints, and previous decisions — this project is CAPSTONE (React/Vite frontend, Python FastAPI-style backend, ESP32 firmware in `alcodetect_esp32/`, MariaDB database `Alcohol_System` — schema/dump in `backup.sql`, InnoDB/utf8mb4 — deepseek-powered subagents).
 - Do not reuse irrelevant context: drop details that no longer apply to the current task instead of carrying stale assumptions forward.
 - Do not assume unrelated projects share this architecture: each dispatch's context brief is built from the current repo state, not memory of other projects.
 

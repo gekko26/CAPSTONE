@@ -179,16 +179,20 @@ exactly like a firmware bug.
 
 | State | LED | Clip | Who sets it |
 |---|---|---|---|
-| `idle` | OFF | — | backend, or after the hold expires |
+| `idle` (default) | **BLUE blink** (500 ms on / 500 ms off) — "system active" | — | always shown, both modes |
 | `person_detected` | BLUE, slow pulse (1600 ms) | 001 | backend, debounced |
 | `sampling` | BLUE, fast pulse (400 ms) | 003 | **firmware**, at pre-roll start |
 | `analyzing` | BLUE steady | 004 | **firmware**, at window close |
 | `pass` | GREEN solid | 005 | backend, authenticated verdict only |
 | `warn` | YELLOW solid | 006 | backend, **or the firmware timeout** |
 | `fail` | RED solid | 007 | backend, authenticated verdict only |
-| any (training mode) | OFF | silent | — |
+| any (training mode) | BLUE blink only — verdicts refused, silent | — | — |
 
-In-progress states are **blue only**, so they can never be mistaken for a verdict.
+The idle blink is deliberate: someone at the gate always sees **blue = "the system
+is watching"** in both training and deployment. Blue never means PASS, drift is
+unchanged by it, and no clip ever plays it — so showing it while collecting
+training data biases nothing. In-progress states are blue only, so they can
+never be mistaken for a verdict.
 
 **YELLOW is red + a reduced green channel**, tuned by one constant
 (`IndConfig::yellow` in `indicator.h`). It is used for WARN and nothing else.
@@ -200,14 +204,15 @@ In-progress states are **blue only**, so they can never be mistaken for a verdic
 | Rule | Enforced at | Tested by |
 |---|---|---|
 | GREEN only on a matching run id while ANALYZING | `indicator.h` `submitVerdict()` | `indicator_test.cpp` |
-| Never green at boot | `indicator.h` `begin()` | `test_boot_state_is_off_and_silent` |
+| Idle default is the active blue blink, never a verdict; identical in both modes | `indicator.h` `_idleBlink()` | `test_boot_state_is_off_and_silent`, `test_idle_blink_is_blue_only_and_active_in_both_modes` |
+| Verdict held 8 s, then back to the active blink | `indicator.h` `tick()` | `test_verdict_hold_expires_to_idle` |
 | Replayed/stale verdict ignored | `indicator.h` `_runIdMatches()` | `test_replayed_verdict_is_rejected_after_a_new_run` |
 | Unknown state name → reject, change nothing | `ind_state_parse()` | `test_unknown_state_name_never_produces_a_colour` |
 | No verdict in 20 s → YELLOW + WARN clip, never green | `indicator.h` `tick()` | `test_timeout_produces_yellow_never_green` |
-| Verdict held 8 s, then OFF | `indicator.h` `tick()` | `test_verdict_hold_expires_to_idle` |
+| Bench (GET `/indicator_test`) never paints GREEN, never repaints a live run | `indicator.h` `benchState()` | `test_bench_never_paints_green`, `test_bench_refused_during_a_live_run` |
 | New trigger cancels a hold | `indicator.h` `onTrigger()` | `test_new_trigger_cancels_a_hold` |
-| Token missing on device → 503, LEDs stay OFF | `.ino` `handleIndicator()` | compile-time + bench step 9.6 |
-| Training mode → OFF and silent | `indicator.h` `setTrainingMode()` | `test_training_mode_is_off_and_silent` |
+| Token missing on device → 503 on `/indicator`; verdicts and bench stay OFF | `.ino` `handleIndicator()` | compile-time + bench step 9.6 |
+| Training mode → only the active blink, silent, verdict-free | `indicator.h` `setTrainingMode()` | `test_training_mode_is_off_and_silent` |
 | Verdict clip preempts a cue | `indicator.h` `_play()` | `test_verdict_clip_preempts_a_playing_cue` |
 | "Person detected" does not repeat | `indicator.h` `_play()` | `test_cue_cooldown_stops_repeat_person_detected` |
 | A stale blue cannot lie forever (60 s) | `indicator.h` `tick()` | `test_person_detected_safety_net_returns_to_idle` |
@@ -223,20 +228,38 @@ Do these in order. Stop at the first failure.
 
 **1. Build without a token.** `arduino-cli compile --fqbn esp32:esp32:esp32 .`
 Expect a clean build. With no `secrets.h` the device answers **503** on `/indicator`
-and every LED stays off — that is correct, not broken.
+and shows no benchmark or verdict colour — the only LED is the active blue blink at
+idle. That is correct, not broken.
 
 **2. Boot silence.** Flash, watch `arduino-cli monitor -p /dev/ttyUSB0 -c baudrate=115200`.
 Expect: boot banner, mode line, **`audio_ready: false`**, and **no sound at all**.
 Check `/status`: `indicator_state` is `idle`, `indicator_enabled` is `false`.
 
-**3. LEDs OFF at boot.** Both LEDs dark. They must not flicker, and must not be green.
+**3. Active blink at boot.** Both LEDs blink **blue** together — 500 ms on, 500 ms off.
+They must never be green, and no colour other than blue must appear while idle.
 
 **4. Create the token.** `openssl rand -hex 32` → put it in `secrets.h`, and
 `export ESP32_DEVICE_TOKEN='<same value>'` for the backend. **Never echo it.**
 Now `indicator_enabled` in `/status` is `true`.
 
-**5. Bench each state.** Settings → Sensors → Indicators. Press each button and check
-the LED colour and the clip. Green is intentionally absent.
+**5. Bench each state.** Settings → Sensors → Indicators, or straight from the device
+with a bare GET — the indicator twin of `/relay_test`:
+
+```
+GET http://<esp32-ip>/indicator_test?state=person_detected
+GET http://<esp32-ip>/indicator_test?state=sampling
+GET http://<esp32-ip>/indicator_test?state=analyzing
+GET http://<esp32-ip>/indicator_test?state=warn
+GET http://<esp32-ip>/indicator_test?state=fail
+GET http://<esp32-ip>/indicator_test?state=off        # back to the active blink
+```
+
+Each state shows for 8 s (`hold_ms` in the response) and then falls back to the
+active blink, so nothing sticks. Optional `&volume=0..30` (default 18) for wiring
+the speaker. Status codes: **503** no token in the build (fail closed), **400**
+unknown state, **409** a relay sequence is running (the bench never repaints a
+go-live run) or training mode. **GREEN/PASS is intentionally absent** — it is only
+reachable through an authenticated verdict (step 7).
 
 **6. Wrong token.** Stop the backend, change the export to a wrong value, restart,
 press a bench button. Expect **401** and a clear message, and **no LED change**.
@@ -247,8 +270,9 @@ Expect **409**. **No green light.**
 **8. DFPlayer unplugged.** Pull the module. Restart the device. Expect a normal boot,
 `audio_ready: false`, and every bench state still lighting its LED with no sound.
 
-**9. Training mode.** `GET /mode?training=1`. Press bench buttons. Expect **no LED, no
-sound**, and a 409 from the bench. Then `GET /mode?training=0`.
+**9. Training mode.** `GET /mode?training=1`. Press bench buttons. Expect **only the
+active blue blink** (no verdict or progress colour), **no sound**, and a 409 from the
+bench. Then `GET /mode?training=0`.
 
 **10. Only now:** re-make the relay wiring, mains still off, then bench the relays.
 
@@ -260,6 +284,12 @@ sound**, and a 409 from the bench. Then `GET /mode?training=0`.
   implemented for `/indicator` only, as scoped. Anyone on the LAN can currently switch
   a gate device into training mode or fire the relays. This is a real risk and should
   be the next piece of work.
+* **`GET /indicator_test` is unauthenticated by header** (a browser GET cannot send
+  one, which is the point of a wiring bench). It is gated at build time: with no
+  token in `secrets.h` it answers 503 and shows nothing. The residual risk is the
+  same class as `/relay_test` — anyone on the LAN can light LEDs or play clips for
+  8 s — but it can never paint GREEN, never repaint a live run and never speak in
+  training mode. Fold it into the same token work as `/mode` and `/relay_test`.
 * **`LED_COMMON_ANODE` is an assumption**, not a measurement.
 * **Wi-Fi credentials are still inline** in the `.ino` (lines 69-70) and are in git
   history. `secrets.h.example` documents the move; it was not performed because a

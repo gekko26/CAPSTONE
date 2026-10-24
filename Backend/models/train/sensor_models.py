@@ -5,7 +5,7 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.model_selection import train_test_split, GroupKFold
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score, mean_absolute_error, mean_squared_error, r2_score
 from sklearn.utils.class_weight import compute_class_weight
 from xgboost import XGBClassifier, XGBRegressor
 
@@ -438,6 +438,147 @@ def train(X, y, groups=None):
     save_metrics("sensor", results)
     print("✅ Metrics saved to metrics.json")
 
+    return results
+
+
+# ── Leave-one-person-out evaluation ────────────────────────────
+def leave_one_person_out(X, y, subject_ids, model_names=None):
+    """Stranger-performance evaluation: hold out each subject entirely, one at a time.
+
+    Answers the deployment question the trial-grouped split cannot: how does the
+    model score on a person it has NEVER seen? Each fold trains fresh models on the
+    other subjects and scores the held-out subject only.
+
+    Pure evaluation — this function has NO side effects: it never writes .pkl files,
+    the scaler, label maps or metrics.json, so the deployed models from train() are
+    untouched. Run it from tests, a route or a script at any time.
+
+    Parameters:
+        X — feature vectors (any width; the real corpus is 15/18D).
+        y — class labels (0/1/2).
+        subject_ids — per-row subject key (subjects.id or any per-person grouping).
+        model_names — optional subset of MODELS (default: every model).
+
+    Returns:
+        {"result_kind": "lopo", ...} with per-model per-subject metrics, means,
+        worst/best subject and explicit fold-skip warnings. Returns
+        {"error": ...} when the data cannot be evaluated at all. Fold skips and
+        the gap versus grouped-CV accuracy (reported by train()) are the honest
+        story: a big gap means the model leaned on person traits it memorized.
+    """
+    X = np.asarray(X)
+    y = np.asarray(y)
+    subjects = np.asarray(subject_ids)
+    if not (len(X) == len(y) == len(subjects)):
+        return {"result_kind": "lopo",
+                "error": f"Length mismatch: X={len(X)} y={len(y)} subject_ids={len(subjects)}"}
+
+    classes_present = sorted({int(c) for c in np.unique(y)})
+    fold_subjects = [v for v in np.unique(subjects)]
+    subjects_reported = [str(v) for v in fold_subjects]
+    selected = list(MODELS) if model_names is None else list(model_names)
+    unknown = [n for n in selected if n not in MODELS]
+    if unknown:
+        return {"result_kind": "lopo", "error": f"Unknown model name(s): {unknown}",
+                "valid_models": list(MODELS)}
+    if len(fold_subjects) < 2:
+        return {"result_kind": "lopo",
+                "error": f"LOPO needs at least 2 distinct subjects, got {len(fold_subjects)} "
+                         f"(subjects seen: {subjects_reported})",
+                "samples": int(len(y))}
+
+    warnings = []
+    per_model = {name: {} for name in selected}
+    import copy
+
+    for held_out in fold_subjects:
+        test_idx  = subjects == held_out
+        train_idx = ~test_idx
+        y_train, y_test = y[train_idx], y[test_idx]
+        fold_classes = sorted({int(c) for c in np.unique(y_train)})
+        if len(np.unique(y_train)) < 2:
+            warnings.append(
+                f"Held out {held_out}: training fold has a single class {fold_classes} "
+                f"— fold skipped. Collect classes from other subjects.")
+            continue
+
+        # fold-local scaler: held-out subject must never touch train statistics
+        scaler = StandardScaler()
+        X_tr = scaler.fit_transform(X[train_idx])
+        X_te = scaler.transform(X[test_idx])
+
+        # fold-local balanced weights (same rule as train(): skip below 3 rows)
+        class_weights = None
+        if len(y_train) >= 3:
+            try:
+                cw = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+                class_weights = {int(c): float(w) for c, w in zip(np.unique(y_train), cw)}
+            except Exception:
+                pass
+
+        # fold-local XGBoost remap over the classes this fold actually sees
+        fwd = {c: i for i, c in enumerate(fold_classes)}
+        inv = {i: c for c, i in fwd.items()}
+        remap = fold_classes != list(range(len(fold_classes)))
+
+        for name in selected:
+            model = copy.deepcopy(MODELS[name])
+            try:
+                y_fit = np.array([fwd[int(c)] for c in y_train]) if (remap and name == "xgboost") else y_train
+                if name == "random_forest":
+                    if class_weights is not None:
+                        model.set_params(class_weight='balanced')
+                    model.fit(X_tr, y_fit)
+                elif class_weights is not None:
+                    sample_weight = np.array([class_weights[int(c)] for c in y_train])
+                    model.fit(X_tr, y_fit, sample_weight=sample_weight)
+                else:
+                    model.fit(X_tr, y_fit)
+
+                preds = model.predict(X_te)
+                if name == "xgboost" and remap:
+                    preds = np.array([inv[int(p)] for p in preds])
+
+                per_model[name][str(held_out)] = {
+                    "accuracy": round(float(accuracy_score(y_test, preds)) * 100, 2),
+                    "f1_macro": round(float(f1_score(y_test, preds, average="macro", zero_division=0)) * 100, 2),
+                    "n_test": int(len(y_test)),
+                }
+            except Exception as e:
+                per_model[name][str(held_out)] = {"error": f"{type(e).__name__}: {e}"}
+                warnings.append(f"Held out {held_out}: {name} fold failed — {type(e).__name__}: {e}")
+
+    results = {
+        "result_kind": "lopo",
+        "samples": int(len(y)),
+        "subjects": subjects_reported,
+        "classes_present": classes_present,
+        "warnings": warnings,
+        "note": ("Stranger metric: each subject was fully held out. Compare mean_accuracy "
+                 "here against the grouped-CV accuracy from train() — a large gap means the "
+                 "model memorized people rather than learned behaviors."),
+    }
+
+    for name in selected:
+        folds_ok = {s: m for s, m in per_model[name].items() if "error" not in m}
+        if not folds_ok:
+            results[name] = {"error": "no subject fold could be evaluated", **per_model[name]}
+            continue
+        accs    = [m["accuracy"] for m in folds_ok.values()]
+        f1s     = [m["f1_macro"] for m in folds_ok.values()]
+        worst   = min(folds_ok, key=lambda s: folds_ok[s]["accuracy"])
+        best    = max(folds_ok, key=lambda s: folds_ok[s]["accuracy"])
+        results[name] = {
+            "per_subject": per_model[name],
+            "subjects_evaluated": len(folds_ok),
+            "mean_accuracy": round(float(np.mean(accs)), 2),
+            "mean_f1":       round(float(np.mean(f1s)), 2),
+            "worst_subject": {"subject": worst, **folds_ok[worst]},
+            "best_subject":  {"subject": best,  **folds_ok[best]},
+        }
+        print(f"✅ LOPO {name}: mean acc {results[name]['mean_accuracy']}% "
+              f"over {len(folds_ok)} held-out subject(s)"
+              f"{' — ' + str(len(warnings)) + ' fold(s) skipped' if warnings else ''}")
     return results
 
 
