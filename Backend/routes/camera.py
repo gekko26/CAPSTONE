@@ -402,7 +402,11 @@ def analyze(file: UploadFile = File(None), db: Session = Depends(get_db)):
 
     if frame is None:
         if _last_analysis:
-            return _last_analysis
+            # Never hand back the shared dict: the caller must not be able to mutate
+            # it, and the cached flag tells the deployment gate this is not fresh.
+            cached = dict(_last_analysis)
+            cached["cached"] = True
+            return cached
         return {"error": "No frame available — check camera connection"}
 
     acquired = _analyze_lock.acquire(blocking=False)
@@ -417,6 +421,7 @@ def analyze(file: UploadFile = File(None), db: Session = Depends(get_db)):
             "proximity":  ear_result["proximity"],
             "face_width": ear_result.get("face_width", 0.0),
             "is_close":   ear_result["is_close"],
+            "face_bbox":  ear_result.get("face_bbox"),
             "ear":        ear_result["ear"],
             "mar":        ear_result.get("mar"),
             "yawning":    ear_result.get("yawning", False),
@@ -436,6 +441,7 @@ def analyze(file: UploadFile = File(None), db: Session = Depends(get_db)):
                              "name": identity_raw.get("name"),
                              "reason": identity_raw.get("reason")},
             "ts": time.time(),
+            "cached": False,
         }
         _last_analysis = result
 

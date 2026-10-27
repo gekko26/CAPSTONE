@@ -6,8 +6,10 @@ import {
 
 import { API_BASE as BASE } from "../api";
 import { getTiming, busySeconds, FALLBACK_TIMING } from "../config/timing";
+import { createStabilityGate, PROVISIONAL } from "../config/deploymentGate";
 const FRAME_MS = 60;  // 15 FPS max for stream1 — max fps, camera-only
 const ANALYZE_MS = 800;
+const nowMs = () => Date.now();
 // post-trigger wait comes from /sensor/timing (see src/config/timing.js)
 let TIMING = FALLBACK_TIMING;
 
@@ -31,6 +33,11 @@ export default function Deployment() {
   const frameTimeoutRef = useRef(null);
   const analyzeTimeoutRef = useRef(null);
   const fetchingRef = useRef(false);
+  const blobAtRef = useRef(0);
+  const gateRef = useRef(null);
+  if (gateRef.current == null) {
+    gateRef.current = createStabilityGate();
+  }
 
   const addLog = (msg, type) => {
     setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg, type }, ...prev].slice(0, 8));
@@ -48,6 +55,7 @@ export default function Deployment() {
         setCamError(false);
         const blob = await res.blob();
         latestBlobRef.current = blob;
+        blobAtRef.current = nowMs();
         const url = URL.createObjectURL(blob);
         setFrameUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
       } else {
@@ -65,24 +73,44 @@ export default function Deployment() {
   const runAnalysisLoop = async () => {
     if (!loopActiveRef.current) return;
     
-    // Only analyze if the system is ready for the next person
+    // Only analyze if the system is ready for the next person.
     if (latestBlobRef.current && !isScanningRef.current && systemState === "IDLE") {
-      try {
-        const fd = new FormData();
-        fd.append("file", latestBlobRef.current, "frame.jpg");
+      if (nowMs() - blobAtRef.current > PROVISIONAL.STALE_BLOB_MS) {
+        // A stalled frame must never let one person's count or no-stop window carry
+        // over to the next: reset everything and log the stall. Camera fetch errors
+        // leave the blob stale, so they land here too.
+        gateRef.current.reset();
+        console.log("[gate]", "reset", "stale_blob");
+      } else {
+        try {
+          const fd = new FormData();
+          fd.append("file", latestBlobRef.current, "frame.jpg");
 
-        const ar = await fetch(`${BASE}/camera/analyze`, { method: "POST", body: fd });
-        if (ar.ok) {
-          const data = await ar.json();
-          
-          // TRIPWIRE TRIGGERED! Someone stepped up to the camera
-          if (data.is_close) {
-            isScanningRef.current = true;
-            executeSecurityCheckpoint(latestBlobRef.current, data);
+          const ar = await fetch(`${BASE}/camera/analyze`, { method: "POST", body: fd });
+          if (ar.ok) {
+            const data = await ar.json();
+
+            // TRIPWIRE: only when the SAME face has been close and stable for N
+            // consecutive fresh analyses. Invalid/cached/busy responses reset it.
+            const v = gateRef.current.feed({ analysis: data, now: nowMs() });
+            if (v.reason) console.log("[gate]", v.verdict, v.reason);
+            if (v.verdict === "ready") {
+              console.log("[gate] ready", v.count, new Date(nowMs()).toISOString());
+              isScanningRef.current = true;
+              gateRef.current.disarm();
+              executeSecurityCheckpoint(latestBlobRef.current, data);
+            } else if (v.verdict === "warn_nostop") {
+              setLastResult({ name: "Unknown", reason: "no stop", color: "var(--near)", bg: "var(--near-bg)" });
+            }
+          } else {
+            const v = gateRef.current.feed({ analysis: null, now: nowMs() });
+            if (v.reason) console.log("[gate]", v.verdict, v.reason);
           }
+        } catch {
+          // Suppress background ping errors, but never let the gate keep a stale count.
+          const v = gateRef.current.feed({ analysis: null, now: nowMs() });
+          if (v.reason) console.log("[gate]", v.verdict, v.reason);
         }
-      } catch (e) {
-        // Suppress background ping errors
       }
     }
     analyzeTimeoutRef.current = setTimeout(runAnalysisLoop, ANALYZE_MS);
@@ -123,7 +151,7 @@ export default function Deployment() {
         setSystemState("IDLE");
         setLastResult({ name: "Device busy", reason: `Relay sequence running — wait about ${waitS}s and try again`, color: "var(--near)", bg: "var(--near-bg)" });
         addLog(`ESP32 busy (relay sequence running) — retry in about ${waitS}s`, "warn");
-        setTimeout(() => { setLastResult(null); isScanningRef.current = false; }, 4000);
+        setTimeout(() => { setLastResult(null); isScanningRef.current = false; gateRef.current.reset(); }, 4000);
         return;
       }
       
@@ -135,7 +163,7 @@ export default function Deployment() {
         setSystemState("DENIED");
         setLastResult({ name: cvData.identified ? cvData.name : "Unknown", reason: "Trigger failed — no reading_id", color: "var(--over)", bg: "var(--over-bg)" });
         addLog("Trigger failed: no reading_id from /sensor/trigger — denied", "error");
-        setTimeout(() => { setSystemState("IDLE"); setLastResult(null); isScanningRef.current = false; }, 5000);
+        setTimeout(() => { setSystemState("IDLE"); setLastResult(null); isScanningRef.current = false; gateRef.current.reset(); }, 5000);
         return;
       }
       const fd = new FormData();
@@ -164,6 +192,7 @@ export default function Deployment() {
         addLog("Recapture needed — please realign", "warn");
         setTimeout(() => {
           isScanningRef.current = false;
+          gateRef.current.reset();
         }, 1500);
         return;
       } else {
@@ -219,6 +248,7 @@ export default function Deployment() {
         setSystemState("IDLE");
         setLastResult(null);
         isScanningRef.current = false;
+        gateRef.current.reset();
       }, 5000);
 
     } catch (error) {
@@ -235,6 +265,7 @@ export default function Deployment() {
         setSystemState("IDLE");
         setLastResult(null);
         isScanningRef.current = false;
+        gateRef.current.reset();
       }, 5000);
     }
   };

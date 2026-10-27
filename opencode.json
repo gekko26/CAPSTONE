@@ -1,4 +1,5 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "google/gemini-1.5-pro",
   "instructions": [".opencode/instructions/routing.md", "AGENTS.md"]
 }
