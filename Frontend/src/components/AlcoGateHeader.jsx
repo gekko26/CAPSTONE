@@ -2,8 +2,8 @@
 import { NavLink } from "react-router-dom";
 import { DeviceModeBadge } from "./DeviceMode";
 import { Activity, Settings, Bell, Sun, Moon, Maximize2 } from "lucide-react";
-import { useTheme } from "../context/THEME_CONTEXT";
-import { useDisplay } from "../context/DISPLAY_CONTEXT";
+import { useTheme } from "../context/theme";
+import { useDisplay } from "../context/display";
 import { useState, useEffect } from "react";
 
 const SHOW_TRAINING = import.meta.env.VITE_SHOW_TRAINING !== "false";

@@ -36,7 +36,6 @@ function levelLabel(v) {
 }
 
 export default function LiveFlow() {
-  const [frameUrl, setFrameUrl] = useState(null);
   const [analysis, setAnalysis] = useState(null);
   const [camError, setCamError] = useState(false);
   const [streaming, setStreaming] = useState(true);
@@ -61,43 +60,11 @@ export default function LiveFlow() {
   const [currentId, setCurrentId] = useState(null);
   const [subjects, setSubjects] = useState([]);
 
-  const frameTimeoutRef = useRef(null);
   const analyzeTimeoutRef = useRef(null);
   const latestBlobRef = useRef(null);
   const errRef = useRef(0);
   const activeRef = useRef(false);
   const triggeredRef = useRef(false);
-  const fetchingRef = useRef(false);
-  const frameUrlRef = useRef(null);
-  frameUrlRef.current = frameUrl;
-
-  // ── Self-scheduling recursion + single-flight guard (A) — camera-only, FRAME_MS unchanged
-  const fetchFrameLoop = async () => {
-    if (!activeRef.current) return;
-    if (fetchingRef.current) { frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS); return; }
-    fetchingRef.current = true;
-    try {
-      const overlayParam = overlayRef.current ? "1" : "0";
-      const fr = await fetch(`${API_BASE}/camera/stream/frame?overlay=${overlayParam}`, { cache: "no-store" });
-      if (!fr.ok) {
-        errRef.current += 1;
-        if (errRef.current >= 5) setCamError(true);
-      } else {
-        errRef.current = 0;
-        setCamError(false);
-        const blob = await fr.blob();
-        latestBlobRef.current = blob;
-        const url = URL.createObjectURL(blob);
-        setFrameUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return url; });
-      }
-    } catch {
-      errRef.current += 1;
-      if (errRef.current >= 5) setCamError(true);
-    } finally {
-      fetchingRef.current = false;
-      frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS);
-    }
-  };
 
   const runAnalyzeLoop = async () => {
     if (!activeRef.current) return;
@@ -176,14 +143,13 @@ export default function LiveFlow() {
 
   useEffect(() => {
     start();
-    loadRecent();
-    loadSensors();
-    loadSubjects();
+    const t0 = setTimeout(() => { loadRecent(); loadSensors(); loadSubjects(); }, 0);
     const t1 = setInterval(loadRecent, 4000);
     const t2 = setInterval(loadSensors, SENSOR_POLL);
     const t3 = setInterval(loadSubjects, 10000);
     return () => {
       stop();
+      clearTimeout(t0);
       clearInterval(t1); clearInterval(t2); clearInterval(t3);
     };
   }, [start, stop, loadRecent, loadSensors, loadSubjects]);

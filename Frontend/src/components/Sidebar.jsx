@@ -7,8 +7,7 @@ import {
 
 function Sidebar() {
   const location = useLocation();
-  const SHOW_TRAINNG = import.meta.env.VITE_SHOW_TRAINING !== "false";
-  {SHOW_TRAINING &&navItem()}
+  const SHOW_TRAINING = import.meta.env.VITE_SHOW_TRAINING !== "false";
   const navItem = (to, Icon, label) => {
     const active = location.pathname === to;
     return (
@@ -54,7 +53,7 @@ function Sidebar() {
       {navItem("/camera", CameraIcon, "Camera")}
       {navItem("/deployment", ShieldAlert, "Deployment Gate")}
       {navItem("/models", Cpu, "Models")}
-      {navItem("/training", FlaskConical, "Training")}
+      {SHOW_TRAINING && navItem("/training", FlaskConical, "Training")}
 
       {sectionLabel("System")}
       {navItem("/report", Activity, "Report")}

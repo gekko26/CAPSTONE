@@ -44,9 +44,6 @@ export default function Events() {
     return () => { a = false; clearInterval(t); };
   }, []);
 
-  // useEffect pagination reset on filter change
-  useEffect(() => { setPage(1); }, [f, gate, day, q]);
-
   const raw = logs;
 
   const subjectMap = useMemo(() => {
@@ -107,22 +104,22 @@ export default function Events() {
       </div>
 
       <div className="flex gap-1.5 items-center flex-wrap">
-        <select value={f} onChange={(e) => setF(e.target.value)} className="text-[11px] px-2 py-1 rounded-[4px] border" style={{ background: "var(--bg-card)", color: "var(--text-secondary)", borderColor: "var(--border-subtle)" }}>
+        <select value={f} onChange={(e) => { setF(e.target.value); setPage(1); }} className="text-[11px] px-2 py-1 rounded-[4px] border" style={{ background: "var(--bg-card)", color: "var(--text-secondary)", borderColor: "var(--border-subtle)" }}>
           <option>All Events</option>
           <option>Passed</option>
           <option>Flagged</option>
           <option>Analyzing</option>
         </select>
-        <select value={gate} onChange={(e) => setGate(e.target.value)} className="text-[11px] px-2 py-1 rounded-[4px] border" style={{ background: "var(--bg-card)", color: "var(--text-secondary)", borderColor: "var(--border-subtle)" }}>
+        <select value={gate} onChange={(e) => { setGate(e.target.value); setPage(1); }} className="text-[11px] px-2 py-1 rounded-[4px] border" style={{ background: "var(--bg-card)", color: "var(--text-secondary)", borderColor: "var(--border-subtle)" }}>
           <option>All Gates</option>
           <option>GATE 01</option>
         </select>
-        <select value={day} onChange={(e) => setDay(e.target.value)} className="text-[11px] px-2 py-1 rounded-[4px] border" style={{ background: "var(--bg-card)", color: "var(--text-secondary)", borderColor: "var(--border-subtle)" }}>
+        <select value={day} onChange={(e) => { setDay(e.target.value); setPage(1); }} className="text-[11px] px-2 py-1 rounded-[4px] border" style={{ background: "var(--bg-card)", color: "var(--text-secondary)", borderColor: "var(--border-subtle)" }}>
           <option>Today</option>
           <option>All time</option>
         </select>
         <div className="relative">
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search event, ID, name…" className="text-[11px] pl-6 pr-2 py-1 rounded-[4px] border min-w-[200px]" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)", color: "var(--text-primary)" }} />
+          <input value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} placeholder="Search event, ID, name…" className="text-[11px] pl-6 pr-2 py-1 rounded-[4px] border min-w-[200px]" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)", color: "var(--text-primary)" }} />
           <span className="absolute left-2 top-1.5 text-[10px]" style={{ color: "var(--text-muted)" }}>⌕</span>
         </div>
         <span className="ml-auto text-[10px] font-mono" style={{ color: "var(--text-muted)" }}>{filtered.length} events</span>

@@ -251,7 +251,7 @@ export default function Deployment() {
         gateRef.current.reset();
       }, 5000);
 
-    } catch (error) {
+    } catch {
       setSystemState("DENIED");
       setLastResult({
         name: "Unknown",

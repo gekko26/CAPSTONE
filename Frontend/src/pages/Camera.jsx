@@ -37,7 +37,6 @@ function StatBox({ label, value, sub, valueColor }) {
 
 // ═════════════════════════════════════════════════════════════
 export default function Camera() {
-  const [frameUrl, setFrameUrl]       = useState(null);
   const [analysis, setAnalysis]       = useState(null);
   const [camError, setCamError]       = useState(false);
   const [streaming, setStreaming]     = useState(true);
@@ -45,12 +44,10 @@ export default function Camera() {
   const overlayRef                    = useRef(false);
   useEffect(() => { overlayRef.current = overlayOn; }, [overlayOn]);
 
-  const frameTimeoutRef               = useRef(null);
   const analyzeTimeoutRef             = useRef(null);
   const latestBlobRef                 = useRef(null);
   const errorCountRef                 = useRef(0);
   const loopActiveRef                 = useRef(false);
-  const fetchingRef                   = useRef(false);
 
   // MJPEG URL — single persistent connection, no per-frame fetch/GC (B)
   // Camera uses MJPEG for smooth live view; Training/Deployment keep fetch loop (see note below)
@@ -70,38 +67,6 @@ export default function Camera() {
 
   // FIX: Tracks hardware trigger lockouts to guarantee deployment calls fire exactly ONCE per approach
   const hasTriggeredSensorRef         = useRef(false);
-
-  // ── Self-scheduling recursion + single-flight guard (A) — kept for Training/Deployment
-  // Camera no longer uses fetchFrameLoop for display (uses MJPEG), but kept for backward compat
-  const fetchFrameLoop = async () => {
-    if (!loopActiveRef.current) return;
-    if (fetchingRef.current) { frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS); return; }
-    fetchingRef.current = true;
-    try {
-      const overlayParam = overlayRef.current ? "1" : "0";
-      const frameRes = await fetch(`${BASE}/camera/stream/frame?overlay=${overlayParam}`, { cache: "no-store" });
-      if (!frameRes.ok) {
-        errorCountRef.current += 1;
-        if (errorCountRef.current >= 5) setCamError(true);
-      } else {
-        errorCountRef.current = 0;
-        setCamError(false);
-        const blob = await frameRes.blob();
-        latestBlobRef.current = blob;
-        const url = URL.createObjectURL(blob);
-        setFrameUrl((prev) => {
-          if (prev) URL.revokeObjectURL(prev);
-          return url;
-        });
-      }
-    } catch {
-      errorCountRef.current += 1;
-      if (errorCountRef.current >= 5) setCamError(true);
-    } finally {
-      fetchingRef.current = false;
-      frameTimeoutRef.current = setTimeout(fetchFrameLoop, FRAME_MS);
-    }
-  };
 
   const runAnalyzeLoop = async () => {
     if (!loopActiveRef.current) return;

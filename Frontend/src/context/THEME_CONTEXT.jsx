@@ -1,7 +1,6 @@
-// THEME_CONTEXT.jsx
-import { createContext, useContext, useState, useEffect } from "react";
-
-const ThemeContext = createContext();
+// THEME_CONTEXT.jsx — provider only; context object + hook live in ./theme
+import { useState, useEffect } from "react";
+import { ThemeContext } from "./theme";
 
 export function ThemeProvider({ children }) {
   // true = dark, false = light
@@ -27,8 +26,4 @@ export function ThemeProvider({ children }) {
       {children}
     </ThemeContext.Provider>
   );
-}
-
-export function useTheme() {
-  return useContext(ThemeContext);
 }

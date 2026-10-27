@@ -1,13 +1,6 @@
-// DISPLAY_CONTEXT.jsx — interactive display sizing (S/M/L) for all terminals
-import { createContext, useContext, useState, useEffect } from "react";
-
-const DisplayContext = createContext();
-
-const SCALES = {
-  sm: { label: "S", font: "12px", cls: "scale-sm" },
-  md: { label: "M", font: "13px", cls: "scale-md" },
-  lg: { label: "L", font: "14px", cls: "scale-lg" },
-};
+// DISPLAY_CONTEXT.jsx — provider only; context object + hook live in ./display
+import { useState, useEffect } from "react";
+import { SCALES, DisplayContext } from "./display";
 
 export function DisplayProvider({ children }) {
   const [scale, setScale] = useState(() => localStorage.getItem("alcogate-scale") || "md");
@@ -27,8 +20,4 @@ export function DisplayProvider({ children }) {
       {children}
     </DisplayContext.Provider>
   );
-}
-
-export function useDisplay() {
-  return useContext(DisplayContext);
 }

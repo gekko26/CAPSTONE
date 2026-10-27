@@ -2,7 +2,7 @@
 import { useLocation } from "react-router-dom";
 import { SearchIcon, Sun, Moon } from "lucide-react";
 import Searchbar from "./Searchbar";
-import { useTheme } from "../context/THEME_CONTEXT";
+import { useTheme } from "../context/theme";
 
 function Topbar() {
   const location = useLocation();

@@ -146,7 +146,8 @@ function StatCard({ label, value, color = "var(--text-primary)" }) {
   );
 }
 
-function EventCard({ active, color, icon: Icon, label, hint, badge, onClick }) {
+function EventCard(props) {
+  const { active, color, icon: Icon, label, hint, badge, onClick } = props;
   return (
     <button onClick={onClick}
       className="flex items-start gap-3 p-3 rounded-lg border text-left transition-all w-full"
@@ -449,7 +450,7 @@ export default function Training() {
 
   const loadAll = useCallback(() => { loadSummary(); loadData(); loadCoverage(); loadProgress(); loadSubjects(); },
                       [loadSummary, loadData, loadCoverage, loadProgress, loadSubjects]);
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { const t = setTimeout(loadAll, 0); return () => clearTimeout(t); }, [loadAll]);
 
   // ── ESP32 ─────────────────────────────────────────────────
   const checkEsp32 = useCallback(async () => {
@@ -460,9 +461,9 @@ export default function Training() {
   }, []);
 
   useEffect(() => {
-    checkEsp32();
+    const t0 = setTimeout(checkEsp32, 0);
     const t = setInterval(checkEsp32, 10000);
-    return () => clearInterval(t);
+    return () => { clearTimeout(t0); clearInterval(t); };
   }, [checkEsp32]);
 
   // ── Timing (single source: /sensor/timing, falls back to defaults) ──
@@ -564,9 +565,8 @@ export default function Training() {
   }, []);
 
   useEffect(() => {
-    if (isCameraEvent) startStream();
-    else stopStream();
-    return () => stopStream();
+    const t0 = setTimeout(isCameraEvent ? startStream : stopStream, 0);
+    return () => { clearTimeout(t0); stopStream(); };
   }, [activeEvent, isCameraEvent, startStream, stopStream]);
 
   // ── FIX: CRASH-PROOF DATA PIPELINE ────────────────────────────
@@ -639,11 +639,8 @@ export default function Training() {
         // Check if sensor data actually arrived
         try {
           const cr = await fetch(`${BASE}/training/data`);
-          if (cr.ok) {
-            const rows = await cr.json();
-            const row = rows.find((x) => x.id === (liveEvent === "alcohol" ? bacModal?.id : null)) || rows[rows.length - 1];
-            // just refresh summary; visualizer will show ⏳ if mq3 null
-          }
+          if (cr.ok) await cr.json();
+          // just refresh summary; visualizer will show ⏳ if mq3 null
         } catch {}
         setHardwareState("completed");
         loadAll();

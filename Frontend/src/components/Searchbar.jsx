@@ -1,12 +1,11 @@
 // File: Frontend/src/components/Searchbar.jsx
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { API_BASE } from "../api";
 import { ShieldAlert, ShieldCheck, Eye, Zap, CornerDownLeft } from "lucide-react";
 
 export default function Searchbar() {
   const [readings, setReadings] = useState([]);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef(null);
 
@@ -36,23 +35,20 @@ export default function Searchbar() {
   }, []);
 
   // Live filter engine parsing historical inputs matching data models
-  useEffect(() => {
-    if (!query.trim() || !readings) {
-      setResults([]);
-      return;
-    }
+  const results = useMemo(() => {
+    if (!query.trim() || !readings) return [];
 
     const cleanQuery = query.toLowerCase().replace("#", "").trim();
 
-    const filtered = readings.filter((row) => {
-      const matchId = String(row.id).includes(cleanQuery);
-      const matchLabel = row.prediction ? row.prediction.toLowerCase().includes(cleanQuery) : false;
-      const matchType = row.risk_level ? row.risk_level.toLowerCase().includes(cleanQuery) : false;
+    return readings
+      .filter((row) => {
+        const matchId = String(row.id).includes(cleanQuery);
+        const matchLabel = row.prediction ? row.prediction.toLowerCase().includes(cleanQuery) : false;
+        const matchType = row.risk_level ? row.risk_level.toLowerCase().includes(cleanQuery) : false;
 
-      return matchId || matchLabel || matchType;
-    });
-
-    setResults(filtered.slice(0, 5)); // Limit dropdown rendering container layout payload to 5 rows
+        return matchId || matchLabel || matchType;
+      })
+      .slice(0, 5); // dropdown renders at most 5 rows
   }, [query, readings]);
 
   const handleSelectResult = (id) => {

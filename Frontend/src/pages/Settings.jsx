@@ -1,10 +1,10 @@
 // Settings.jsx — functional: persists to localStorage, applies instantly
-  import { useState, useEffect } from "react";
+  import { useState, useEffect, useMemo } from "react";
   import { DeviceModeSelector } from "../components/DeviceMode";
   import { IndicatorBench } from "../components/IndicatorBench";
   import { Sun, Moon, Monitor, Maximize2 } from "lucide-react";
-  import { useTheme } from "../context/THEME_CONTEXT";
-  import { useDisplay } from "../context/DISPLAY_CONTEXT";
+  import { useTheme } from "../context/theme";
+  import { useDisplay } from "../context/display";
 
 const NAV = ["General", "Gates", "Sensors", "AI Model", "Alerts", "Users", "System", "Backup & Logs"];
 
@@ -73,10 +73,9 @@ export default function Settings() {
   });
   const [flags, setFlags] = useState(() => loadLS(LS_KEYS.notifications, DEFAULTS.notifications));
   const [saved, setSaved] = useState(false);
-  const [dirty, setDirty] = useState(false);
 
   // Track dirty when any value diverges from stored LS
-  useEffect(() => {
+  const dirty = useMemo(() => {
     const cur = {
       systemName: (() => { try { return JSON.parse(localStorage.getItem(LS_KEYS.systemName)) ?? DEFAULTS.systemName; } catch { return DEFAULTS.systemName; } })(),
       timeZone: (() => { try { return JSON.parse(localStorage.getItem(LS_KEYS.timeZone)) ?? DEFAULTS.timeZone; } catch { return DEFAULTS.timeZone; } })(),
@@ -84,9 +83,8 @@ export default function Settings() {
       timeFormat: (() => { try { return JSON.parse(localStorage.getItem(LS_KEYS.timeFormat)) ?? DEFAULTS.timeFormat; } catch { return DEFAULTS.timeFormat; } })(),
     };
     const notifStored = loadLS(LS_KEYS.notifications, DEFAULTS.notifications);
-    const isDirty = systemName !== cur.systemName || timeZone !== cur.timeZone || dateFormat !== cur.dateFormat || timeFormat !== cur.timeFormat
+    return systemName !== cur.systemName || timeZone !== cur.timeZone || dateFormat !== cur.dateFormat || timeFormat !== cur.timeFormat
       || JSON.stringify(flags) !== JSON.stringify(notifStored);
-    setDirty(isDirty);
   }, [systemName, timeZone, dateFormat, timeFormat, flags]);
 
   // Notifications persist instantly (toggle feels live), but also covered by Save
@@ -101,7 +99,6 @@ export default function Settings() {
     // Notify other components (header clock reads LS)
     window.dispatchEvent(new Event("alcogate-settings-changed"));
     setSaved(true);
-    setDirty(false);
     setTimeout(() => setSaved(false), 1800);
   };
 

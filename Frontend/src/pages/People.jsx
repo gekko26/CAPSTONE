@@ -11,7 +11,7 @@ export default function People() {
   const [statusF, setStatusF] = useState("All Status");
   const [groupF, setGroupF] = useState("All Groups");
   const [subjects, setSubjects] = useState([]);
-  const [selected, setSelected] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [enrolling, setEnrolling] = useState(false);
@@ -43,19 +43,22 @@ export default function People() {
           auth: "Authorized",
         }));
         setSubjects(mapped);
-        setSelected((prev) => mapped.find((x) => x.id === prev?.id) || mapped[0] || null);
+        setSelectedId((prev) => {
+          const kept = mapped.find((x) => x.id === prev);
+          return kept ? kept.id : mapped[0]?.id ?? null;
+        });
       } else {
         setSubjects([]);
-        setSelected(null);
+        setSelectedId(null);
       }
     } catch {
       setSubjects([]);
-      setSelected(null);
+      setSelectedId(null);
     }
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { const t = setTimeout(load, 0); return () => clearTimeout(t); }, []);
 
   const filtered = useMemo(() => {
     let d = subjects;
@@ -68,9 +71,7 @@ export default function People() {
     return d;
   }, [subjects, q, statusF, groupF]);
 
-  useEffect(() => {
-    if (filtered.length && !filtered.find((x) => x.id === selected?.id)) setSelected(filtered[0]);
-  }, [filtered, selected]);
+  const active = filtered.find((x) => x.id === selectedId) || filtered[0] || null;
 
   const onFiles = (fl) => {
     if (!fl || !fl.length) return;
@@ -155,8 +156,6 @@ export default function People() {
       load();
     } catch (e) { setToast(e.message || "Delete failed"); setTimeout(() => setToast(""), 2500); }
   };
-
-  const active = selected || filtered[0] || null;
 
   return (
     <div className="p-2 flex flex-col gap-2 max-w-[1200px] mx-auto">
@@ -265,7 +264,7 @@ export default function People() {
           ) : (
             <div className="divide-y overflow-auto max-h-[520px]" style={{ borderColor: "var(--border-subtle)" }}>
               {filtered.map((p) => (
-                <button key={p.id} data-interactive onClick={() => setSelected(p)} className="w-full text-left flex items-center gap-2.5 px-3 py-2.5 cursor-pointer" style={{ background: active?.id === p.id ? "var(--bg-active)" : "transparent", borderLeft: active?.id === p.id ? "2px solid var(--pass)" : "2px solid transparent" }}>
+                <button key={p.id} data-interactive onClick={() => setSelectedId(p.id)} className="w-full text-left flex items-center gap-2.5 px-3 py-2.5 cursor-pointer" style={{ background: active?.id === p.id ? "var(--bg-active)" : "transparent", borderLeft: active?.id === p.id ? "2px solid var(--pass)" : "2px solid transparent" }}>
                   <div className="w-8 h-8 rounded-full bg-[#080C10] shrink-0 flex items-center justify-center overflow-hidden" style={{ border: "1px solid var(--border-subtle)" }}>
                     {p.avatar_path ? <img src={`${API_BASE}/recognition/avatar/${encodeURIComponent(p.name)}`} alt={p.name} className="w-full h-full object-cover" onError={(e) => e.currentTarget.style.display = "none"} /> : <span className="text-[9px] font-bold" style={{ color: "var(--text-muted)" }}>{p.name.slice(0, 2).toUpperCase()}</span>}
                   </div>

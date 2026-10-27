@@ -10,17 +10,23 @@ export default function MobileNetTrainer() {
   const [batchSize, setBatchSize] = useState(8);
   const [epochs, setEpochs] = useState(5);
 
-  const load = async () => {
-    try {
-      const [s, m] = await Promise.all([
-        fetch(`${API_BASE}/training/summary`).then(r=>r.json()),
-        fetch(`${API_BASE}/models/status`).then(r=>r.json()),
-      ]);
-      setSummary(s);
-      setStatus(m);
-    } catch {}
+  const loadSnapshot = () =>
+    Promise.all([
+      fetch(`${API_BASE}/training/summary`).then(r=>r.json()),
+      fetch(`${API_BASE}/models/status`).then(r=>r.json()),
+    ]).then(([s, m]) => ({ s, m }));
+
+  useEffect(() => {
+    loadSnapshot()
+      .then(({ s, m }) => { setSummary(s); setStatus(m); })
+      .catch(() => {});
+  }, []);
+
+  const reload = () => {
+    loadSnapshot()
+      .then(({ s, m }) => { setSummary(s); setStatus(m); })
+      .catch(() => {});
   };
-  useEffect(()=>{ load(); },[]);
 
   const train = async () => {
     setTraining(true);
@@ -32,7 +38,9 @@ export default function MobileNetTrainer() {
       });
       const d = await r.json();
       setResult(d);
-      load();
+      loadSnapshot()
+        .then(({ s, m }) => { setSummary(s); setStatus(m); })
+        .catch(() => {});
     } catch(e){ setResult({error: String(e)}); }
     finally{ setTraining(false); }
   };
@@ -74,7 +82,7 @@ export default function MobileNetTrainer() {
         <button onClick={train} disabled={training} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50" style={{background:"var(--text-primary)", color:"var(--bg-card)"}}>
           {training ? <><RefreshCw size={13} className="animate-spin"/> Training...</> : <><Play size={13}/> Train MobileNet</>}
         </button>
-        <button onClick={load} className="px-3 py-1.5 rounded-lg text-sm border" style={{borderColor:"var(--border-subtle)"}}><RefreshCw size={13}/></button>
+        <button onClick={reload} className="px-3 py-1.5 rounded-lg text-sm border" style={{borderColor:"var(--border-subtle)"}}><RefreshCw size={13}/></button>
         <div className="ml-auto text-xs" style={{color:"var(--text-muted)"}}>
           Status: {mobilenet?.trained ? <span style={{color:"var(--pass)"}}><Check size={11}/> Trained {mobilenet?.metrics?.accuracy ?? "—"}%</span> : "Not trained"}
         </div>

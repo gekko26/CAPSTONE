@@ -160,7 +160,7 @@ export default function MockBACChart() {
                 <Tooltip 
                   contentStyle={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)", borderRadius: "8px", fontSize: "12px", color: "var(--text-primary)" }}
                   itemStyle={{ color: "var(--text-secondary)" }}
-                  formatter={(value, name, props) => [`${(value * 100).toFixed(1)}%`, "Confidence"]}
+                  formatter={(value) => [`${(value * 100).toFixed(1)}%`, "Confidence"]}
                   labelFormatter={(label, items) => items[0] ? `Time: ${label} [${items[0].payload.type}]` : label}
                 />
                 <ReferenceLine y={0.8} stroke="var(--near)" strokeDasharray="4 4" strokeWidth={1} />
