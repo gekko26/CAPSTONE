@@ -3,7 +3,11 @@
 # Bypass in emergencies: git push --no-verify.
 
 echo "==> Backend tests"
-python3 -m pytest Backend/tests/ -q || exit 1
+(
+  cd Backend || exit 1
+  if [ -x .venv/bin/python3 ]; then PY=.venv/bin/python3; else PY=python3; fi
+  "$PY" -m pytest tests/ -q || exit 1
+) || exit 1
 
 echo "==> Frontend lint"
 (cd Frontend && npm run lint --silent) || exit 1
