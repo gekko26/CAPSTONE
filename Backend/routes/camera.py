@@ -129,8 +129,11 @@ class RTSPStream:
         self.active = False
 
 
+# Not under pytest: importing this module in a test session must not open a real
+# RTSP connection (30 s ffmpeg timeouts + flaky C++ teardown aborts at process exit).
 _stream = RTSPStream(RTSP_URL)
-_stream.start()
+if not (os.getenv("PYTEST_VERSION") or os.getenv("PYTEST_CURRENT_TEST")):
+    _stream.start()
 
 def get_rtsp_frame() -> np.ndarray | None:
     return _stream.read()
